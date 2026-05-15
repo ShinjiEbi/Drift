@@ -4,7 +4,7 @@
 // Les ré-assignations complètes (S = ...) passent par setS().
 
 import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
-import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS } from './catalog.js';
+import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE } from './catalog.js';
 import { rngFor, rPick, rWeighted, rInt, fmtMin } from './util.js';
 import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, autoAssignAllFreeMembers, autoAssignMember } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
@@ -123,7 +123,19 @@ export function computeRates() {
 // Capacité d'un type de ressource avec bonus de tech
 export function capOf(k) {
   const tech = techEffectsAccumulated();
-  return Math.floor((CAP[k] || 0) * (tech.capacityMult[k] || 1));
+  const base = (CAP[k] || 0) * (tech.capacityMult[k] || 1);
+  
+  // 0.25 : bonus capacité depuis modules avec capBonus (silo cryogénique, mémoire cristalline)
+  let modBonus = 0;
+  for (const id of Object.keys(S.modules || {})) {
+    const def = MODULES[id];
+    const m = S.modules[id];
+    if (def?.capBonus && m?.level > 0) {
+      const bonus = def.capBonus(m.level);
+      if (bonus[k]) modBonus += bonus[k];
+    }
+  }
+  return Math.floor(base + modBonus);
 }
 
 // Helper : durée réelle d'un chantier en minutes-jeu (avec multiplicateur)
@@ -148,6 +160,15 @@ export function canBuild(id) {
   const maxLvl = def.maxLevel + (techEffectsAccumulated().moduleMaxLevelDelta[id] || 0);
   if (next > maxLvl) return { ok:false, why:`Niveau max atteint` };
   if (S.build) return { ok:false, why:'Chantier déjà en cours' };
+  
+  // 0.25 : module tier 2 — requiert une tech débloqueuse
+  if (def.requireTech) {
+    if (!S.techCompleted || !S.techCompleted[def.requireTech]) {
+      const techNom = TECH_TREE[def.requireTech]?.nom || def.requireTech;
+      return { ok:false, why:`Requiert la tech ${techNom}` };
+    }
+  }
+  
   const req = def.prereq(next);
   for (const k in req) {
     if ((S.modules[k]?.level || 0) < req[k]) {
@@ -156,6 +177,13 @@ export function canBuild(id) {
   }
   const cost = def.cost(next);
   for (const k in cost) {
+    // 0.25 : support des datacubes_alien (ressource séparée S.alienDatacubes)
+    if (k === 'datacubes_alien') {
+      if ((S.alienDatacubes || 0) < cost[k]) {
+        return { ok:false, why:`Ressources insuffisantes (datacubes alien)` };
+      }
+      continue;
+    }
     if (S.res[k] < cost[k]) {
       return { ok:false, why:`Ressources insuffisantes (${RES_LABELS[k]})` };
     }
@@ -167,7 +195,14 @@ export function canBuild(id) {
 export function startBuild(id) {
   const r = canBuild(id);
   if (!r.ok) { toast(r.why); return; }
-  for (const k in r.cost) S.res[k] -= r.cost[k];
+  for (const k in r.cost) {
+    // 0.25 : datacubes_alien dans S.alienDatacubes
+    if (k === 'datacubes_alien') {
+      S.alienDatacubes = (S.alienDatacubes || 0) - r.cost[k];
+    } else {
+      S.res[k] -= r.cost[k];
+    }
+  }
   S.build = {
     id,
     targetLevel: r.nextLevel,

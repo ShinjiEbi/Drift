@@ -598,10 +598,21 @@ export function tickResearch() {
   const lb = laboratoryBonuses();
   // Mode automatisé sans Chercheur : 30% de la vitesse normale
   const autoMult = lb.activeProd ? 1.0 : JOB_BASE_FRACTION;
+  
+  // 0.25 : bonus de vitesse depuis modules avec researchSpeedBonus (mémoire cristalline)
+  let modBonus = 1.0;
+  for (const id of Object.keys(S.modules || {})) {
+    const def = MODULES[id];
+    const m = S.modules[id];
+    if (def?.researchSpeedBonus && m?.level > 0) {
+      modBonus += def.researchSpeedBonus(m.level);
+    }
+  }
+  
   const finished = [];
   for (const r of S.research) {
     const tech = TECH_TREE[r.techId];
-    let progress = MIN_PER_TICK * autoMult / lb.speedMult;
+    let progress = MIN_PER_TICK * autoMult * modBonus / lb.speedMult;
     if (tech?.branch === 'bio') progress *= lb.bioBonus;
     r.doneMin += progress;
     if (r.doneMin >= r.totalMin) finished.push(r);
