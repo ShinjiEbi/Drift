@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DRIFT — Avant-poste</title>
+
+<!-- PWA manifest -->
+<link rel="manifest" href="./manifest.json">
+
+<!-- Theme color (couleur de la barre du navigateur) -->
+<meta name="theme-color" content="#d4a056">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c0805">
+
+<!-- iOS / Apple PWA -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DRIFT">
+<link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png">
+<link rel="apple-touch-icon" sizes="167x167" href="./icons/icon-167.png">
+<link rel="apple-touch-icon" sizes="152x152" href="./icons/icon-152.png">
+<link rel="apple-touch-icon" sizes="120x120" href="./icons/icon-120.png">
+
+<!-- Favicons -->
+<link rel="icon" type="image/png" sizes="32x32" href="./icons/icon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="./icons/icon-16.png">
+<link rel="shortcut icon" href="./favicon.ico">
+
+<!-- SEO et meta sociales -->
+<meta name="description" content="Jeu narratif de colonie spatiale. Établis un avant-poste, recrute un équipage, explore la galaxie, déchiffre les chroniques planétaires.">
+<meta property="og:title" content="DRIFT">
+<meta property="og:description" content="Jeu narratif de colonie spatiale">
+<meta property="og:image" content="./icons/icon-512.png">
+<meta property="og:type" content="website">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="top">
+    <div class="brand">DRIFT<span class="dot"></span><span id="colonyName">Avant-poste</span></div>
+    <div class="session-clock">
+      <b id="gameTime">J1 · 00:00</b>
+      <span id="realTime">session 0:00</span>
+    </div>
+    <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil">⤓</button>
+  </header>
+
+  <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
+  <div class="res-bar" id="resBar">
+    <div class="res-bar-cell" data-res="metal">
+      <span class="rb-label">Me</span>
+      <span class="rb-value" id="rbMetal">0</span>
+    </div>
+    <div class="res-bar-cell" data-res="cristal">
+      <span class="rb-label">Cr</span>
+      <span class="rb-value" id="rbCristal">0</span>
+    </div>
+    <div class="res-bar-cell" data-res="energie">
+      <span class="rb-label">En</span>
+      <span class="rb-value" id="rbEnergie">0</span>
+    </div>
+    <div class="res-bar-cell" data-res="biomasse">
+      <span class="rb-label">Bio</span>
+      <span class="rb-value" id="rbBiomasse">0</span>
+    </div>
+    <div class="res-bar-cell" data-res="datacubes">
+      <span class="rb-label">Dc</span>
+      <span class="rb-value" id="rbDatacubes">0</span>
+    </div>
+    <div class="res-bar-sep"></div>
+    <div class="res-bar-cell pop">
+      <span class="rb-label">Pop</span>
+      <span class="rb-value" id="rbPop">0</span>
+    </div>
+  </div>
+
+  <!-- 0.23 — Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
+  <div class="alert-bar" id="alertBar" style="display:none;">
+    <span class="ab-icon">⚠</span>
+    <span class="ab-text" id="alertText">Alertes</span>
+    <span class="ab-arrow">▸</span>
+  </div>
+
+  <nav class="tabs">
+    <button data-tab="overview" class="active" data-icon="🏛"><span class="tab-icon">🏛</span><span class="tab-label">Vue</span></button>
+    <button data-tab="modules" data-icon="⚙"><span class="tab-icon">⚙</span><span class="tab-label">Modules</span></button>
+    <button data-tab="crew" id="tab-crew" data-icon="👥"><span class="tab-icon">👥</span><span class="tab-label">Équipage</span><span class="tab-badge" id="crewBadge"></span></button>
+    <button data-tab="galaxy" id="tab-galaxy" data-icon="🛰"><span class="tab-icon">🛰</span><span class="tab-label">Galaxie</span><span class="tab-badge" id="galaxyBadge"></span></button>
+    <button data-tab="stocks" data-icon="📦"><span class="tab-icon">📦</span><span class="tab-label">Stocks</span></button>
+    <button data-tab="arcs" id="tab-arcs" data-icon="📜"><span class="tab-icon">📜</span><span class="tab-label">Chroniques</span><span class="tab-badge" id="arcsBadge"></span></button>
+    <button data-tab="journal" data-icon="📓"><span class="tab-icon">📓</span><span class="tab-label">Journal</span></button>
+  </nav>
+
+  <main>
+    <!-- VUE D'ENSEMBLE -->
+    <section class="view active" id="view-overview">
+      <h2 class="eyebrow">État de la colonie</h2>
+      <h1 class="head" id="overviewName">Avant-poste</h1>
+      <div class="subhead" id="overviewSub">Cycle de fondation</div>
+      <div class="resources" id="resourcesGrid"></div>
+
+      <h2 class="eyebrow">Construction en cours</h2>
+      <div id="buildSlot" class="empty">Aucun chantier ouvert.</div>
+    </section>
+
+    <!-- MODULES (hub avec sous-onglets) -->
+    <section class="view" id="view-modules">
+      <nav class="subtabs">
+        <button data-subtab-mod="construction" class="active">Construction</button>
+        <button data-subtab-mod="assignments">Affectations<span class="tab-badge" id="assignBadge"></span></button>
+      </nav>
+
+      <div class="subview active" id="subview-construction">
+        <h2 class="eyebrow">Infrastructures disponibles</h2>
+        <h1 class="head">Modules</h1>
+        <div class="subhead">Construction séquentielle, un chantier à la fois</div>
+        <div class="modules" id="modulesList"></div>
+      </div>
+
+      <div class="subview" id="subview-assignments">
+        <h2 class="eyebrow">Vie de la base</h2>
+        <h1 class="head">Affectations</h1>
+        <div class="subhead" id="assignSub">Assigne ton équipage aux postes des bâtiments</div>
+        <div id="assignControls"></div>
+        <div id="assignList"></div>
+      </div>
+    </section>
+
+    <!-- ÉQUIPAGE (hub avec sous-onglets) -->
+    <section class="view" id="view-crew">
+      <nav class="subtabs">
+        <button data-subtab="personnel" class="active">Personnel</button>
+        <button data-subtab="recruit" id="subtab-recruit">Recrut.<span class="tab-badge" id="recruitBadge"></span></button>
+        <button data-subtab="formation" id="subtab-formation">Formation</button>
+        <button data-subtab="soins" id="subtab-soins" disabled>Soins</button>
+      </nav>
+
+      <div class="subview active" id="subview-personnel">
+        <h2 class="eyebrow">Personnel actif</h2>
+        <h1 class="head" id="crewTitle">Équipage</h1>
+        <div class="subhead" id="crewSub">Personne à bord pour l'instant</div>
+        <div id="crewList"></div>
+      </div>
+
+      <div class="subview" id="subview-recruit">
+        <h2 class="eyebrow">Candidatures reçues</h2>
+        <h1 class="head">Recrutement</h1>
+        <div class="subhead" id="recruitSub">Construis une <em>Balise de recrutement</em> pour recevoir des candidats</div>
+        <div id="candidateList"></div>
+      </div>
+
+      <div class="subview" id="subview-formation">
+        <h2 class="eyebrow">Centre de formation</h2>
+        <h1 class="head">Formation</h1>
+        <div class="subhead" id="formationSub">Construis un Centre de formation</div>
+        <div id="formationStatus"></div>
+        <div id="formationList"></div>
+        <button id="btnNewTraining" class="cta-btn" style="display:none;">Lancer une formation</button>
+      </div>
+
+      <div class="subview" id="subview-soins">
+        <h2 class="eyebrow">Infirmerie</h2>
+        <h1 class="head">Soins</h1>
+        <div class="subhead" id="soinsSub">Construis une Infirmerie</div>
+        <div id="soinsStatus"></div>
+        <div id="soinsAlert"></div>
+        <h3 class="section-h">Patients</h3>
+        <div id="soinsPatients"></div>
+        <h3 class="section-h">Membres requérant attention</h3>
+        <div id="soinsAttention"></div>
+      </div>
+    </section>
+
+    <!-- GALAXIE (hub avec sous-onglets) -->
+    <section class="view" id="view-galaxy">
+      <nav class="subtabs">
+        <button data-subtab-galaxy="cartographie" class="active">Cartographie</button>
+        <button data-subtab-galaxy="fleet" id="subtab-fleet">Vaisseaux</button>
+        <button data-subtab-galaxy="expeditions" id="subtab-expeditions">Expéd.<span class="tab-badge" id="expBadge"></span></button>
+        <button data-subtab-galaxy="diplomatie" id="subtab-diplomatie">Diplomatie<span class="tab-badge" id="diploBadge"></span></button>
+      </nav>
+
+      <div class="subview active" id="subview-cartographie">
+        <div id="galaxyContent"></div>
+      </div>
+
+      <div class="subview" id="subview-fleet">
+        <h2 class="eyebrow">Flotte stationnée</h2>
+        <h1 class="head">Vaisseaux</h1>
+        <div class="subhead" id="fleetSub">Construis un Hangar pour entreposer des vaisseaux</div>
+        <div id="fleetStatus"></div>
+        <div id="fleetList"></div>
+        <h3 class="section-h" id="fleetCatalogHead" style="display:none;">Modèles disponibles</h3>
+        <div id="fleetCatalog"></div>
+      </div>
+
+      <div class="subview" id="subview-expeditions">
+        <h2 class="eyebrow">Missions actives & passées</h2>
+        <h1 class="head">Expéditions</h1>
+        <div class="subhead" id="expSub">Aucune expédition pour l'instant</div>
+        <div id="expActiveList"></div>
+        <h3 class="section-h" id="expHistoryHead" style="display:none;">Historique récent</h3>
+        <div id="expHistoryList"></div>
+      </div>
+
+      <div class="subview" id="subview-diplomatie">
+        <h2 class="eyebrow">Relations interstellaires</h2>
+        <h1 class="head">Diplomatie</h1>
+        <div class="subhead" id="diploSub">Factions rencontrées au fil des expéditions</div>
+        <div id="diploContent"></div>
+      </div>
+    </section>
+
+    <!-- STOCKS (hub avec sous-onglets : Inventaire / Bibliothèque / Recherche) -->
+    <section class="view" id="view-stocks">
+      <nav class="subtabs">
+        <button data-subtab-stocks="inventory" class="active">Inventaire</button>
+        <button data-subtab-stocks="library">Bibliothèque<span class="tab-badge" id="libBadge"></span></button>
+        <button data-subtab-stocks="research">Recherche<span class="tab-badge" id="researchBadge"></span></button>
+        <button data-subtab-stocks="workshop">Atelier<span class="tab-badge" id="workshopBadge"></span></button>
+      </nav>
+
+      <div class="subview active" id="subview-inventory">
+        <h2 class="eyebrow">Stocks de la colonie</h2>
+        <h1 class="head">Inventaire</h1>
+        <div class="subhead" id="invSub">Items, artefacts et équipements</div>
+        <div id="invContent"></div>
+      </div>
+
+      <div class="subview" id="subview-library">
+        <h2 class="eyebrow">Schémas découverts</h2>
+        <h1 class="head">Bibliothèque</h1>
+        <div class="subhead" id="libSub">Plans techniques exploitables</div>
+        <div id="libContent"></div>
+      </div>
+
+      <div class="subview" id="subview-research">
+        <h2 class="eyebrow">Programme de recherche</h2>
+        <h1 class="head">Recherche</h1>
+        <div class="subhead" id="researchSub">Tech tree et progression long terme</div>
+        <div id="researchContent"></div>
+      </div>
+
+      <div class="subview" id="subview-workshop">
+        <h2 class="eyebrow">Production d'équipement</h2>
+        <h1 class="head">Atelier</h1>
+        <div class="subhead" id="workshopSub">Fabrique consommables, outils et armement</div>
+        <div id="workshopStatus"></div>
+        <div id="workshopContent"></div>
+      </div>
+    </section>
+
+    <!-- CHRONIQUES (arcs narratifs) -->
+    <section class="view" id="view-arcs">
+      <h2 class="eyebrow">Chroniques de la colonie</h2>
+      <h1 class="head">Arcs narratifs</h1>
+      <div class="subhead" id="arcsSub">Les fils rouges qui se tissent au fil du temps</div>
+      <div id="arcsContent"></div>
+    </section>
+
+    <!-- JOURNAL -->
+    <section class="view" id="view-journal">
+      <h2 class="eyebrow">Journal de bord</h2>
+      <h1 class="head" id="journalTitle">Carnet de fondation</h1>
+      <div class="subhead">Tenu par le commandement local</div>
+      <ul class="journal-list" id="journalList"></ul>
+    </section>
+  </main>
+
+  <footer class="actions">
+    <button id="btnRename">Renommer</button>
+    <button id="btnExport">Exporter save</button>
+    <button id="btnImport">Importer</button>
+    <button id="btnReset">Recommencer</button>
+  </footer>
+</div>
+
+<input type="file" id="fileInput" accept="application/json" style="display:none">
+<div id="toast"></div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" id="modal"></div>
+</div>
+
+<!-- Overlay plein écran pour les scènes d'expédition -->
+<div class="scene-overlay" id="sceneOverlay">
+  <div class="scene-inner" id="sceneInner"></div>
+</div>
+
+<script type="module" src="./src/app.js"></script>
+
+<!-- Service Worker pour la PWA (mode offline + installation) -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then((reg) => {
+          console.log('[PWA] Service Worker enregistré, scope :', reg.scope);
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            if (!newWorker) return;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[PWA] Nouvelle version disponible. Rechargez pour mettre à jour.');
+              }
+            });
+          });
+        })
+        .catch((err) => console.warn('[PWA] Échec d\'enregistrement du SW :', err));
+    });
+  }
+
+  // Capture l'événement d'installabilité (Android/Chrome principalement)
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const btn = document.getElementById('installBtn');
+    if (btn) btn.hidden = false;
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('installBtn');
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        const result = await deferredPrompt.userChoice;
+        console.log('[PWA] Résultat installation :', result.outcome);
+        deferredPrompt = null;
+        btn.hidden = true;
+      });
+    }
+  });
+  window.addEventListener('appinstalled', () => {
+    console.log('[PWA] DRIFT a été installé.');
+    const btn = document.getElementById('installBtn');
+    if (btn) btn.hidden = true;
+  });
+</script>
+</body>
+</html>

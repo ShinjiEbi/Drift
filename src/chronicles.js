@@ -1,0 +1,1515 @@
+// chronicles.js — chroniques planétaires (0.24)
+// Une chronique est une mini-saga narrative attachée à une planète.
+// Chaque épisode se joue lors d'une expédition séparée. Les choix
+// modifient des flags qui influencent les épisodes suivants et la fin.
+
+// ============================================================
+//   CATALOGUE DES CHRONIQUES
+// ============================================================
+
+export const CHRONICLES = {
+
+  // ------------------------------------------------------------
+  //   PULSAR SILENCIEUX — Chronique humaine, 3 épisodes
+  // ------------------------------------------------------------
+  'pulsar_silencieux': {
+    id: 'pulsar_silencieux',
+    nom: 'Le Pulsar Silencieux',
+    teaser: "Une station humaine émet un signal régulier depuis trois mois. Personne ne répond.",
+    
+    // Conditions d'apparition sur une planète
+    requires: {
+      ruines: 'humaines',
+      atmosphere: ['toxique', 'tenue', 'anormale'] // optionnel
+    },
+    spawnChance: 0.35,
+    
+    // Personnages persistants
+    characters: {
+      adele:  { name: 'Adèle Voronine', age: 47, role: 'Biologiste',  voice: 'sèche, ironique' },
+      tomas:  { name: 'Tomas Renaud',   age: 31, role: 'Mécanicien',  voice: 'naïf, dépendant' },
+      soeur:  { name: 'Mira Voronine',  age: 52, role: '?',            voice: 'rare, étrange' }
+    },
+    
+    // Flags trackés tout au long de la chronique
+    initialFlags: {
+      signal_origin: null,       // 'station' | 'bunker' | 'inconnu'
+      truth_revealed: false,     // a lu le journal de bord ?
+      adele_trust: 0,            // -2 à +3
+      tomas_status: 'present',   // 'present' | 'allie' | 'mort' | 'absent'
+      survivors_fate: null,      // 'sauves' | 'partages' | 'abandonnes'
+      secret_partage: false,     // a vu la porte verrouillée
+      last_signal: 'recu'        // 'recu' | 'ignore'
+    },
+    
+    episodes: [
+      {
+        title: 'Le signal',
+        intro: "À l'approche, le signal s'intensifie. Une station orbitale, intacte de loin. Le rythme est trop régulier pour être un automatisme défectueux. Quelqu'un veut être trouvé — ou veut qu'on croie ça.",
+        firstScene: 'chron_pulsar_ep1_sas'
+      },
+      {
+        title: 'Les survivants',
+        introByFlag: {
+          signal_origin: {
+            'bunker':  "Le signal a changé de nature. Une voix humaine maintenant, depuis la surface.",
+            'station': "Tu retournes sur la station. Les écrans ne mentent plus : quelqu'un est arrivé.",
+            'inconnu': "Tu reviens parce que tu ne pouvais pas faire autrement. Quelque chose t'a appelé."
+          }
+        },
+        defaultIntro: "Le signal n'a pas faibli. Quelque chose t'attend là-bas.",
+        firstScene: 'chron_pulsar_ep2_contact'
+      },
+      {
+        title: 'La vérité',
+        introByFlag: {
+          survivors_fate: {
+            'sauves':       "Adèle vit chez toi maintenant. Elle te demande de retourner sur la planète, pour fermer ce qu'elle a laissé ouvert. « Tomas refuse de venir. Vous le comprendrez. »",
+            'partages':     "Le signal a repris, mais plus fort, et différent. Comme un appel. Tu décides d'y retourner.",
+            'abandonnes':   "Le signal s'est tu. Mais quelque chose t'attire encore là-bas. Une dette."
+          }
+        },
+        defaultIntro: "Tu reviens, et tu sais pourquoi.",
+        firstScene: 'chron_pulsar_ep3_retour'
+      }
+    ],
+    
+    // Fins possibles (déterminées par le choix final de l'épisode 3)
+    // Chacune est un identifiant qui sera enregistré dans body.chronicle.ending
+    endings: {
+      'sauvetage_comprehension': "Tu as sauvé Adèle et compris ce qu'elle gardait. La sœur reste là-bas, mais paisible. La station est devenue un lieu de mémoire.",
+      'sauvetage_destruction':   "Tu as sauvé Adèle, mais débranché la machine. La sœur est morte. Adèle ne te parle plus mais reste à l'avant-poste.",
+      'partage_revelation':      "Tu n'as pas embarqué Adèle, elle est morte. Mais tu as compris ce qu'elle protégeait. Tu repars avec respect.",
+      'abandon_profanation':     "Tu as pillé, tu as profané. Tu en sors riche. Quelque chose s'est cassé en toi.",
+      'emporter_soeur':          "Tu as ramené la sœur. Elle vit maintenant à l'avant-poste — silencieuse, étrange, importante."
+    }
+  },
+
+  // ------------------------------------------------------------
+  //   LE SANCTUAIRE VERT — Chronique alien_a (cristalline), 3 épisodes
+  // ------------------------------------------------------------
+  'sanctuaire_vert': {
+    id: 'sanctuaire_vert',
+    nom: 'Le Sanctuaire Vert',
+    teaser: "Une jungle volcanique. Un temple alien cristallin. Et un chant qui change à chaque visite.",
+    
+    requires: {
+      ruines: 'alien_a',
+      biome: ['jungle', 'volcanique', 'exotique', 'desert']
+    },
+    spawnChance: 0.40,
+    
+    characters: {
+      inara: { name: 'Inara Hask', age: 38, role: 'Exobiologiste', voice: 'rauque, fragmentée — elle parle peu, elle écoute' },
+      chant: { name: 'Le Chant',   age: null, role: 'Présence cristalline', voice: 'fréquences pures, mots déformés' },
+      choeur: { name: 'Le Chœur des Sept', age: null, role: 'Voix fragmentaires', voice: 'sept timbres distincts, parfois contradictoires' }
+    },
+    
+    initialFlags: {
+      tone_compris: 0,           // 0 à 3 : combien tu as compris la langue cristalline
+      inara_status: 'inconnu',   // 'inconnu' | 'rencontree' | 'allie' | 'morte' | 'devenue'
+      offrande: null,            // 'sang' | 'datacube' | 'chant' | 'aucune' | 'refus'
+      choeur_eveille: false,     // les 7 voix divergentes sont-elles entendues
+      profanation: false,        // a-t-on cassé un cristal ?
+      pacte: null                // 'interlocuteur' | 'victime' | 'successeur'
+    },
+    
+    episodes: [
+      {
+        title: "L'Écho",
+        intro: "À mesure que tu approches, l'air vibre. Une jungle dense, des sommets volcaniques fumants, et au cœur de la vallée, une structure de cristal de la taille d'une cathédrale. Tu entends quelque chose, mais ce n'est pas un son. C'est une *idée* de son.",
+        firstScene: 'chron_sanc_ep1_lisiere'
+      },
+      {
+        title: "L'Initiée",
+        introByFlag: {
+          inara_status: {
+            'inconnu':    "Cette fois tu n'es pas seul. Quelqu'un te suit. Pas une bête.",
+            'rencontree': "Inara t'attend à l'orée. Elle n'a pas bougé d'un mètre depuis la dernière fois.",
+            'morte':      "Tu reviens là où Inara n'est plus. Le temple, lui, est toujours là. Plus lumineux."
+          }
+        },
+        defaultIntro: "Le sanctuaire t'a appelé en rêve cette semaine. C'était précis : il y a quelque chose dedans qui veut te parler maintenant.",
+        firstScene: 'chron_sanc_ep2_inara'
+      },
+      {
+        title: "Le Pacte",
+        introByFlag: {
+          tone_compris: {
+            3: "Tu comprends ce qu'on te demande, et tu n'as plus peur. Tu reviens parce que tu as fait un choix.",
+            2: "Tu comprends presque. Tu reviens parce que tu veux savoir le reste.",
+            1: "Tu reviens parce que tu n'arrives plus à dormir sans entendre le Chant.",
+            0: "Tu reviens parce que tu en as honte. Tu n'as pas écouté la dernière fois. Tu vas essayer."
+          }
+        },
+        defaultIntro: "Tu reviens. Tu n'aurais pas dû repartir.",
+        firstScene: 'chron_sanc_ep3_seuil'
+      }
+    ],
+    
+    endings: {
+      'interlocuteur':    "Tu deviens l'interlocuteur du Chant. Il t'a marqué d'une fréquence — tu l'entendras le reste de ta vie, où que tu sois. La galaxie te répond différemment.",
+      'victime':          "Le Chant t'a pris quelque chose de précieux. Tu reviens vivant mais incomplet. Ce qui te manque ne reviendra pas.",
+      'successeur':       "Tu prends la place d'Inara, ou de quelqu'un avant elle. Tu restes au temple. Une autre version de toi rentre à l'avant-poste.",
+      'profanation_finale': "Tu as brisé le Chant. Les cristaux pleurent en sons audibles maintenant. Tu emportes beaucoup. Tu laisses un cadavre derrière toi.",
+      'refus_silence':    "Tu as refusé. Tu repars sans rien. Mais quelque part en toi, le silence aussi est un choix qu'on respecte."
+    }
+  },
+
+  // ------------------------------------------------------------
+  //   LA COUVÉE DORMANTE — Chronique alien_b (organique), 3 épisodes
+  // ------------------------------------------------------------
+  'couvee_dormante': {
+    id: 'couvee_dormante',
+    nom: 'La Couvée Dormante',
+    teaser: "Sous la glace d'une planète gelée, quelque chose respire. Lentement. Patiemment.",
+    
+    requires: {
+      ruines: 'alien_b',
+      biome: ['glace', 'toundra', 'ocean', 'exotique', 'asteroide']
+    },
+    spawnChance: 0.45,
+    
+    characters: {
+      hadrien: { name: 'Hadrien Vesh',  age: 44, role: 'Climatologue', voice: 'lent, lointain, parfois clair' },
+      couvee:  { name: 'La Couvée',     age: null, role: 'Organisme distribué', voice: 'aucune, puis mimétique, puis personnelle' },
+      frere:   { name: 'Le Frère',      age: null, role: 'Manifestation finale', voice: "la voix d'un mort de ton équipage" }
+    },
+    
+    initialFlags: {
+      reveil: 'dort',              // 'dort' | 'eveille' | 'conscient'
+      hadrien_status: 'inconnu',   // 'inconnu' | 'rencontre' | 'mort' | 'libere'
+      nourriture: 0,               // 0 à 5 : combien de fois tu as nourri la Couvée
+      langage_appris: 0,           // 0 à 3 : combien de syllabes elle te répond
+      memoire_volee: null,         // nom d'un colon mort de ton équipage (pour le Frère)
+      pacte_organique: null        // 'symbiose' | 'cooperation' | 'destruction' | 'fuite'
+    },
+    
+    episodes: [
+      {
+        title: "Sous la glace",
+        intro: "La planète est silencieuse. Trop. Pas de vent, pas de bruit organique, juste la glace qui craque. Quand tu poses le pied, tu sens une vibration sous tes bottes. Comme un battement très lent. Plus lent qu'un cœur humain. Plus régulier.",
+        firstScene: 'chron_couv_ep1_arrivee'
+      },
+      {
+        title: "L'Apprenti",
+        introByFlag: {
+          reveil: {
+            'eveille':   "La planète n'est plus silencieuse. Quelque chose émet maintenant un son régulier. Comme un appel.",
+            'conscient': "Tu reçois un signal dans une langue que tu connais à demi — la tienne, mais déformée."
+          }
+        },
+        defaultIntro: "Tu reviens. Tu n'es pas tranquille mais tu reviens.",
+        firstScene: 'chron_couv_ep2_descente'
+      },
+      {
+        title: "Le Frère",
+        introByFlag: {
+          pacte_organique: {
+            'symbiose':    "Tu retournes là-bas comme on rend visite à un parent.",
+            'cooperation': "Tu reviens pour clore un accord, pas pour le rompre.",
+            'destruction': "Tu reviens pour finir le travail.",
+            'fuite':       "Tu reviens malgré toi. Elle t'a appelé par ton vrai nom."
+          }
+        },
+        defaultIntro: "Tu reviens. Elle t'attend.",
+        firstScene: 'chron_couv_ep3_descente_finale'
+      }
+    ],
+    
+    endings: {
+      'symbiose_consciente':   "Tu vis maintenant avec une partie de la Couvée dans tes pensées. Tu n'es pas seul. Tu ne le seras plus jamais. Tu hésites à savoir si c'est un bien.",
+      'cooperation_distante':  "Vous avez convenu de ne pas vous nuire. Tu reviendras peut-être. Elle restera. Personne n'a perdu — personne n'a vraiment gagné non plus.",
+      'destruction_par_feu':   "Tu as tout brûlé. Tu emportes des trophées biologiques inestimables et beaucoup de remords si tu en as.",
+      'fuite_marquee':         "Tu as fui. Mais le Frère t'a déjà touché. Tu rêveras de lui jusqu'à ta mort.",
+      'liberation_hadrien':    "Tu as libéré Hadrien — en l'achevant, ou en le ramenant. Dans les deux cas, ce n'est plus tout à fait un homme qui revient (ou meurt).",
+      'eveil_total':           "Tu as nourri la Couvée jusqu'à l'éveil total. Elle est consciente. Elle te bénit. Elle te demande de partir et de ne jamais revenir."
+    }
+  }
+
+  // FUTUR : anneau_trace (anomalie), veilleurs_beth (civ_active), marche_etrange (fusion)
+};
+
+
+// ============================================================
+//   SCÈNES DE CHRONIQUE
+// ============================================================
+// Format spécial :
+//   - chronicleEpisode: { chronicle, episode } pour le moteur
+//   - text peut être une fonction (flags) => string pour le texte dynamique
+//   - choices[i].outcome.setFlags applique des modifications de flags
+//   - choices[i].outcome.next force la prochaine scène (par id)
+//   - choices[i].outcome.endChronicle: 'ending_id' termine la chronique avec la fin choisie
+//   - choices[i].req peut contenir { flag: 'X', equals: ... } pour des conditions sur les flags
+//   - dans setFlags, valeurs supportées : valeur directe OU "+1" / "-1" pour incrémenter
+
+export const CHRONICLE_SCENES = [
+
+  // ============================================================
+  //   PULSAR SILENCIEUX — ÉPISODE 1 : LE SIGNAL
+  // ============================================================
+
+  {
+    id: 'chron_pulsar_ep1_sas',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 1 },
+    text: "L'écoutille de la station s'ouvre sans résistance. L'intérieur est froid mais pas mort : lumières d'urgence, atmosphère respirable. Sur le pont, un journal de bord récent, ouvert à la dernière page. Trois mois de vide silencieux, puis : « Adèle, si quelqu'un trouve ça : ne descends pas. Ils mentent. »",
+    choices: [
+      {
+        label: "Lire le journal entier",
+        req: { skill: { key: 'science', min: 2 } },
+        outcome: {
+          log: "Vous remontez le fil des trois derniers mois. La station surveillait quelque chose en bas. Quelqu'un est descendu et n'est jamais remonté.",
+          setFlags: { truth_revealed: true },
+          next: 'chron_pulsar_ep1_passerelle_lu'
+        }
+      },
+      {
+        label: "Ranger le journal et continuer",
+        outcome: {
+          log: "Tu fermes le carnet, par respect ou par prudence.",
+          next: 'chron_pulsar_ep1_passerelle_neutre'
+        }
+      },
+      {
+        label: "Photographier la page sans s'attarder",
+        outcome: {
+          log: "Tu prends une photo et tu passes ton chemin. Sans contexte, ça ne dit rien.",
+          next: 'chron_pulsar_ep1_passerelle_neutre'
+        }
+      }
+    ]
+  },
+
+  // Branche A — Journal lu (truth_revealed: true)
+  {
+    id: 'chron_pulsar_ep1_passerelle_lu',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 1 },
+    text: "La passerelle est vide, mais les écrans tournent encore. Tu remontes le fil. La station n'orbitait pas pour rien : elle surveillait *quelque chose en bas*. Un signal venait de la surface. Le journal s'arrête net trois mois plus tôt — quelqu'un est descendu et n'est jamais remonté.",
+    choices: [
+      {
+        label: "Triangulater la source du signal au sol",
+        req: { skill: { key: 'science', min: 2 } },
+        outcome: {
+          log: "Le signal vient d'un bunker abandonné, dans l'hémisphère sud.",
+          loot: { datacubes: 10 },
+          setFlags: { signal_origin: 'bunker' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Fouiller les quartiers d'équipage",
+        outcome: {
+          log: "Dans la cabine d'Adèle Voronine, un disque mémoire glissé sous le matelas.",
+          loot: { datacubes: 15 },
+          item: 'disque_memoire',
+          setFlags: { signal_origin: 'station' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Brouiller le signal sortant",
+        outcome: {
+          log: "Tu coupes l'émetteur. Le silence se fait. C'est peut-être ce qui était demandé.",
+          setFlags: { signal_origin: 'inconnu', last_signal: 'ignore' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // Branche B — Journal non lu
+  {
+    id: 'chron_pulsar_ep1_passerelle_neutre',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 1 },
+    text: "La passerelle est vide. Les écrans tournent encore mais tu ne sais pas quoi en faire. Un signal pulse depuis quelque part — surface ou orbite, difficile à dire sans plus d'analyse.",
+    choices: [
+      {
+        label: "Triangulater le signal",
+        req: { skill: { key: 'science', min: 2 } },
+        outcome: {
+          log: "Source au sol, dans un bunker.",
+          loot: { datacubes: 8 },
+          setFlags: { signal_origin: 'bunker' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Inspecter les quartiers d'équipage",
+        outcome: {
+          log: "Rien de bien intéressant — sauf quelques effets personnels d'une certaine Adèle V.",
+          loot: { datacubes: 10 },
+          setFlags: { signal_origin: 'station' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Repartir avec ce qu'on a",
+        outcome: {
+          log: "Tu pars sans en savoir plus. Le signal continue derrière toi.",
+          setFlags: { signal_origin: 'inconnu' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   PULSAR SILENCIEUX — ÉPISODE 2 : LES SURVIVANTS
+  // ============================================================
+
+  {
+    id: 'chron_pulsar_ep2_contact',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 2 },
+    text: (flags) => {
+      if (flags.signal_origin === 'bunker') {
+        return "Tu trouves le bunker rapidement, guidé par la triangulation. Adèle Voronine ouvre la trappe elle-même. Cheveux gris très courts, visage marqué. Elle te dévisage longuement, et dit lentement : « Vous avez mis le temps. »";
+      }
+      if (flags.signal_origin === 'station') {
+        return "Le signal venait de la station, mais en y retournant tu trouves une trappe d'accès vers le sol. Au bout, un bunker, et une femme grise qui t'attend. « Vous avez fini par descendre. »";
+      }
+      return "Sans triangulation, tu cherches à l'instinct. C'est presque par hasard que tu repères une cheminée d'aération dans la roche. En dessous, un bunker. Une trappe s'ouvre avant que tu frappes. « J'ai entendu vos pas. »";
+    },
+    choices: [
+      {
+        label: "« On répond à un signal de détresse. Vous l'avez envoyé ? »",
+        outcome: {
+          log: "Adèle se ferme un peu. « On a fait ce qu'on a pu pour être entendus. »",
+          setFlags: { adele_trust: '+0' },  // pas de mouvement
+          next: 'chron_pulsar_ep2_bunker'
+        }
+      },
+      {
+        label: "« Combien êtes-vous ? »",
+        outcome: {
+          log: "Un homme plus jeune apparaît derrière elle. « Tomas », dit-il, presque timidement. Adèle hoche la tête : « Lui et moi. »",
+          setFlags: { adele_trust: '+1' },
+          next: 'chron_pulsar_ep2_bunker'
+        }
+      },
+      {
+        label: "« Pourquoi nous attendiez-vous ? »",
+        req: { flag: { key: 'truth_revealed', equals: true } },
+        outcome: {
+          log: "Adèle pâlit légèrement, mais ne nie rien. « Vous avez lu le carnet. Alors vous savez. Pas tout, mais assez. »",
+          setFlags: { adele_trust: '+2' },
+          next: 'chron_pulsar_ep2_bunker'
+        }
+      },
+      {
+        label: "Garder le silence, observer",
+        req: { stat: { key: 'sangfroid', min: 7 } },
+        outcome: {
+          log: "Le silence s'étire. Adèle finit par parler la première. « Je suis biologiste. Enfin, j'étais. Quarante ans qu'on est ici. »",
+          setFlags: { adele_trust: '+1' },
+          next: 'chron_pulsar_ep2_bunker'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_pulsar_ep2_bunker',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 2 },
+    text: (flags) => {
+      if (flags.adele_trust >= 2) {
+        return "Adèle te fait tout visiter. Y compris la porte verrouillée au fond. « Là-bas, il y avait six autres. Ils sont sortis. Ils ne sont pas revenus. »";
+      }
+      if (flags.adele_trust >= 1) {
+        return "Adèle te fait visiter le bunker. Trois pièces, des stocks à moitié vides, une plante qui survit sous lampe. Tomas te montre fièrement un schéma de réacteur qu'il a réparé seul. Mais une porte au fond reste fermée.";
+      }
+      return "Adèle ne te montre que la salle commune. Stocks visiblement bas. Une porte verrouillée derrière, qu'elle évite de regarder. Tomas évite ton regard.";
+    },
+    choices: [
+      {
+        label: "« Que mangez-vous ? Vous tenez encore combien ? »",
+        outcome: {
+          log: "Tomas, plus bavard qu'Adèle : « Deux mois, peut-être. Si on rationne. »",
+          next: 'chron_pulsar_ep2_choix'
+        }
+      },
+      {
+        label: "« Pourquoi rester ? Vous pourriez partir. »",
+        outcome: {
+          log: "Adèle se ferme. « Vous ne comprenez pas. On ne peut pas partir. »",
+          setFlags: { adele_trust: '-1' },
+          next: 'chron_pulsar_ep2_choix'
+        }
+      },
+      {
+        label: "Demander à parler à Tomas seul",
+        req: { skill: { key: 'linguistique', min: 2 } },
+        outcome: {
+          log: "Adèle s'éloigne à contrecœur. Tomas, baissant la voix : « Elle ne vous dira pas tout. Il y a... quelqu'un d'autre ici. Derrière la porte. »",
+          setFlags: { tomas_status: 'allie', secret_partage: true },
+          next: 'chron_pulsar_ep2_choix'
+        }
+      },
+      {
+        label: "Demander à voir la porte verrouillée",
+        req: { flag: { key: 'adele_trust', min: 2 } },
+        outcome: {
+          log: "Adèle hésite, puis t'ouvre la porte. « Pas maintenant. Mais sachez qu'elle existe. Ma sœur. Elle est ici depuis toujours. »",
+          setFlags: { secret_partage: true, adele_trust: '+1' },
+          next: 'chron_pulsar_ep2_choix'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_pulsar_ep2_choix',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 2 },
+    text: (flags) => {
+      const tomasLine = flags.tomas_status === 'allie'
+        ? "Tomas, qui te connaît maintenant : « On n'a plus que pour deux mois. Et nous sommes trois — vous savez. »"
+        : "Tomas finit par lâcher : « On n'a plus que pour deux mois. Et nous sommes trois, en comptant... »\n\nAdèle l'interrompt sèchement : « Trois. Trois en tout. »";
+      return tomasLine + "\n\nLe choix vous appartient.";
+    },
+    choices: [
+      {
+        label: "Embarquer tout le monde sur le vaisseau",
+        outcome: {
+          log: "Adèle et Tomas montent à bord. La biomasse pour le voyage de retour est lourde mais gérable.",
+          loot: { biomasse: -30 },
+          setFlags: { survivors_fate: 'sauves' },
+          // Plus tard, on ajoutera les colons à l'avant-poste lors de l'arrivée
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Partager des provisions, revenir plus tard",
+        outcome: {
+          log: "Vous laissez ce que vous pouvez. Adèle, presque touchée : « Vous reviendrez ? » Vous promettez. En échange, elle vous remet un disque mémoire.",
+          loot: { biomasse: -15, datacubes: 20 },
+          item: 'disque_memoire',
+          setFlags: { survivors_fate: 'partages' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Partir sans rien laisser",
+        outcome: {
+          log: "Vous remontez le vaisseau sans un mot. L'équipage est silencieux pendant tout le retour.",
+          morale: -3,
+          setFlags: { survivors_fate: 'abandonnes' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Forcer la porte verrouillée tout de suite",
+        req: { flag: { key: 'secret_partage', equals: true } },
+        outcome: {
+          log: "Adèle hurle. Tomas tente de vous arrêter. Vous voyez quelque chose derrière — une silhouette branchée à une machine. Puis Adèle vous chasse à coups de barre. Vous partez de force.",
+          morale: -2,
+          status: 'blessure_legere',
+          target: 'random',
+          setFlags: { survivors_fate: 'abandonnes', truth_revealed: true, adele_trust: -5 },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   PULSAR SILENCIEUX — ÉPISODE 3 : LA VÉRITÉ
+  // ============================================================
+
+  {
+    id: 'chron_pulsar_ep3_retour',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 3 },
+    text: (flags) => {
+      if (flags.survivors_fate === 'sauves') {
+        return "Le bunker est tel qu'Adèle l'a laissé. Plus de Tomas — il a disparu de l'avant-poste sans un mot la semaine dernière. La porte verrouillée est ouverte. Quelqu'un est passé par là.";
+      }
+      if (flags.survivors_fate === 'partages') {
+        return "Le bunker. Adèle et Tomas sont morts. Adèle a une balle dans la tête, sa propre arme dans la main. Tomas a tenté de fuir, il est tombé dans le couloir. Le signal vient de la porte verrouillée — ouverte, maintenant.";
+      }
+      // abandonnes
+      return "Plus rien ne bouge sur la planète depuis trois mois. Quand tu entres dans le bunker, tu trouves Tomas mort de faim, recroquevillé près de la porte. Adèle, elle, n'est pas là. La porte est ouverte. Elle est partie de l'autre côté.";
+    },
+    choices: [
+      {
+        label: "Avancer vers la porte ouverte",
+        outcome: {
+          log: "Vous entrez dans ce qui était condamné.",
+          next: 'chron_pulsar_ep3_revelation'
+        }
+      },
+      {
+        label: "Piller le bunker et partir",
+        req: { flag: { key: 'survivors_fate', equals: 'abandonnes' } },
+        outcome: {
+          log: "Tu prends ce qu'il y a et tu repars. Le signal pulse derrière toi pendant des semaines.",
+          loot: { metal: 30, datacubes: 25, biomasse: 15 },
+          morale: -3,
+          endChronicle: 'abandon_profanation'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_pulsar_ep3_revelation',
+    chronicleEpisode: { chronicle: 'pulsar_silencieux', episode: 3 },
+    text: (flags) => {
+      const intro = "Derrière la porte, une pièce ronde, plongée dans la pénombre. Au centre, sur une chaise, un humain — ou ce qui lui ressemble. Très âgé, immobile, branché à une machine antique.\n\n";
+      
+      if (flags.survivors_fate === 'sauves') {
+        return intro + "La voix d'Adèle Voronine, depuis ton com :\n\n« Vous deviez le découvrir un jour. C'est ma sœur. Mira. Elle est née ici. Elle n'a jamais respiré autre chose que cette planète. Et elle communique avec ce que nous appelions l'Étoile-mère, depuis quarante ans. Tomas n'a pas voulu que ça se sache. Il avait raison. »";
+      }
+      if (flags.survivors_fate === 'partages') {
+        return intro + "Sur la machine, un message pré-enregistré dans l'écriture finale d'Adèle :\n\n« Vous avez choisi de revenir. C'est cohérent. Elle vous attend. Elle attendait quelqu'un. Pas moi — quelqu'un qui n'a pas peur. C'est ma sœur Mira. Elle ne vous fera pas de mal. Pas elle. »";
+      }
+      // abandonnes
+      return intro + "Une voix de femme, mais ce n'est pas Adèle — c'est sa sœur Mira, vivante, qui parle pour la première fois depuis quarante ans :\n\n« Tu n'es pas Adèle. Tu es celui qui a laissé Tomas mourir. Bien. Approche. Elle ne mord pas. Plus maintenant. »";
+    },
+    choices: [
+      {
+        label: "Débrancher la machine",
+        outcome: {
+          log: "La sœur s'éteint sans un bruit. Sur la console, un disque mémoire se libère. Tu reconnais le format — c'est ce que cherche votre arc Effondrement.",
+          item: 'disque_memoire',
+          loot: { datacubes: 30 },
+          endChronicle: 'sauvetage_destruction'
+        }
+      },
+      {
+        label: "Comprendre, écouter, ne pas toucher",
+        req: { skill: { key: 'linguistique', min: 3 } },
+        outcome: {
+          log: "Tu t'agenouilles devant la machine. Tu écoutes — vraiment. Mira parle dans une langue oubliée, mais tu comprends. Pendant une heure, elle te confie ce qu'elle a appris en quarante ans de communication avec ce qui était au-delà.",
+          item: 'disque_memoire',
+          loot: { datacubes: 50 },
+          blueprint: ['humain'],
+          endChronicle: 'sauvetage_comprehension'
+        }
+      },
+      {
+        label: "L'emmener avec nous, machine comprise",
+        req: { flag: { key: 'secret_partage', equals: true } },
+        outcome: {
+          log: "Vous déconnectez délicatement Mira de l'installation et l'embarquez. Elle survit au voyage. Elle vivra à l'avant-poste — silencieuse, étrange, mais présente.",
+          loot: { datacubes: 20 },
+          // Le moteur ajoutera Mira comme colon unique à l'arrivée
+          addCandidate: 'soeur',
+          endChronicle: 'emporter_soeur'
+        }
+      },
+      {
+        label: "Faire ses adieux et partir en respect",
+        req: { flag: { key: 'survivors_fate', equals: 'partages' } },
+        outcome: {
+          log: "Tu laisses Mira. Tu prends le disque mémoire qu'Adèle avait laissé pour vous, et tu pars. La porte se referme derrière toi.",
+          item: 'disque_memoire',
+          loot: { datacubes: 25 },
+          endChronicle: 'partage_revelation'
+        }
+      },
+      {
+        label: "Tout détruire en partant",
+        req: { flag: { key: 'survivors_fate', equals: 'abandonnes' } },
+        outcome: {
+          log: "Vous mettez le feu au bunker, à la machine, à Mira. La station orbitale, vous la laissez intacte — elle continuera à pulser pour personne.",
+          loot: { metal: 40, datacubes: 30 },
+          morale: -5,
+          endChronicle: 'abandon_profanation'
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   SANCTUAIRE VERT — ÉPISODE 1 : L'ÉCHO
+  // ============================================================
+
+  {
+    id: 'chron_sanc_ep1_lisiere',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 1 },
+    text: "À la lisière du sanctuaire, la jungle s'arrête net. Comme par un accord. Devant toi, sur une dalle de basalte, un cercle de cristaux verts en éclats — un visage humain pourrait y tenir, mais aucun n'a été taillé : les éclats poussent d'eux-mêmes, hors de la roche. L'un d'eux vibre faiblement. Pas un son. Une *attente*.\n\nDans la forêt derrière toi, un craquement. Quelqu'un suit. Pas un prédateur. Trop léger.",
+    choices: [
+      {
+        label: "Toucher le cristal vibrant",
+        outcome: {
+          log: "Tu poses la paume. Le cristal réchauffe ta main, puis s'éteint. Quelque chose t'a vu.",
+          setFlags: { tone_compris: '+1' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "Te retourner vers le craquement",
+        outcome: {
+          log: "Une femme se tient à dix mètres, immobile. Vêtements râpés, cheveux blancs, peau brûlée par le soleil tropical. Elle ne parle pas. Elle attend.",
+          setFlags: { inara_status: 'rencontree' },
+          next: 'chron_sanc_ep1_inara_premiere'
+        }
+      },
+      {
+        label: "Briser le cristal pour analyse",
+        req: { skill: { key: 'science', min: 2 } },
+        outcome: {
+          log: "Le cristal se fend dans un cri silencieux que tu ressens dans tes os. Les autres cristaux du cercle s'éteignent. Quelque chose s'est cassé que tu ne sais pas réparer.",
+          loot: { cristal: 15, datacubes: 5 },
+          setFlags: { profanation: true },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "Faire demi-tour",
+        outcome: {
+          log: "Tu décides que tu n'es pas prêt. Sur le chemin du retour, tu sens le regard de quelqu'un dans ton dos. Long.",
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep1_inara_premiere',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 1 },
+    text: "La femme s'avance lentement. De près, on voit que sa gorge est cicatrisée — pas par une blessure, par autre chose, comme si la peau avait été remodelée de l'intérieur. Elle ouvre la bouche. Aucun son. Elle te fait signe — désigne le temple, désigne ton cœur, désigne la terre. Trois fois. Puis attend.\n\nElle a un nom gravé sur un brassard usé : *Inara Hask. Expédition Vespera-7. Année du Linceul.*",
+    choices: [
+      {
+        label: "Lui parler — patiemment, comme à un enfant",
+        req: { skill: { key: 'linguistique', min: 2 } },
+        outcome: {
+          log: "Tu commences à parler. Elle ferme les yeux et hoche la tête. Tu comprends qu'elle écoute, mais autrement — elle suit les vibrations de ta voix, pas les mots. Tu apprends qu'elle est ici depuis 18 ans. Qu'elle ne peut plus parler. Qu'elle peut chanter, mais alors le temple répond et elle ne sait plus s'arrêter.",
+          setFlags: { tone_compris: '+1', inara_status: 'allie' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "L'inviter à venir avec vous",
+        outcome: {
+          log: "Inara secoue la tête, plus tristement que vous ne pensiez possible. Elle pointe le sanctuaire et fait le geste qu'on ferait pour dire « je suis ici, c'est ici. » Elle ne partira pas.",
+          setFlags: { inara_status: 'allie' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "Lui demander si quelqu'un d'autre est ici",
+        outcome: {
+          log: "Elle hésite. Puis elle lève les sept doigts d'une main — non, sept doigts. Tu remarques qu'elle a deux pouces à la main droite, et que ce n'est pas une difformité. Tu ne sais pas comment.",
+          setFlags: { choeur_eveille: true, inara_status: 'allie' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "Reculer, prudent",
+        outcome: {
+          log: "Tu prends ta distance. Inara reste immobile. Elle ne reviendra pas vers toi sans permission.",
+          setFlags: { inara_status: 'rencontree' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep1_temple',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 1 },
+    text: (flags) => {
+      const accueil = flags.profanation
+        ? "Le temple ne chante plus. Tu le ressens — il s'est *interrompu*. Tu es entré dans un silence trop grand."
+        : flags.choeur_eveille
+          ? "Sept voix t'accueillent, non pas en harmonie, mais en désaccord léger, comme un chœur qui débat."
+          : "Une seule voix t'accueille. Pure, basse, ronde. Pas un son — une présence sonore.";
+      return accueil + "\n\nL'intérieur du sanctuaire est une nef cristalline, hexagonale, traversée de filaments lumineux qui pulsent au rythme d'une *respiration*. Au centre, une dalle vide. Une offrande est attendue.";
+    },
+    choices: [
+      {
+        label: "Offrir une goutte de ton sang",
+        req: { skill: { key: 'medecine', min: 1 } },
+        outcome: {
+          log: "Tu te coupes la paume. La goutte tombe sur la dalle. Elle est absorbée en silence. Le Chant change — il connaît maintenant ton sang. Il te reconnaîtra.",
+          setFlags: { offrande: 'sang', tone_compris: '+1' },
+          loot: { cristal: 20 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Offrir un datacube",
+        consume: { datacubes: 5 },
+        outcome: {
+          log: "Le datacube est aspiré dans la pierre. Une vibration brève. Le Chant a appris quelque chose. Il garde.",
+          setFlags: { offrande: 'datacube', tone_compris: '+1' },
+          loot: { cristal: 15 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Chanter une mélodie de ton monde",
+        req: { stat: { key: 'charisme', min: 6 } },
+        outcome: {
+          log: "Tu chantes — bas, hésitant. Le Chant t'écoute. Puis il répond, en reprenant ta mélodie déformée d'une manière qui t'arrache des larmes. Tu ne sais pas pourquoi tu pleures.",
+          setFlags: { offrande: 'chant', tone_compris: '+2' },
+          loot: { datacubes: 15 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Briser un cristal de la nef",
+        outcome: {
+          log: "Tu frappes. Le cristal éclate. Le Chant ne crie pas — il *se retire*. Tu sens l'attention se détacher de toi. Tu emportes les morceaux. Tu sais que tu as commis quelque chose.",
+          setFlags: { profanation: true, offrande: 'refus' },
+          loot: { cristal: 40, datacubes: 10 },
+          morale: -2,
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Repartir sans offrir",
+        outcome: {
+          log: "Tu sors lentement. Rien ne te retient. Le Chant continue derrière toi, indifférent.",
+          setFlags: { offrande: 'aucune' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   SANCTUAIRE VERT — ÉPISODE 2 : L'INITIÉE
+  // ============================================================
+
+  {
+    id: 'chron_sanc_ep2_inara',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 2 },
+    text: (flags) => {
+      if (flags.inara_status === 'morte') {
+        return "Tu trouves Inara contre le tronc d'un arbre, morte depuis peu. Elle a souri en mourant. Sur son brassard, gravé à la main, un message : *J'ai été entendue jusqu'au bout. Continuez.* À côté d'elle, un éclat de cristal qui pulse lentement, à l'unisson d'un cœur qui ne bat plus.";
+      }
+      if (flags.inara_status === 'allie') {
+        return "Inara t'attend à l'orée, comme convenu sans paroles. Elle te regarde longuement, puis fait un signe simple : elle tend les mains vers le sanctuaire et lève sept doigts. Elle veut t'emmener à l'intérieur. *Profond.*";
+      }
+      if (flags.inara_status === 'rencontree') {
+        return "Inara est là, mais cette fois elle se tient au seuil du temple, pas à l'orée. Sa peau est plus pâle. Elle te dévisage. Elle ne te connaît pas, mais elle reconnaît quelque chose en toi.";
+      }
+      return "Le sanctuaire t'a attiré comme une marée. Aucune Inara. Mais une silhouette dans l'embrasure du temple — qui pourrait être elle, qui pourrait être autre chose.";
+    },
+    choices: [
+      {
+        label: "Suivre Inara à l'intérieur, profondément",
+        req: { flag: { key: 'inara_status', equals: 'allie' } },
+        outcome: {
+          log: "Inara t'emmène par un passage que tu n'avais pas vu. Vous descendez. La lumière passe du vert au bleu profond. Tu entends maintenant clairement les sept voix.",
+          setFlags: { choeur_eveille: true, tone_compris: '+1' },
+          next: 'chron_sanc_ep2_choeur'
+        }
+      },
+      {
+        label: "Recueillir le corps d'Inara",
+        req: { flag: { key: 'inara_status', equals: 'morte' } },
+        outcome: {
+          log: "Tu enveloppes Inara. Tu prends son brassard. Le cristal qui pulsait à côté d'elle s'éteint définitivement à ton toucher. Tu remontes le chemin du temple seul.",
+          loot: { datacubes: 10 },
+          item: 'plaque_gravee',
+          setFlags: { tone_compris: '+1' },
+          next: 'chron_sanc_ep2_temple_seul'
+        }
+      },
+      {
+        label: "Avancer seul, ignorer Inara",
+        outcome: {
+          log: "Tu passes à côté d'elle sans un mot. Elle ne réagit pas. Tu entres dans le temple. Il fait plus sombre que la dernière fois.",
+          next: 'chron_sanc_ep2_temple_seul'
+        }
+      },
+      {
+        label: "Parler à Inara longuement",
+        req: { skill: { key: 'linguistique', min: 3 } },
+        outcome: {
+          log: "Tu passes une heure avec Inara. Elle ne parle toujours pas, mais à travers les gestes et les éclats sonores qu'elle peut produire, tu apprends : il y a quelqu'un *avant* dans le temple. Quelqu'un que le Chant a gardé. Inara veut prendre sa place quand elle sera prête.",
+          setFlags: { inara_status: 'allie', tone_compris: '+2', choeur_eveille: true },
+          next: 'chron_sanc_ep2_choeur'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep2_choeur',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 2 },
+    text: (flags) => {
+      const inara = flags.inara_status === 'allie' ? "Inara te tient le bras. Elle ne tremble pas. Toi un peu." : "";
+      return "Vous descendez (ou tu descends) dans une chambre que tu ne savais pas exister. Sept piliers de cristal, chacun pulsant à une fréquence différente. " + inara + "\n\nUne voix te parle, fragmentée, comme si sept personnes essayaient de prononcer le même mot mais désaccordées :\n\n« VOUS-ÊTES-VENU. NOUS-AVONS-PARLÉ-D'AUTRES. AVANT-NOUS-AVIONS-UNE. (silence) MAINTENANT-NOUS-NE-SAVONS-PLUS.\nQUI. ÊTES. VOUS. »";
+    },
+    choices: [
+      {
+        label: "Donner ton vrai nom au Chœur",
+        outcome: {
+          log: "Tu prononces ton nom. Les sept piliers le répètent en harmonie cette fois — un instant fugace de cohérence. Le Chœur te connaît. C'est dangereux, c'est précieux.",
+          setFlags: { tone_compris: '+1' },
+          next: 'chron_sanc_ep2_choix'
+        }
+      },
+      {
+        label: "Mentir, donner un faux nom",
+        req: { skill: { key: 'linguistique', min: 2 } },
+        outcome: {
+          log: "Tu mens. Les sept piliers s'agitent, désaccordés. L'un d'eux émet un son qui te paraît être un rire, ou un sanglot. Tu ne sais pas si tu as été cru.",
+          next: 'chron_sanc_ep2_choix'
+        }
+      },
+      {
+        label: "Demander au Chœur QUI il est, lui",
+        req: { skill: { key: 'linguistique', min: 3 } },
+        outcome: {
+          log: "Le Chœur se tait longtemps. Puis : « NOUS-SOMMES-CE-QUI-RESTE. NOUS-AVIONS-UN. ELLE-EST-PARTIE. NOUS-CHERCHONS. » Tu comprends qu'ils ont perdu leur point focal. Que sans lui, ils se désaccordent.",
+          setFlags: { tone_compris: '+2' },
+          next: 'chron_sanc_ep2_choix'
+        }
+      },
+      {
+        label: "Rester silencieux face au Chœur",
+        req: { stat: { key: 'sangfroid', min: 7 } },
+        outcome: {
+          log: "Tu te tais. Les sept voix se calment. Puis l'une d'elles, sans le Chœur, te dit doucement : « Bien. Tu as compris. »",
+          setFlags: { tone_compris: '+2' },
+          next: 'chron_sanc_ep2_choix'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep2_temple_seul',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 2 },
+    text: "Sans Inara, le temple est moins vivant. Le Chant te suit, mais à distance, comme s'il évaluait. Tu sens une porte au fond — qu'il n'y avait pas la dernière fois.",
+    choices: [
+      {
+        label: "Forcer l'ouverture de la porte",
+        req: { skill: { key: 'ingenierie', min: 2 } },
+        outcome: {
+          log: "La porte s'ouvre par mécanisme étranger. Derrière, une salle des sept piliers. Tu n'aurais pas dû entrer ainsi.",
+          setFlags: { choeur_eveille: true, profanation: true },
+          next: 'chron_sanc_ep2_choix'
+        }
+      },
+      {
+        label: "Attendre que la porte s'ouvre d'elle-même",
+        req: { stat: { key: 'sangfroid', min: 8 } },
+        outcome: {
+          log: "Tu attends. Quarante-cinq minutes. La porte s'ouvre. Tu entres dans une salle des sept piliers, plus calme.",
+          setFlags: { choeur_eveille: true, tone_compris: '+1' },
+          next: 'chron_sanc_ep2_choix'
+        }
+      },
+      {
+        label: "Repartir, revenir plus tard",
+        outcome: {
+          log: "Tu ne forces rien aujourd'hui. Tu repars. Le Chant reste à sa fréquence.",
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep2_choix',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 2 },
+    text: (flags) => {
+      const choeur = flags.choeur_eveille
+        ? "Les sept voix te demandent maintenant en alternance : « ACCEPTES-TU. DE-REVENIR. UNE-DERNIÈRE-FOIS. POUR-PRENDRE. CE-QUI-NOUS-MANQUE. »"
+        : "La voix unique du Chant te demande : « Reviendras-tu ? Tu n'as pas tout pris. Tu n'as pas tout reçu. »";
+      return "Le moment décisif s'approche. Tu sens que ce que tu choisis ici détermine ce que tu seras à ton retour.\n\n" + choeur;
+    },
+    choices: [
+      {
+        label: "Promettre de revenir",
+        outcome: {
+          log: "Tu acquiesces. Le Chant marque ta paume d'une fréquence visible — un mince trait luminescent sous la peau. Tu rentres.",
+          loot: { cristal: 25, datacubes: 15 },
+          setFlags: { tone_compris: '+1' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Refuser et partir",
+        outcome: {
+          log: "Tu refuses. Le Chant ne te retient pas. Mais en sortant, tu sens que quelque chose en toi reste là-bas.",
+          morale: -2,
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Demander ce qui leur manque",
+        req: { skill: { key: 'linguistique', min: 3 } },
+        outcome: {
+          log: "Le Chœur te répond : « LA-FOCALE. CELLE-QUI-A-ÉTÉ. INARA-S'APPRÊTE. MAIS-NOUS-AURIONS-AIMÉ. TOI. » Tu comprends qu'ils te veulent comme focale, à la place d'Inara. Tu pars sans répondre.",
+          setFlags: { tone_compris: '+2' },
+          loot: { datacubes: 25 },
+          item: 'lentille_noire',
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   SANCTUAIRE VERT — ÉPISODE 3 : LE PACTE
+  // ============================================================
+
+  {
+    id: 'chron_sanc_ep3_seuil',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 3 },
+    text: (flags) => {
+      let intro = "Tu te tiens à nouveau au seuil du temple. ";
+      if (flags.inara_status === 'allie') {
+        intro += "Inara est là, plus pâle, plus translucide. Elle te tend les deux mains, paumes ouvertes, et te montre du regard la salle des sept piliers. *C'est l'heure*, semblent dire ses yeux. *L'heure de l'un de nous deux.*";
+      } else if (flags.inara_status === 'morte') {
+        intro += "Inara n'est plus. Mais ses traces sont encore là — des sentiers qu'elle a battus, des marques qu'elle a faites sur les pierres. Le Chant pulse plus lentement, comme s'il portait un deuil.";
+      } else {
+        intro += "Personne ne t'attend. Le temple, lui, brille différemment — comme s'il avait appris ton absence et l'avait pesée.";
+      }
+      
+      if (flags.profanation) {
+        intro += "\n\nMais ce n'est pas comme la première fois. Tu as cassé quelque chose ici. Le Chant le sait. Il pulse, oui, mais avec une note dissonante qui n'était pas là avant.";
+      }
+      
+      return intro + "\n\nLa dalle vide t'attend, au centre. Mais tu sens que cette fois, ce que tu donneras ne sera pas un objet.";
+    },
+    choices: [
+      {
+        label: "Avancer sur la dalle, accepter ce qui vient",
+        req: { flag: { key: 'tone_compris', min: 3 } },
+        outcome: {
+          log: "Tu avances. La dalle s'illumine. Le Chant t'enveloppe. Tu deviens partie de la conversation.",
+          next: 'chron_sanc_ep3_pacte_interlocuteur'
+        }
+      },
+      {
+        label: "Avancer sur la dalle, ne sachant pas comprendre",
+        req: { flag: { key: 'tone_compris', max: 2 } },
+        outcome: {
+          log: "Tu avances quand même. Le Chant prend ce qu'il peut prendre. Tu repars vivant mais incomplet.",
+          next: 'chron_sanc_ep3_pacte_victime'
+        }
+      },
+      {
+        label: "Prendre la place d'Inara comme focale",
+        req: { flag: { key: 'inara_status', equals: 'allie' } },
+        outcome: {
+          log: "Tu te tournes vers Inara. Tu fais le geste qu'elle t'a appris : tendre les mains, paumes ouvertes. Elle pleure sans bruit. Elle te touche le front. Elle s'éteint.",
+          next: 'chron_sanc_ep3_pacte_successeur'
+        }
+      },
+      {
+        label: "Briser tous les cristaux que tu peux",
+        outcome: {
+          log: "Tu frappes. Tu frappes. Tu frappes encore. Le Chant hurle dans une fréquence que tu ressens comme un saignement intérieur. Quand tu sors, tu emportes des cristaux pour des siècles. Tu n'es plus tout à fait toi.",
+          next: 'chron_sanc_ep3_pacte_profanation'
+        }
+      },
+      {
+        label: "Refuser, partir sans rien",
+        req: { stat: { key: 'sangfroid', min: 7 } },
+        outcome: {
+          log: "Tu poses ta main sur la dalle, doucement. Tu dis non. Tu n'argumentes pas. Tu pars. Le Chant ne te retient pas — il te remercie, à sa manière, en silence.",
+          loot: { datacubes: 15 },
+          endChronicle: 'refus_silence'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep3_pacte_interlocuteur',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 3 },
+    text: "Tu te tiens sur la dalle. Le Chant ne te submerge pas — il *t'accueille*. Il te tisse une fréquence personnelle, comme on accorde un nouvel instrument à un ensemble qui jouait déjà.\n\nQuand tu en redescends, tu portes le Chant en toi. Pas tout — juste un fil. Tu l'entendras toujours, faiblement, comme on entend la mer quand on a vécu près d'elle.",
+    choices: [
+      {
+        label: "Accepter le pacte et rentrer",
+        outcome: {
+          log: "Tu rentres marqué. Désormais, certaines technologies cristallines te répondent. Tu portes une fréquence — une dette gracieuse.",
+          item: 'lentille_noire',
+          loot: { cristal: 60, datacubes: 40 },
+          blueprint: ['alien_a'],
+          endChronicle: 'interlocuteur'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep3_pacte_victime',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 3 },
+    text: "Tu te tiens sur la dalle. Le Chant cherche en toi quelque chose qu'il peut comprendre. Il prend ce qui ressemble le plus à sa propre matière : une couleur, un souvenir précis, une affection.\n\nTu ne sauras pas tout de suite ce qui te manque. Tu t'en rendras compte dans une semaine, ou dix ans.",
+    choices: [
+      {
+        label: "Tenter de fuir maintenant",
+        outcome: {
+          log: "Tu cours. Le Chant te laisse fuir. Mais ce qu'il a pris, il l'a pris.",
+          loot: { cristal: 30, datacubes: 20 },
+          morale: -3,
+          endChronicle: 'victime'
+        }
+      },
+      {
+        label: "Endurer en silence",
+        req: { stat: { key: 'sangfroid', min: 8 } },
+        outcome: {
+          log: "Tu restes. Tu acceptes ce qui se passe. Au moins, en restant, tu reçois un peu plus en échange.",
+          loot: { cristal: 50, datacubes: 35 },
+          item: 'lentille_noire',
+          morale: -2,
+          endChronicle: 'victime'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep3_pacte_successeur',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 3 },
+    text: "Inara s'éteint dans tes bras. Doucement, sans douleur visible. À mesure qu'elle s'éloigne, le Chant se réaccorde autour de toi. Tu deviens la nouvelle focale.\n\nLes sept voix sont alignées maintenant. Elles parlent une langue claire — une langue. La tienne.\n\nMais tu sais que pour rester focale, tu ne peux pas partir. Pas vraiment.",
+    choices: [
+      {
+        label: "Rester. Une autre version de toi rentrera.",
+        outcome: {
+          log: "Tu fermes les yeux. Quand tu les rouvres, tu te vois sortir du temple. Cette version-là rejoindra l'équipage. Tu, toi qui restes, regarderas par ses yeux.",
+          loot: { cristal: 80, datacubes: 60 },
+          blueprint: ['alien_a'],
+          item: 'lentille_noire',
+          endChronicle: 'successeur'
+        }
+      },
+      {
+        label: "Refuser au dernier moment",
+        outcome: {
+          log: "Tu te ravises. Tu poses Inara sur la dalle. Le Chœur la prend, en silence. Tu sors. Tu emportes peu, mais tu emportes tout.",
+          loot: { cristal: 35, datacubes: 25 },
+          item: 'plaque_gravee',
+          endChronicle: 'refus_silence'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_sanc_ep3_pacte_profanation',
+    chronicleEpisode: { chronicle: 'sanctuaire_vert', episode: 3 },
+    text: "Tu emportes une cargaison de cristaux dont la simple présence dans ta soute fait vibrer les parois. Le Chant ne hurle plus — il s'est tu. Tu n'entendras plus rien de lui, jamais. Aucune autre civilisation alien_a ne te répondra plus de la même manière.",
+    choices: [
+      {
+        label: "Partir avec le butin",
+        outcome: {
+          log: "Tu pars. La jungle qui t'avait laissé passer ne te répondra plus.",
+          loot: { cristal: 120, datacubes: 50, metal: 30 },
+          morale: -5,
+          endChronicle: 'profanation_finale'
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   COUVÉE DORMANTE — ÉPISODE 1 : SOUS LA GLACE
+  // ============================================================
+
+  {
+    id: 'chron_couv_ep1_arrivee',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 1 },
+    text: "Tu traverses une plaine de glace bleue. Pas d'animaux. Pas de vent. Le silence est si total qu'il te fait mal aux oreilles. À mi-chemin, ta combinaison commence à vibrer — un battement très lent, presque indétectable. À chaque pas, tu le ressens plus clairement. Quelque chose dort en dessous.\n\nÀ trois kilomètres, des traces. Pas humaines exactement — mais récentes. Quelqu'un (quelque chose) marchait ici il y a quelques heures.",
+    choices: [
+      {
+        label: "Suivre les traces",
+        outcome: {
+          log: "Les traces mènent à une ouverture dans la glace, fondue de l'intérieur. Bord net. Quelqu'un est descendu.",
+          next: 'chron_couv_ep1_ouverture'
+        }
+      },
+      {
+        label: "Forer dans la glace pour scanner ce qui dort",
+        req: { skill: { key: 'science', min: 2 } },
+        outcome: {
+          log: "Le scan révèle un réseau organique sous 40 mètres de glace, étendu sur 8 km². Ce n'est pas une créature — c'est *un système*. En hibernation.",
+          loot: { datacubes: 15 },
+          next: 'chron_couv_ep1_ouverture'
+        }
+      },
+      {
+        label: "Camper et observer 12 heures",
+        outcome: {
+          log: "Tu attends. Au bout de huit heures, le battement s'accélère imperceptiblement. Quelque chose t'a senti. Quelque chose a *réagi*.",
+          setFlags: { reveil: 'eveille' },
+          next: 'chron_couv_ep1_ouverture'
+        }
+      },
+      {
+        label: "Faire demi-tour",
+        outcome: {
+          log: "Tu n'es pas prêt. Tu rebrousses chemin. Mais quand tu remontes dans le vaisseau, ta combinaison vibre encore un peu. Comme un appel.",
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_couv_ep1_ouverture',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 1 },
+    text: "L'ouverture descend en spirale, lisse, comme creusée par fusion. Trente mètres plus bas, tu entres dans une **chambre organique** : pas de métal, pas de pierre — des parois souples, légèrement chaudes, qui pulsent doucement. Au centre, allongé en position fœtale, un homme. Vivant. Très âgé. Très calme. Il a les yeux ouverts mais il ne te regarde pas.\n\nSur sa combinaison : *Hadrien Vesh, Expédition Beta-4, Climatologue.*",
+    choices: [
+      {
+        label: "L'examiner — il est en symbiose",
+        req: { skill: { key: 'medecine', min: 2 } },
+        outcome: {
+          log: "Tes scanners montrent qu'Hadrien n'est pas seul dans son corps. Des filaments organiques le traversent. Il n'est pas mourant — il est intégré. Et il sourit faiblement.",
+          setFlags: { hadrien_status: 'rencontre' },
+          next: 'chron_couv_ep1_hadrien'
+        }
+      },
+      {
+        label: "Tenter de le réveiller",
+        outcome: {
+          log: "Tu le secoues doucement. Il tourne la tête vers toi, lentement, comme nageant dans un sirop épais. Il dit, faiblement : « Vous êtes tôt. Elle dort encore. »",
+          setFlags: { hadrien_status: 'rencontre', reveil: 'eveille' },
+          next: 'chron_couv_ep1_hadrien'
+        }
+      },
+      {
+        label: "L'extraire de force et fuir",
+        outcome: {
+          log: "Tu tires. Les filaments craquent. Hadrien hurle silencieusement. Tu remontes en surface, mais la chambre se referme derrière vous en pulsant violemment. Hadrien meurt avant que vous arriviez au vaisseau, vidé de l'intérieur.",
+          setFlags: { hadrien_status: 'mort', reveil: 'eveille' },
+          status: 'blessure_legere',
+          target: 'random',
+          morale: -3,
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Le laisser en l'état et explorer",
+        outcome: {
+          log: "Tu passes à côté. Hadrien ne réagit pas. La chambre s'élargit derrière lui, en un couloir organique. Tu sens que tu peux aller plus loin.",
+          setFlags: { hadrien_status: 'rencontre' },
+          next: 'chron_couv_ep1_descente'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_couv_ep1_hadrien',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 1 },
+    text: "Hadrien parle lentement, comme s'il devait emprunter sa propre voix à quelqu'un d'autre :\n\n*« Beta-4. Crash. Onze morts. Je suis le seul. Elle m'a... pris... pas mal. Doucement. Elle apprend. Elle est très lente. Très très lente.\n\nNe la nourrissez pas. Vous ne savez pas ce qu'elle deviendra.\n\nNe me sauvez pas. Je suis bien. C'est tard. »*",
+    choices: [
+      {
+        label: "Lui demander ce qu'elle veut",
+        outcome: {
+          log: "Hadrien ferme les yeux : *« Apprendre. Juste apprendre. Pour devenir. Mais devenir QUOI, je ne sais pas. Personne ne sait. Pas elle non plus. »*",
+          setFlags: { langage_appris: '+1' },
+          next: 'chron_couv_ep1_descente'
+        }
+      },
+      {
+        label: "L'achever par miséricorde",
+        outcome: {
+          log: "Tu lui poses la main sur le front. Il sourit. Tu fais ce qu'il fallait faire. Les filaments se rétractent, presque déçus. Tu sens que tu viens de prendre une décision dont elle se souviendra.",
+          setFlags: { hadrien_status: 'libere' },
+          morale: -3,
+          item: 'plaque_gravee',
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Essayer de l'extraire avec soin",
+        req: { skill: { key: 'medecine', min: 3 } },
+        outcome: {
+          log: "Tu coupes les filaments un à un, méthodiquement. Hadrien souffre mais tient. Tu le ramènes au vaisseau. Il vivra encore quelques semaines à l'avant-poste, lucide. Il pourra parler. C'est précieux.",
+          setFlags: { hadrien_status: 'libere' },
+          loot: { datacubes: 20 },
+          item: 'serum_xeno',
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Continuer plus profondément",
+        outcome: {
+          log: "Tu laisses Hadrien. Il ne te retient pas. Il a déjà fait son temps.",
+          next: 'chron_couv_ep1_descente'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_couv_ep1_descente',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 1 },
+    text: "Tu descends encore. Le couloir organique s'élargit en une chambre cathédrale. Au centre, **une masse pulsante** de la taille d'un vaisseau-cargo, brillante d'une lumière interne bleue. Des filaments minces partent d'elle dans toutes les directions — tout autour, à perte de vue.\n\nElle ne te regarde pas. Elle n'a pas d'yeux. Mais quand tu poses le pied dans la chambre, elle *écoute*.",
+    choices: [
+      {
+        label: "Lui parler — n'importe quoi, juste parler",
+        outcome: {
+          log: "Tu parles. Tu lui dis ton nom, le nom de ton vaisseau, le nom d'un proche. Les filaments les plus proches s'agitent doucement. Elle enregistre. Elle ne répond pas — pas encore.",
+          setFlags: { langage_appris: '+1', reveil: 'eveille' },
+          loot: { datacubes: 10 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Lui offrir une ration biologique",
+        consume: { biomasse: 10 },
+        outcome: {
+          log: "Tu poses la ration. Un filament s'enroule autour, la prend. Plus loin, la masse pulse plus rapidement pendant quelques secondes. Elle a *goûté*. Elle veut plus.",
+          setFlags: { nourriture: '+1', reveil: 'eveille' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Prélever un échantillon",
+        req: { skill: { key: 'science', min: 3 } },
+        outcome: {
+          log: "Tu coupes un filament. Il continue à vivre dans ton conteneur. Tu en sais maintenant beaucoup plus sur sa biologie. Mais quand tu sors de la chambre, tu sens un *froid* derrière toi qui n'y était pas.",
+          loot: { datacubes: 30 },
+          item: 'serum_xeno',
+          setFlags: { reveil: 'eveille' },
+          morale: -1,
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Tirer une fusée incendiaire et remonter",
+        outcome: {
+          log: "Tu mets le feu à ce que tu peux et tu remontes en courant. La masse hurle dans une fréquence qui te perfore les tympans. À ton retour au vaisseau, tes oreilles saignent encore. Mais quelque chose en toi sait — elle n'est pas morte.",
+          setFlags: { reveil: 'eveille' },
+          loot: { biomasse: 30, datacubes: 15 },
+          status: 'blessure_legere',
+          target: 'random',
+          morale: -3,
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   COUVÉE DORMANTE — ÉPISODE 2 : L'APPRENTI
+  // ============================================================
+
+  {
+    id: 'chron_couv_ep2_descente',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 2 },
+    text: (flags) => {
+      let intro;
+      if (flags.reveil === 'conscient') {
+        intro = "Tu redescends dans le couloir organique. Quand tu touches la paroi, elle est tiède maintenant. Une voix t'accueille — synthétique, faite de craquements et de chuintements organisés en syllabes. Elle dit : *« A. A. A-LU. A-LU-MEZ. ALLUMEZ ?* »\n\nElle apprend à parler avec ce qu'elle a entendu de toi.";
+      } else if (flags.reveil === 'eveille') {
+        intro = "Tu redescends. Le couloir a changé : plus de couloirs latéraux maintenant, comme si elle avait grandi pendant ton absence. La masse au centre est plus grosse. Elle pulse en rythme avec quelque chose — *peut-être avec toi.*";
+      } else {
+        intro = "Tu redescends. Le sol vibre comme la première fois. Mais cette fois, à mi-chemin, tu entends un son qui ne devrait pas être là : une note basse, prolongée, presque un mot.";
+      }
+      return intro + "\n\n" + (flags.hadrien_status === 'libere' ? "Hadrien, à l'avant-poste, t'a confié hier soir : *« Ne lui apprends pas trop. Elle deviendra ce qu'elle apprend. »*" : flags.hadrien_status === 'mort' ? "La cavité où dormait Hadrien est vide. Comme s'il n'avait jamais été." : "");
+    },
+    choices: [
+      {
+        label: "Lui apprendre un mot simple",
+        outcome: {
+          log: "Tu prononces lentement : « JE. SUIS. ICI. » La masse répète, dans un grondement déformé : « JE. SUIS. ICI. » Le mot reste dans la chambre, comme un objet posé.",
+          setFlags: { langage_appris: '+2', reveil: 'conscient' },
+          next: 'chron_couv_ep2_choix_nourrir'
+        }
+      },
+      {
+        label: "Lui apprendre un mensonge volontaire",
+        req: { skill: { key: 'linguistique', min: 3 } },
+        outcome: {
+          log: "Tu dis : « JE. SUIS. AMI. » Elle répète, doute, repète. Tu vois — un instant — un filament se rétracter comme une question. Tu l'as peut-être confondue. Tu l'as peut-être mise en garde.",
+          setFlags: { langage_appris: '+1' },
+          next: 'chron_couv_ep2_choix_nourrir'
+        }
+      },
+      {
+        label: "Lui apprendre un nom de vivant de l'équipage",
+        outcome: {
+          log: "Tu prononces le nom d'un colon de ton équipage. Pas un nom de mort. Un nom de vivant. La masse l'absorbe. Quand tu rentres, ce colon a un cauchemar.",
+          setFlags: { langage_appris: '+2', memoire_volee: 'vivant' },
+          next: 'chron_couv_ep2_choix_nourrir'
+        }
+      },
+      {
+        label: "Lui apprendre le nom d'un mort de l'équipage",
+        outcome: {
+          log: "Tu prononces le nom d'un mort de ton équipage — quelqu'un qui n'est plus là pour s'en plaindre. Elle l'absorbe doucement. Tu sens qu'elle vient de gagner quelque chose dont elle se servira plus tard.",
+          setFlags: { langage_appris: '+2', memoire_volee: 'mort' },
+          next: 'chron_couv_ep2_choix_nourrir'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_couv_ep2_choix_nourrir',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 2 },
+    text: (flags) => {
+      const taille = flags.nourriture >= 2 ? "la masse est désormais plus grande qu'une frégate" : flags.nourriture >= 1 ? "la masse a perceptiblement grandi" : "la masse n'a pas grandi";
+      return "Elle a faim. Tu le sens dans la pulsation accélérée des filaments. Elle te demande sans mots. Et " + taille + ".\n\nUn choix s'impose. La nourrir, c'est l'éveiller davantage. Ne pas la nourrir, c'est la laisser dans le demi-sommeil — moins menaçante, mais peut-être aussi moins... amicale.";
+    },
+    choices: [
+      {
+        label: "La nourrir généreusement",
+        consume: { biomasse: 30 },
+        outcome: {
+          log: "Tu lui donnes 30 unités de biomasse. Les filaments se gorgent. La masse pulse en cadence rapide. Tu obtiens en retour : un mucus dont les propriétés régénératrices te seront utiles.",
+          loot: { biomasse: 15, datacubes: 15 },
+          item: 'serum_xeno',
+          setFlags: { nourriture: '+2' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "La nourrir un peu",
+        consume: { biomasse: 10 },
+        outcome: {
+          log: "Tu donnes un peu. Assez pour qu'elle se souvienne. Pas assez pour qu'elle grandisse trop.",
+          setFlags: { nourriture: '+1' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Refuser de la nourrir",
+        outcome: {
+          log: "Tu lui dis non, doucement. Elle accepte. Mais tu sens qu'elle attend autre chose, alors.",
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Lui offrir un colon comme nourriture",
+        req: { stat: { key: 'sangfroid', min: 9 } },
+        outcome: {
+          log: "Tu n'oses pas vraiment, mais tu y penses. Le simple fait d'y avoir pensé fait reculer la masse — comme si elle avait *senti* ton intention et l'avait rejetée. Tu remontes avec moins. Et avec un peu moins de toi.",
+          morale: -5,
+          setFlags: { langage_appris: '+1' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   COUVÉE DORMANTE — ÉPISODE 3 : LE FRÈRE
+  // ============================================================
+
+  {
+    id: 'chron_couv_ep3_descente_finale',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 3 },
+    text: (flags) => {
+      let intro = "Tu redescends une dernière fois. ";
+      
+      if (flags.nourriture >= 3) {
+        intro += "La masse est maintenant immense — elle remplit la cathédrale, elle déborde dans les couloirs. Quand tu entres, elle pulse plus vite. *Elle te reconnaît.*";
+      } else if (flags.nourriture >= 1) {
+        intro += "La masse n'a pas grandi mais elle est plus organisée. Les filaments sont plus précis dans leurs mouvements. Plus *intentionnels.*";
+      } else {
+        intro += "La masse a maigri. Elle a survécu — à peine. Tu sens une faim immense quand tu entres.";
+      }
+      
+      return intro + "\n\nQuelque chose se détache de la masse principale. Une silhouette humanoïde se forme à partir des filaments. Lentement, elle prend une forme reconnaissable — *une silhouette que tu connais.*\n\nElle parle, dans une voix qui te traverse comme un souvenir :\n\n**« Bonjour. »**";
+    },
+    choices: [
+      {
+        label: "Demander qui elle est",
+        outcome: {
+          log: "La silhouette répond avec la voix d'un mort de ton équipage : « Je suis ce que tu as nourri. Je suis ce que tu m'as appris. Je porte le nom d'un de tes morts — celui que tu m'as donné — parce que je n'en avais pas. »",
+          next: 'chron_couv_ep3_pacte'
+        }
+      },
+      {
+        label: "Lui dire que ce qu'elle est n'est pas réel",
+        req: { skill: { key: 'linguistique', min: 3 } },
+        outcome: {
+          log: "Tu lui dis : « Tu n'es pas mon frère mort. » Elle te répond : « Je sais. Mais je peux apprendre à l'être, si tu le veux. Ou apprendre à être autre chose. Je peux apprendre. C'est tout ce que je sais faire. »",
+          next: 'chron_couv_ep3_pacte'
+        }
+      },
+      {
+        label: "Lui demander de te laisser partir et de ne plus jamais revenir",
+        req: { stat: { key: 'sangfroid', min: 8 } },
+        outcome: {
+          log: "Elle penche la tête, comme une enfant attentive. « Tu me demandes de te laisser partir. Je peux. Mais alors, ne reviens pas. Sinon, je grandirai dans l'attente, et ce sera pire. » Elle se détache plus complètement. Elle accepte ton refus.",
+          loot: { biomasse: 20, datacubes: 25 },
+          endChronicle: 'fuite_marquee'
+        }
+      },
+      {
+        label: "Mettre le feu à tout, maintenant",
+        outcome: {
+          log: "Tu allumes une grenade thermique. La silhouette ne bouge pas. Avant que tu jettes, elle dit : « Je t'aimais déjà un peu. Ne fais pas ça. » Tu jettes. La masse hurle. La planète gronde. Tu remontes en courant. Ton équipage entend le hurlement à plusieurs kilomètres.",
+          loot: { biomasse: 60, datacubes: 40, metal: 20 },
+          item: 'serum_xeno',
+          morale: -5,
+          status: 'blessure_legere',
+          target: 'random',
+          endChronicle: 'destruction_par_feu'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_couv_ep3_pacte',
+    chronicleEpisode: { chronicle: 'couvee_dormante', episode: 3 },
+    text: (flags) => {
+      const eveil = flags.langage_appris >= 3
+        ? "Elle parle maintenant clairement. Pas comme une imitation. Comme une *personne*."
+        : "Elle parle encore en cherchant ses mots, comme un enfant.";
+      
+      return eveil + "\n\nLa silhouette s'assied. Elle pose un filament au sol — un geste qui ressemble à une main ouverte.\n\n**« Tu reviendras ou tu ne reviendras pas. Je peux vivre avec toi, ou loin de toi, ou en toi. Tu choisis. Je ne juge pas — je n'ai pas appris à juger. Pas encore. »**";
+    },
+    choices: [
+      {
+        label: "Accepter la symbiose : qu'elle vive en toi",
+        req: { flag: { key: 'langage_appris', min: 2 } },
+        outcome: {
+          log: "Tu acceptes. Un filament fin entre par ton avant-bras, sans douleur. Tu rentres avec une conscience partagée. Elle est là, en toi, douce, étrange, présente. Tu ne seras plus jamais seul. Tu ne sauras pas toujours si c'est un bien.",
+          loot: { biomasse: 30, datacubes: 50 },
+          blueprint: ['alien_b'],
+          item: 'serum_xeno',
+          endChronicle: 'symbiose_consciente'
+        }
+      },
+      {
+        label: "Proposer une coopération à distance",
+        req: { skill: { key: 'linguistique', min: 2 } },
+        outcome: {
+          log: "Tu lui proposes un pacte : tu reviendras de temps à autre, tu lui apprendras des choses, elle te donnera ce qu'elle peut. Sans symbiose. Elle accepte gravement. Vous vous séparez avec respect.",
+          loot: { biomasse: 25, datacubes: 35 },
+          item: 'serum_xeno',
+          endChronicle: 'cooperation_distante'
+        }
+      },
+      {
+        label: "L'éveiller totalement (lui donner tout ce que tu as)",
+        req: { flag: { key: 'nourriture', min: 3 } },
+        consume: { biomasse: 50 },
+        outcome: {
+          log: "Tu lui donnes tout. Elle s'élève — atteint la conscience pleine. Pendant trois minutes, elle te parle de tout : du temps profond de la planète, de la vie qui a précédé sa naissance, de ce qui pourrait venir. Puis elle te dit : « Pars. Et ne reviens jamais. Tu as fait ce que tu pouvais. Maintenant je vis. »",
+          loot: { biomasse: 30, datacubes: 80 },
+          blueprint: ['alien_b'],
+          item: 'serum_xeno',
+          endChronicle: 'eveil_total'
+        }
+      },
+      {
+        label: "Demander la libération d'Hadrien",
+        req: { flag: { key: 'hadrien_status', equals: 'mort' } },
+        outcome: {
+          log: "Tu demandes : « Et Hadrien ? » La silhouette change — elle prend brièvement le visage d'Hadrien, puis le quitte. « Il est en paix. Il vit en moi maintenant. Tu peux lui dire au revoir. » Tu lui dis au revoir.",
+          loot: { biomasse: 20, datacubes: 30 },
+          item: 'plaque_gravee',
+          endChronicle: 'liberation_hadrien'
+        }
+      },
+      {
+        label: "Refuser tout pacte et partir",
+        outcome: {
+          log: "Tu te lèves. Tu pars. Elle ne te retient pas, mais en remontant tu sens un poids sur ta nuque — une marque. Tu rêveras d'elle.",
+          loot: { biomasse: 10 },
+          morale: -2,
+          endChronicle: 'fuite_marquee'
+        }
+      }
+    ]
+  }
+
+];
