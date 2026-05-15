@@ -1,6 +1,10 @@
 // data-arcs-factions.js — déclarations ARCS et FACTION_TYPES
 // Extrait depuis app.js lors de la modularisation
 
+import { S, aliveCrew } from './state.js';
+import { BLUEPRINTS } from './catalog.js';
+import { isTechCompleted } from './app.js';
+
 export const ARCS = {
   // ===============================================================
   arc_effondrement: {

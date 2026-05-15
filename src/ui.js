@@ -3035,9 +3035,9 @@ function renderSoins() {
   </div>`;
 
   // Alerte triage si lits pleins ET au moins un membre nécessite admission
-  const needAdmission = S.crew.filter(m => m.statut === 'libre' && m.statuts.some(s => {
+  const needAdmission = S.crew.filter(m => m.statut === 'libre' && (m.statuts || []).some(s => {
     const def = STATUTS[s.key];
-    return def.severity >= 3 || def.untreated?.become === 'mort';
+    return def && (def.severity >= 3 || def.untreated?.become === 'mort');
   }));
   if (used >= beds && needAdmission.length > 0) {
     alert.innerHTML = `<div class="soins-alert">
@@ -3060,7 +3060,7 @@ function renderSoins() {
   const needAttention = S.crew.filter(m =>
     m.statut !== 'infirmerie' &&
     m.statut !== 'mort' &&
-    (m.statuts.length > 0 || m.sequels.length > 0)
+    ((m.statuts || []).length > 0 || (m.sequels || []).length > 0)
   );
   if (needAttention.length === 0) {
     attention.innerHTML = '<div class="empty">Personne ne requiert de soin actif.</div>';

@@ -593,7 +593,7 @@ export function laboratoryBonuses() {
 }
 
 // Avance les recherches en cours d'un tick
-function tickResearch() {
+export function tickResearch() {
   if (!S.research || S.research.length === 0) return;
   const lb = laboratoryBonuses();
   // Mode automatisé sans Chercheur : 30% de la vitesse normale
@@ -818,7 +818,7 @@ function finishFabrication(fId) {
 }
 
 // Avance les fabrications d'un tick
-function tickFabrication() {
+export function tickFabrication() {
   if (!S.fabrication || S.fabrication.length === 0) return;
   const bonuses = workshopBonuses();
   // Mode automatisé sans Artisan : 30% de la vitesse
@@ -1441,7 +1441,7 @@ export function startTraining(memberId, skill) {
   render();
 }
 
-function finishTraining(session) {
+export function finishTraining(session) {
   const member = S.crew.find(m => m.id === session.memberId);
   if (!member) {
     // Membre disparu (mort en parallèle ?), on ferme silencieusement
@@ -1728,7 +1728,7 @@ function startTreatment(memberId, statusIdx) {
   render();
 }
 
-function finishTreatment(treatment) {
+export function finishTreatment(treatment) {
   const member = S.crew.find(m => m.id === treatment.memberId);
   if (!member) return;
   const status = member.statuts[treatment.statusIdx];
@@ -1788,8 +1788,11 @@ function memberDies(member, cause = 'cause inconnue') {
 }
 
 // Fait évoluer les statuts d'un membre (appelé chaque tick)
-function progressMemberStatuts(member) {
+export function progressMemberStatuts(member) {
   if (member.statut === 'mort') return;
+  // Robustesse : si un colon a été créé sans statuts (legacy save), on les initialise
+  if (!Array.isArray(member.statuts)) member.statuts = [];
+  if (!Array.isArray(member.sequels)) member.sequels = [];
   // Révélation auto après délai (ex. mutation)
   for (const s of member.statuts) {
     if (!s.revealed && s.revealAt && S.meta.gameMin >= s.revealAt) {
@@ -2155,7 +2158,7 @@ export function maxHealthOf(member) {
 // - Soigné par un autre : +0.10/tick (lien fort qui se crée)
 // - Élève/Instructeur en formation : +0.05/tick
 // La désaffectation et les ruptures n'érodent pas naturellement (pour l'instant)
-function tickRelations() {
+export function tickRelations() {
   if (!S.crew || S.crew.length < 2) return;
   // Même bâtiment
   for (const modKey in MODULE_JOBS) {
@@ -2192,7 +2195,7 @@ function tickRelations() {
 }
 
 // Effets passifs des relations sur le moral (à chaque tick)
-function tickRelationMoraleEffects() {
+export function tickRelationMoraleEffects() {
   if (!S.crew) return;
   // Pour chaque expédition active, applique +/- moral selon affinités
   for (const exp of S.expeditions || []) {
@@ -2215,7 +2218,7 @@ function tickRelationMoraleEffects() {
 }
 
 // Vieillissement et mort naturelle
-function tickAging() {
+export function tickAging() {
   if (!S.crew) return;
   for (const m of S.crew) {
     if (m.statut === 'mort') continue;
@@ -2311,7 +2314,7 @@ function incidentProbability(modKey) {
 }
 
 // Tirage par tick : pour chaque bâtiment, tente un incident
-function tickIncidents(silent = false) {
+export function tickIncidents(silent = false) {
   // Si on est en mode silent (rattrapage offline), on saute les incidents qui demandent une décision
   if (S.meta.gameMin < S.nextIncidentMin) return;
 
@@ -2511,7 +2514,7 @@ function hookIncidentModal() {
 }
 
 // Compatibilité : ancien rollColonyIncident remplacé par tickIncidents
-function rollColonyIncident() {
+export function rollColonyIncident() {
   tickIncidents(false);
 }
 
@@ -2814,7 +2817,7 @@ function pickColonyEvent() {
   return eligible[Math.floor(Math.random() * eligible.length)][0];
 }
 
-function tickColonyEvents(silent = false) {
+export function tickColonyEvents(silent = false) {
   // Cooldown : 2-5 jours jeu entre événements
   if (S.meta.gameMin < (S.nextEventMin || 0)) return;
   S.nextEventMin = S.meta.gameMin + (2 + Math.random() * 3) * 24 * 60;
@@ -3041,7 +3044,7 @@ export function isStepComplete(arcId, stepId) {
 }
 
 // Tente de débloquer/avancer tous les arcs
-function tickArcs() {
+export function tickArcs() {
   for (const arcId in ARCS) {
     const arc = ARCS[arcId];
     const state = getArcState(arcId);
@@ -3192,7 +3195,7 @@ export function adjustReputation(factionId, delta) {
 }
 
 // Détermine si une faction proposera une caravane à ce tick
-function tickFactions() {
+export function tickFactions() {
   if (!S.factions) return;
   for (const id in S.factions) {
     const f = S.factions[id];
@@ -3289,7 +3292,7 @@ export function launchDiplomaticMission(factionId, memberId) {
 }
 
 // Tick : avance les missions diplomatiques
-function tickDiplomaticMissions() {
+export function tickDiplomaticMissions() {
   if (!S.diplomaticMissions || S.diplomaticMissions.length === 0) return;
   const finished = [];
   for (const mis of S.diplomaticMissions) {
@@ -3398,7 +3401,7 @@ export function startVesselBuild(typeKey) {
   render();
 }
 
-function finishVesselBuild() {
+export function finishVesselBuild() {
   const b = S.vesselBuild;
   if (!b) return;
   const def = VESSELS[b.type];
@@ -3532,7 +3535,7 @@ export function launchExpedition(args) {
 }
 
 // Avance toutes les expéditions d'un tick
-function tickExpeditions() {
+export function tickExpeditions() {
   if (S.expeditions.length === 0) return;
   const completed = [];
   for (const exp of S.expeditions) {
@@ -4314,62 +4317,157 @@ function catchUpOffline() {
 }
 
 function boot() {
-  setS(load());
-  const isFresh = !S;
-  if (isFresh) {
-    setS(freshState());
-    seedJournal();
-    save();
-  }
-  // Rattrapage offline (uniquement si on charge une save existante)
+  // Chaque étape critique est protégée par try/catch.
+  // L'objectif : que setInterval(tick) se lance TOUJOURS, même si une étape
+  // antérieure échoue. Sans ça, l'horloge se bloque définitivement.
+  
+  let isFresh = false;
   let catchupReport = null;
-  if (!isFresh) {
-    catchupReport = catchUpOffline();
+  
+  try {
+    setS(load());
+    isFresh = !S;
+    if (isFresh) {
+      setS(freshState());
+      seedJournal();
+      save();
+    }
+  } catch (err) {
+    console.error('[BOOT] Erreur load/init :', err);
+    // Si le load a planté (save corrompue par ex), repartir sur un fresh
+    try {
+      setS(freshState());
+      seedJournal();
+      save();
+      isFresh = true;
+    } catch (err2) {
+      console.error('[BOOT] Erreur sur fresh state :', err2);
+      alert("DRIFT : impossible d'initialiser le jeu.\n" + err2.message);
+      return; // sans state on ne peut rien faire
+    }
   }
-  // Tente l'auto-affectation initiale (utile pour les saves migrées depuis < 0.9)
-  autoAssignAllFreeMembers();
-  setupHandlers();
-  render();
-  if (catchupReport) showCatchupModal(catchupReport);
-  setInterval(tick, TICK_MS);
-
-  // Rattrapage à chaque retour au premier plan : les onglets en arrière-plan
-  // voient leur setInterval ralenti voire suspendu sur mobile.
-  // On simule silencieusement les minutes manquantes au revenir.
+  
+  if (!isFresh) {
+    try {
+      catchupReport = catchUpOffline();
+    } catch (err) {
+      console.error('[BOOT] Erreur catchUpOffline :', err);
+      // Pas grave, on continue sans rattrapage
+    }
+  }
+  
+  try {
+    autoAssignAllFreeMembers();
+  } catch (err) {
+    console.error('[BOOT] Erreur autoAssign :', err);
+  }
+  
+  try {
+    setupHandlers();
+  } catch (err) {
+    console.error('[BOOT] Erreur setupHandlers :', err);
+  }
+  
+  try {
+    render();
+  } catch (err) {
+    console.error('[BOOT] Erreur render initial :', err);
+  }
+  
+  if (catchupReport) {
+    try { showCatchupModal(catchupReport); }
+    catch (err) { console.error('[BOOT] Erreur catchup modal :', err); }
+  }
+  
+  // ============================================================
+  // DÉMARRAGE DU TICK — protégé pour ne jamais s'arrêter
+  // ============================================================
+  // Wrapper qui capture les exceptions du tick, sinon une seule erreur
+  // tue tout le système.
+  function safeTick() {
+    try {
+      tick();
+    } catch (err) {
+      console.error('[TICK] Erreur dans tick() :', err);
+      // On essaye au moins d'avancer le temps minimal et de sauvegarder
+      try {
+        if (S?.meta) {
+          S.meta.gameMin = (S.meta.gameMin || 0) + (MIN_PER_TICK || 1);
+          S.meta.lastTickRealMs = Date.now();
+        }
+      } catch (e) {}
+    }
+  }
+  // Lance le tick principal
+  let tickIntervalId = setInterval(safeTick, TICK_MS);
+  
+  // Watchdog : surveille que le tick tourne toujours.
+  // Si gameMin n'a pas bougé depuis 5 secondes alors que la PWA est visible,
+  // on relance le tick.
+  let lastWatchdogCheck = { time: Date.now(), gameMin: S?.meta?.gameMin || 0 };
+  setInterval(() => {
+    if (!S || !S.meta) return;
+    if (document.visibilityState !== 'visible') return;
+    
+    const now = Date.now();
+    const elapsed = now - lastWatchdogCheck.time;
+    const advanced = (S.meta.gameMin || 0) - lastWatchdogCheck.gameMin;
+    
+    // Si > 5 sec se sont écoulées et gameMin n'a pas bougé d'une seule minute,
+    // c'est que le tick est mort. On le relance.
+    if (elapsed > 5000 && advanced === 0) {
+      console.warn('[WATCHDOG] Tick gelé détecté — redémarrage');
+      try { clearInterval(tickIntervalId); } catch (e) {}
+      tickIntervalId = setInterval(safeTick, TICK_MS);
+      // Force aussi un render() pour rafraîchir l'UI
+      try { render(); } catch (e) {}
+    }
+    
+    lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
+  }, 5000);
+  
+  // Rattrapage à chaque retour au premier plan
   document.addEventListener('visibilitychange', () => {
     if (!S) return;
     if (document.visibilityState === 'hidden') {
-      // Sauvegarde immédiate avec horodatage à jour
       S.meta.lastTickRealMs = Date.now();
-      save();
+      try { save(); } catch (e) {}
       return;
     }
     if (document.visibilityState === 'visible') {
       const now = Date.now();
       const elapsedMs = now - (S.meta.lastTickRealMs || now);
-      // Au-dessus de 30s d'écart, on rattrape silencieusement (on a sauté des ticks)
+      // Au-delà de 30s d'écart, on rattrape silencieusement
       if (elapsedMs > 30000) {
         const ticksToSim = Math.min(
           Math.floor(elapsedMs / TICK_MS),
-          OFFLINE_MAX_HOURS * 3600  // safety cap
+          OFFLINE_MAX_HOURS * 3600
         );
-        for (let i = 0; i < ticksToSim; i++) {
-          tickOnce({ silent: true });
+        try {
+          for (let i = 0; i < ticksToSim; i++) {
+            tickOnce({ silent: true });
+          }
+          S.meta.lastTickRealMs = now;
+          save();
+          render();
+        } catch (err) {
+          console.error('[VISIBILITY] Erreur rattrapage :', err);
         }
-        S.meta.lastTickRealMs = now;
-        save();
-        render();
       }
+      // S'assurer aussi que le tick principal tourne après reprise
+      lastWatchdogCheck = { time: Date.now(), gameMin: S.meta.gameMin || 0 };
     }
   });
-
-  // Bonus : sauvegarde aussi avant fermeture (pagehide est plus fiable que beforeunload sur mobile)
+  
+  // Sauvegarde aussi avant fermeture
   window.addEventListener('pagehide', () => {
     if (S) {
       S.meta.lastTickRealMs = Date.now();
-      save();
+      try { save(); } catch (e) {}
     }
   });
+  
+  console.log('[BOOT] DRIFT démarré, version', VERSION);
 }
 
 // Modale "bon retour" qui résume ce qui s'est passé pendant l'absence
