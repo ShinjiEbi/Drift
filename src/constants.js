@@ -1,7 +1,7 @@
 // constants.js — constantes globales (versions, multiplicateurs, libellés)
 // Extrait depuis app.js lors de la modularisation
 
-export const VERSION = '0.24.1';
+export const VERSION = '0.24.2';
 
 export const SAVE_KEY = 'drift_save_v1';
 

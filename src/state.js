@@ -6,8 +6,8 @@
 import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
 import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS } from './catalog.js';
 import { rngFor, rPick, rWeighted, rInt, fmtMin } from './util.js';
-import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR } from './app.js';
-import { render, toast, log, seedJournal } from './ui.js';
+import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, autoAssignAllFreeMembers, autoAssignMember } from './app.js';
+import { render, toast, log, seedJournal, showModal } from './ui.js';
 
 // ============================================================
 
