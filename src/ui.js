@@ -14,6 +14,13 @@ import {
 } from './catalog.js';
 import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import {
+  NOTIF_TYPES, NOTIF_SEVERITIES,
+  getNotifs, getNotifPermission, requestNotifPermission,
+  isPushEnabled, setPushEnabled,
+  markNotifRead, markAllNotifsRead, dismissNotif, dismissAllNotifs,
+  unreadNotifsCount
+} from './notifications.js';
+import {
   S, crewCap, capOf, computeRates, canBuild, startBuild, crewUsage, aliveCrew,
   genCandidate, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind,
   trainingTargetLevel, formationBonuses, findInstructor,
@@ -69,6 +76,8 @@ export function render() {
   renderArcs();
   renderDiplomacy();
   renderJournal();
+  // 0.26 : maj cloche notifs
+  renderNotifBell();
 }
 
 function renderHeader() {
@@ -204,6 +213,248 @@ function showAlertsModal(alerts) {
   });
 }
 
+// ============================================================
+//   0.26 — Notifications : cloche + panneau coulissant
+// ============================================================
+
+// État local : filtre actif dans le panneau
+let _notifFilter = 'all';
+
+// Repaint la cloche (badge + état)
+export function renderNotifBell() {
+  const bell = $('#notifBell');
+  const badge = $('#bellBadge');
+  if (!bell || !badge) return;
+  const count = unreadNotifsCount();
+  if (count > 0) {
+    bell.classList.add('has-unread');
+    badge.hidden = false;
+    badge.textContent = count > 99 ? '99+' : String(count);
+  } else {
+    bell.classList.remove('has-unread');
+    badge.hidden = true;
+  }
+}
+
+// Formate un timestamp gameMin en "J47 14:23"
+function fmtGameTime(gameMin) {
+  const day = Math.floor(gameMin / (24*60)) + 1;
+  const h = Math.floor((gameMin % (24*60)) / 60);
+  const m = Math.floor(gameMin % 60);
+  return `J${day} ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+// Repaint la liste des notifs dans le panneau (si ouvert)
+function renderNotifList() {
+  const list = $('#notifList');
+  if (!list) return;
+  const notifs = _notifFilter === 'all' ? getNotifs() : getNotifs(_notifFilter);
+  if (notifs.length === 0) {
+    list.innerHTML = '<div class="np-empty">Aucune notification.</div>';
+    return;
+  }
+  list.innerHTML = notifs.map(n => {
+    const typeDef = NOTIF_TYPES[n.type] || { label: n.type, icon: '•' };
+    const unread = !n.read ? 'unread' : '';
+    const sev = `severity-${n.severity}`;
+    const meta = `${typeDef.label} · ${fmtGameTime(n.gameMin)}`;
+    const body = n.body ? `<div class="np-body">${escapeHTML(n.body)}</div>` : '';
+    const actionBtn = n.action
+      ? `<button class="np-btn np-btn-primary" data-notif-action="${n.id}">${escapeHTML(n.action.label || 'Voir')}</button>`
+      : '';
+    return `<div class="np-item ${unread} ${sev}" data-notif-id="${n.id}">
+      <span class="np-icon">${typeDef.icon}</span>
+      <div class="np-content">
+        <div class="np-meta">${meta}</div>
+        <div class="np-title">${escapeHTML(n.title)}</div>
+        ${body}
+        <div class="np-buttons">
+          ${actionBtn}
+          ${!n.read ? `<button class="np-btn" data-notif-read="${n.id}">Marquer lu</button>` : ''}
+          <button class="np-btn dismiss" data-notif-dismiss="${n.id}">Effacer</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Échappe le HTML basique (titres/bodies de notif peuvent contenir des caractères spéciaux)
+function escapeHTML(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Ouvre le panneau et marque comme vus (mais pas lus — l'utilisateur doit cliquer)
+function openNotifPanel() {
+  const panel = $('#notifPanel');
+  const overlay = $('#notifPanelOverlay');
+  if (!panel || !overlay) return;
+  panel.hidden = false;
+  overlay.hidden = false;
+  renderNotifList();
+  // Mettre à jour l'état du bouton push toggle si présent
+  renderPushToggle();
+}
+
+// Ferme le panneau
+function closeNotifPanel() {
+  const panel = $('#notifPanel');
+  const overlay = $('#notifPanelOverlay');
+  if (!panel || !overlay) return;
+  panel.hidden = true;
+  overlay.hidden = true;
+}
+
+// Affiche/masque le bouton "Activer les push" selon le support et l'état
+function renderPushToggle() {
+  const btn = $('#notifPushToggle');
+  if (!btn) return;
+  const perm = getNotifPermission();
+  if (perm === 'unsupported') {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  if (perm === 'granted' && isPushEnabled()) {
+    btn.textContent = 'Push activé ✓';
+    btn.classList.add('active');
+  } else if (perm === 'granted') {
+    btn.textContent = 'Activer les push';
+    btn.classList.remove('active');
+  } else if (perm === 'denied') {
+    btn.textContent = 'Push bloqué (paramètres)';
+    btn.disabled = true;
+    btn.classList.remove('active');
+  } else {
+    btn.textContent = 'Activer les push';
+    btn.classList.remove('active');
+  }
+}
+
+// Action principale d'une notif : ouvre l'onglet cible
+function handleNotifAction(notifId) {
+  const n = getNotifs().find(x => x.id === notifId);
+  if (!n || !n.action) return;
+  // Marque comme lu et ferme le panneau
+  markNotifRead(notifId);
+  closeNotifPanel();
+  // Navigation : action.target peut être un nom d'onglet
+  const target = n.action.target;
+  if (typeof target === 'string') {
+    // Simule un clic sur l'onglet
+    const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target}"]`);
+    if (tabBtn) tabBtn.click();
+  } else if (target && typeof target === 'object' && target.tab) {
+    const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target.tab}"]`);
+    if (tabBtn) tabBtn.click();
+  }
+  // Refresh la cloche (count diminué)
+  renderNotifBell();
+}
+
+// Installe les handlers une seule fois (au boot)
+let _notifHandlersInstalled = false;
+export function setupNotifHandlers() {
+  if (_notifHandlersInstalled) return;
+  _notifHandlersInstalled = true;
+
+  const bell = $('#notifBell');
+  const closeBtn = $('#notifPanelClose');
+  const overlay = $('#notifPanelOverlay');
+  const filters = $('#notifFilters');
+  const markAll = $('#notifMarkAllRead');
+  const clearAll = $('#notifClearAll');
+  const pushToggle = $('#notifPushToggle');
+  const list = $('#notifList');
+
+  if (bell) bell.addEventListener('click', () => {
+    openNotifPanel();
+  });
+  if (closeBtn) closeBtn.addEventListener('click', closeNotifPanel);
+  if (overlay) overlay.addEventListener('click', closeNotifPanel);
+
+  // Filtres
+  if (filters) filters.addEventListener('click', (e) => {
+    const btn = e.target.closest('.np-filter');
+    if (!btn) return;
+    _notifFilter = btn.dataset.filter || 'all';
+    // Mise à jour visuelle
+    filters.querySelectorAll('.np-filter').forEach(b => b.classList.toggle('active', b === btn));
+    renderNotifList();
+  });
+
+  // Tout marquer lu
+  if (markAll) markAll.addEventListener('click', () => {
+    markAllNotifsRead();
+    renderNotifBell();
+    renderNotifList();
+  });
+
+  // Tout effacer
+  if (clearAll) clearAll.addEventListener('click', () => {
+    if (!confirm('Effacer toutes les notifications (sauf critiques non lues) ?')) return;
+    dismissAllNotifs();
+    renderNotifBell();
+    renderNotifList();
+  });
+
+  // Push toggle
+  if (pushToggle) pushToggle.addEventListener('click', async () => {
+    const perm = getNotifPermission();
+    if (perm === 'denied' || perm === 'unsupported') return;
+    if (perm === 'default') {
+      const result = await requestNotifPermission();
+      if (result !== 'granted') {
+        toast('Permission refusée pour les notifications système');
+        renderPushToggle();
+        return;
+      }
+    }
+    // Toggle l'état
+    const newState = !isPushEnabled();
+    setPushEnabled(newState);
+    toast(newState ? 'Notifications push activées' : 'Notifications push désactivées');
+    renderPushToggle();
+  });
+
+  // Délégation sur la liste : clics sur boutons d'item
+  if (list) list.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t) return;
+    if (t.dataset.notifAction) {
+      handleNotifAction(t.dataset.notifAction);
+      return;
+    }
+    if (t.dataset.notifRead) {
+      markNotifRead(t.dataset.notifRead);
+      renderNotifBell();
+      renderNotifList();
+      return;
+    }
+    if (t.dataset.notifDismiss) {
+      dismissNotif(t.dataset.notifDismiss);
+      renderNotifBell();
+      renderNotifList();
+      return;
+    }
+  });
+
+  // Hook global appelé par pushNotif() pour repeindre immédiatement
+  if (typeof window !== 'undefined') {
+    window.__notifsRefresh = () => {
+      renderNotifBell();
+      const panel = $('#notifPanel');
+      if (panel && !panel.hidden) {
+        renderNotifList();
+      }
+    };
+  }
+}
+
 function renderResources() {
   const grid = $('#resourcesGrid');
   const rate = computeRates();
@@ -259,13 +510,20 @@ function renderModules() {
     const prereqOk = Object.keys(prereq).every(k => (S.modules[k]?.level || 0) >= prereq[k]);
     const lockedByPrereq = !prereqOk && cur === 0;
 
+    // 0.26.1 : verrou par tech (modules tier 2)
+    const lockedByTech = def.requireTech && !S.techCompleted?.[def.requireTech] && cur === 0;
+    const lockedByTechNom = lockedByTech ? (TECH_TREE[def.requireTech]?.nom || def.requireTech) : null;
+
     const effects = cur > 0 ? def.effect(cur) : (def.effect ? def.effect(1) + ' (au niv 1)' : '');
 
     let costHTML = '';
-    if (showCost && !lockedByPrereq) {
+    if (showCost && !lockedByPrereq && !lockedByTech) {
       costHTML = '<div class="cost">' + Object.keys(cost).map(k => {
-        const ko = S.res[k] < cost[k];
-        return `<span class="${ko ? 'ko' : ''}">${RES_LABELS[k]} ${fmt(cost[k])}</span>`;
+        // 0.26.1 : datacubes_alien lit S.alienDatacubes
+        const have = k === 'datacubes_alien' ? (S.alienDatacubes || 0) : (S.res[k] || 0);
+        const ko = have < cost[k];
+        const label = k === 'datacubes_alien' ? 'Datacubes alien' : RES_LABELS[k];
+        return `<span class="${ko ? 'ko' : ''}">${label} ${fmt(cost[k])}</span>`;
       }).join('') + ` <span style="color:var(--text-mute)">· ${fmtMin(buildTime(id, next))}</span></div>`;
     }
 
@@ -274,6 +532,8 @@ function renderModules() {
       actionHTML = `<button class="build" disabled>Chantier en cours…</button>`;
     } else if (isMax) {
       actionHTML = `<button class="build" disabled>Niveau maximal</button>`;
+    } else if (lockedByTech) {
+      actionHTML = `<button class="build" disabled>🔒 Requiert : ${lockedByTechNom}</button>`;
     } else if (lockedByPrereq) {
       const txt = Object.keys(prereq).map(k => `${MODULES[k].nom} niv ${prereq[k]}`).join(', ');
       actionHTML = `<button class="build" disabled>Requiert : ${txt}</button>`;
@@ -283,9 +543,13 @@ function renderModules() {
       </button>`;
     }
 
-    return `<div class="module ${lockedByPrereq ? 'locked' : ''}" data-id="${id}">
+    // 0.26.1 : badge tier 2 dans le titre
+    const tierBadge = def.tier === 2 ? '<span class="tier-badge">TIER 2</span>' : '';
+    const lockedClass = (lockedByPrereq || lockedByTech) ? 'locked' : '';
+
+    return `<div class="module ${lockedClass}" data-id="${id}">
       <div class="title-row">
-        <div class="name">${def.nom}</div>
+        <div class="name">${def.nom}${tierBadge}</div>
         <div class="level">${cur === 0 ? '— NON CONSTRUIT' : `NIVEAU ${cur}${isMax ? ' (MAX)' : ''}`}</div>
       </div>
       <div class="desc">${def.desc}</div>
@@ -298,6 +562,121 @@ function renderModules() {
   list.querySelectorAll('button.build[data-id]').forEach(btn => {
     btn.addEventListener('click', () => startBuild(btn.dataset.id));
   });
+
+  // 0.26.1 : bandeau synthétiseur si module construit
+  renderSynthesisBanner();
+}
+
+// ============================================================
+//   0.26.1 — Synthétiseur quantique (module tier 2)
+// ============================================================
+
+// Définition des conversions disponibles (niveau 1 = 3 conversions, niveau 2 = 6)
+// Chaque conversion coûte de l'énergie en plus des ressources d'entrée
+const SYNTHESIS_RECIPES = [
+  // Niveau 1
+  { lvl: 1, id: 'metal_to_cristal',    inputs: { metal: 20 },     outputs: { cristal: 10 },   energie: 5,  nom: 'Métal → Cristal' },
+  { lvl: 1, id: 'cristal_to_metal',    inputs: { cristal: 20 },   outputs: { metal: 30 },     energie: 5,  nom: 'Cristal → Métal' },
+  { lvl: 1, id: 'biomasse_to_metal',   inputs: { biomasse: 15 },  outputs: { metal: 25 },     energie: 8,  nom: 'Biomasse → Métal' },
+  // Niveau 2
+  { lvl: 2, id: 'biomasse_to_datacubes', inputs: { biomasse: 25 }, outputs: { datacubes: 5 },  energie: 12, nom: 'Biomasse → Datacubes' },
+  { lvl: 2, id: 'datacubes_to_cristal',  inputs: { datacubes: 5 }, outputs: { cristal: 60 },   energie: 10, nom: 'Datacubes → Cristal' },
+  { lvl: 2, id: 'cristal_to_biomasse',   inputs: { cristal: 20 }, outputs: { biomasse: 25 },  energie: 10, nom: 'Cristal → Biomasse' },
+];
+
+function renderSynthesisBanner() {
+  const banner = $('#synthesisBanner');
+  if (!banner) return;
+  const m = S.modules?.synthetiseur_quantique;
+  if (!m || m.level === 0) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  const lvl = m.level;
+  const available = SYNTHESIS_RECIPES.filter(r => r.lvl <= lvl).length;
+  banner.querySelector('.sb-sub').textContent = `${available} conversion(s) disponible(s) au niveau ${lvl}.`;
+  const btn = $('#openSynthesis');
+  if (btn && !btn._wired) {
+    btn._wired = true;
+    btn.addEventListener('click', openSynthesisModal);
+  }
+}
+
+function openSynthesisModal() {
+  const lvl = S.modules?.synthetiseur_quantique?.level || 0;
+  if (lvl === 0) return;
+  const recipes = SYNTHESIS_RECIPES.filter(r => r.lvl <= lvl);
+  const m = $('#modal');
+  const bg = $('#modalBg');
+  if (!m || !bg) return;
+  const items = recipes.map(r => {
+    // Disponibilité
+    const inputOk = Object.keys(r.inputs).every(k => (S.res[k] || 0) >= r.inputs[k]);
+    const energyOk = (S.res.energie || 0) >= r.energie;
+    const canDo = inputOk && energyOk;
+    const inputStr = Object.entries(r.inputs).map(([k, v]) => `${v} ${RES_LABELS[k]}`).join(' + ');
+    const outputStr = Object.entries(r.outputs).map(([k, v]) => `${v} ${RES_LABELS[k]}`).join(' + ');
+    return `<div class="syn-recipe ${canDo ? '' : 'syn-disabled'}">
+      <div class="syn-recipe-head">
+        <span class="syn-nom">${r.nom}</span>
+        <button class="syn-do" data-recipe="${r.id}" ${canDo ? '' : 'disabled'}>Convertir</button>
+      </div>
+      <div class="syn-flow">
+        <span class="syn-inputs">${inputStr}</span>
+        <span class="syn-arrow">→</span>
+        <span class="syn-outputs">${outputStr}</span>
+        <span class="syn-energy">−${r.energie} ${RES_LABELS.energie}</span>
+      </div>
+    </div>`;
+  }).join('');
+  m.classList.add('synthesis-modal');
+  m.innerHTML = `
+    <div class="incident-eyebrow">Synthétiseur quantique · niveau ${lvl}</div>
+    <h3 class="incident-title">Réarrangement de matière</h3>
+    <div class="syn-info">Chaque conversion réorganise les atomes au prix de beaucoup d'énergie. Choisis avec soin.</div>
+    <div class="syn-recipes">${items}</div>
+    <div class="btn-row">
+      <button id="synClose" class="primary">Fermer</button>
+    </div>
+  `;
+  bg.classList.add('show');
+  // Handlers
+  m.querySelectorAll('.syn-do[data-recipe]').forEach(b => {
+    b.addEventListener('click', () => {
+      runSynthesisRecipe(b.dataset.recipe);
+    });
+  });
+  $('#synClose')?.addEventListener('click', () => {
+    bg.classList.remove('show');
+    m.classList.remove('synthesis-modal');
+  });
+}
+
+function runSynthesisRecipe(recipeId) {
+  const r = SYNTHESIS_RECIPES.find(x => x.id === recipeId);
+  if (!r) return;
+  const lvl = S.modules?.synthetiseur_quantique?.level || 0;
+  if (r.lvl > lvl) { toast('Niveau de synthétiseur insuffisant'); return; }
+  // Vérifie inputs
+  for (const k in r.inputs) {
+    if ((S.res[k] || 0) < r.inputs[k]) { toast(`Pas assez de ${RES_LABELS[k]}`); return; }
+  }
+  if ((S.res.energie || 0) < r.energie) { toast(`Pas assez d'énergie`); return; }
+  // Consomme
+  for (const k in r.inputs) S.res[k] -= r.inputs[k];
+  S.res.energie -= r.energie;
+  // Produit (cap)
+  for (const k in r.outputs) {
+    S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + r.outputs[k]);
+  }
+  const inputStr = Object.entries(r.inputs).map(([k, v]) => `${v} ${RES_LABELS[k]}`).join('+');
+  const outputStr = Object.entries(r.outputs).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(' ');
+  log('success', `Synthèse : ${inputStr} → ${outputStr}.`);
+  toast('Conversion effectuée');
+  render();
+  // Rouvre la modale pour permettre une nouvelle conversion
+  openSynthesisModal();
 }
 
 // ============================================================

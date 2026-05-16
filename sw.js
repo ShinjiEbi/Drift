@@ -2,7 +2,7 @@
 // Stratégie : cache-first pour les assets statiques, network-first pour le reste.
 // La version doit être bumpée à chaque release pour invalider le cache.
 
-const VERSION = 'drift-v0.25.0';
+const VERSION = 'drift-v0.26.1';
 const CACHE_NAME = VERSION + '-cache';
 
 // Liste des assets à mettre en cache au démarrage
@@ -20,6 +20,7 @@ const PRECACHE_URLS = [
   './src/data-arcs-factions.js',
   './src/constants.js',
   './src/util.js',
+  './src/notifications.js',
   './icons/icon-48.png',
   './icons/icon-72.png',
   './icons/icon-96.png',
@@ -106,4 +107,37 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
+});
+
+// 0.26 — Quand l'utilisateur clique sur une notification système,
+// on focus la fenêtre existante (ou on l'ouvre) et on navigue vers la cible
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = event.notification.data?.target;
+  // Si target est string c'est un nom d'onglet ; sinon on ouvre juste l'app
+  event.waitUntil((async () => {
+    const allClients = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true
+    });
+    // Cherche une fenêtre DRIFT déjà ouverte
+    for (const client of allClients) {
+      if (client.url.includes(self.location.origin)) {
+        await client.focus();
+        // Envoie un message au client pour qu'il navigue
+        if (target) {
+          client.postMessage({ type: 'NOTIF_NAVIGATE', target });
+        }
+        return;
+      }
+    }
+    // Sinon ouvre une nouvelle fenêtre
+    const urlSuffix = target ? `?tab=${encodeURIComponent(target)}` : '';
+    await self.clients.openWindow('./index.html' + urlSuffix);
+  })());
+});
+
+// Fermeture explicite — on garde ça léger
+self.addEventListener('notificationclose', (event) => {
+  // Optionnel : log analytics
 });
