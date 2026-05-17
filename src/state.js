@@ -4,10 +4,11 @@
 // Les ré-assignations complètes (S = ...) passent par setS().
 
 import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
-import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS } from './catalog.js';
+import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE } from './catalog.js';
 import { rngFor, rPick, rWeighted, rInt, fmtMin } from './util.js';
 import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, autoAssignAllFreeMembers, autoAssignMember } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
+import { notif, purgeOldNotifs } from './notifications.js';
 
 // ============================================================
 
@@ -65,6 +66,8 @@ export function freshState() {
     // 0.21 — diplomatie
     factions: {},             // { factionId: { id, type, name, reputation, ... } }
     diplomaticMissions: [],   // [{ id, factionId, memberId, startedAt, duration }]
+    // 0.26 — notifications
+    notifications: [],
     // 0.9.0 — affectations aux postes : map "modKey:slotIdx" → memberId
     assignments: {},
     autoAssign: true,       // auto-affecte les nouveaux colons aux postes éligibles
@@ -123,7 +126,19 @@ export function computeRates() {
 // Capacité d'un type de ressource avec bonus de tech
 export function capOf(k) {
   const tech = techEffectsAccumulated();
-  return Math.floor((CAP[k] || 0) * (tech.capacityMult[k] || 1));
+  const base = (CAP[k] || 0) * (tech.capacityMult[k] || 1);
+  
+  // 0.25 : bonus capacité depuis modules avec capBonus (silo cryogénique, mémoire cristalline)
+  let modBonus = 0;
+  for (const id of Object.keys(S.modules || {})) {
+    const def = MODULES[id];
+    const m = S.modules[id];
+    if (def?.capBonus && m?.level > 0) {
+      const bonus = def.capBonus(m.level);
+      if (bonus[k]) modBonus += bonus[k];
+    }
+  }
+  return Math.floor(base + modBonus);
 }
 
 // Helper : durée réelle d'un chantier en minutes-jeu (avec multiplicateur)
@@ -148,6 +163,15 @@ export function canBuild(id) {
   const maxLvl = def.maxLevel + (techEffectsAccumulated().moduleMaxLevelDelta[id] || 0);
   if (next > maxLvl) return { ok:false, why:`Niveau max atteint` };
   if (S.build) return { ok:false, why:'Chantier déjà en cours' };
+  
+  // 0.25 : module tier 2 — requiert une tech débloqueuse
+  if (def.requireTech) {
+    if (!S.techCompleted || !S.techCompleted[def.requireTech]) {
+      const techNom = TECH_TREE[def.requireTech]?.nom || def.requireTech;
+      return { ok:false, why:`Requiert la tech ${techNom}` };
+    }
+  }
+  
   const req = def.prereq(next);
   for (const k in req) {
     if ((S.modules[k]?.level || 0) < req[k]) {
@@ -156,6 +180,13 @@ export function canBuild(id) {
   }
   const cost = def.cost(next);
   for (const k in cost) {
+    // 0.25 : support des datacubes_alien (ressource séparée S.alienDatacubes)
+    if (k === 'datacubes_alien') {
+      if ((S.alienDatacubes || 0) < cost[k]) {
+        return { ok:false, why:`Ressources insuffisantes (datacubes alien)` };
+      }
+      continue;
+    }
     if (S.res[k] < cost[k]) {
       return { ok:false, why:`Ressources insuffisantes (${RES_LABELS[k]})` };
     }
@@ -167,7 +198,14 @@ export function canBuild(id) {
 export function startBuild(id) {
   const r = canBuild(id);
   if (!r.ok) { toast(r.why); return; }
-  for (const k in r.cost) S.res[k] -= r.cost[k];
+  for (const k in r.cost) {
+    // 0.25 : datacubes_alien dans S.alienDatacubes
+    if (k === 'datacubes_alien') {
+      S.alienDatacubes = (S.alienDatacubes || 0) - r.cost[k];
+    } else {
+      S.res[k] -= r.cost[k];
+    }
+  }
   S.build = {
     id,
     targetLevel: r.nextLevel,
@@ -194,6 +232,8 @@ export function finishBuild() {
   } else {
     log('success', `<em>${def.nom}</em> opérationnel au niveau ${b.targetLevel}.`);
   }
+  // 0.26 : notification dédiée
+  notif.buildDone(def.nom, b.targetLevel);
   S.build = null;
   // Nouveau bâtiment / niveau supérieur = nouveaux postes ouverts → tente l'auto-affectation
   autoAssignAllFreeMembers();
@@ -590,13 +630,29 @@ export function tickOnce(opts = {}) {
   // Production / consommation
   const rate = computeRates();
   let energyShortfall = false;
+  if (!S.flags.capWarned) S.flags.capWarned = {};  // 0.26.1 — dédoublonne les notifs cap saturé
   for (const k of RESOURCES) {
     let next = S.res[k] + rate[k];
     if (next < 0) {
       if (k === 'energie') energyShortfall = true;
       next = 0;
     }
-    if (next > capOf(k)) next = capOf(k);
+    if (next > capOf(k)) {
+      // 0.26.1 : notification quand on commence à perdre de la prod par saturation
+      // (uniquement quand rate > 0 et qu'on n'a pas déjà notifié récemment)
+      if (rate[k] > 0 && !silent) {
+        const lastWarnedAt = S.flags.capWarned[k] || -99999;
+        // Cooldown : pas de nouvelle alerte tant que le stock n'est pas redescendu sous 90% pendant 12h jeu
+        if (S.meta.gameMin - lastWarnedAt > 720) {
+          S.flags.capWarned[k] = S.meta.gameMin;
+          notif.capReached(RES_LABELS[k]);
+        }
+      }
+      next = capOf(k);
+    } else if (next < capOf(k) * 0.9) {
+      // Stock redescendu : on autorise une nouvelle notif si ça resature
+      delete S.flags.capWarned[k];
+    }
     S.res[k] = next;
   }
   if (energyShortfall && !silent && tickCount % 30 === 0) {
@@ -690,6 +746,7 @@ export function tickOnce(opts = {}) {
       S.candidates.push(c);
       if (!silent) {
         log('neutral', `Signal reçu : <em>${c.name}</em> (${c.origin.label}) propose ses services.`);
+        notif.candidate(c.name, c.origin.label);
       }
       const variance = intervalMin * 0.3 * (Math.random() * 2 - 1);
       S.nextRecruitMin = S.meta.gameMin + intervalMin + variance;
@@ -697,6 +754,11 @@ export function tickOnce(opts = {}) {
     if (S.nextRecruitMin < S.meta.gameMin && S.candidates.length >= maxQueue) {
       S.nextRecruitMin = S.meta.gameMin + intervalMin;
     }
+  }
+
+  // 0.26 : purge auto des notifs anciennes (toutes les 60 ticks = chaque heure jeu)
+  if (tickCount % 60 === 0) {
+    try { purgeOldNotifs(); } catch (e) {}
   }
 
   tickCount++;
@@ -744,6 +806,8 @@ export function acceptCandidate(id) {
   };
   S.crew.push(member);
   log('success', `<em>${member.name}</em> rejoint l'avant-poste. Origine : ${member.origin.label}.`);
+  // 0.26 : notification dédiée
+  notif.recruited(member.name);
   // Auto-affectation au meilleur poste libre éligible
   autoAssignMember(member.id);
   render();
@@ -924,6 +988,8 @@ export function load() {
     // n'avaient pas de poste assigné, ils en obtiendront un au retour via returnToBase.
     // 0.24 : chroniques planétaires — pas de migration nécessaire,
     // body.chronicle est ajouté à la première visite par tryAssignChronicle()
+    // 0.26 : système de notifications
+    if (!Array.isArray(data.notifications)) data.notifications = [];
     data.meta.version = VERSION;
     return data;
   } catch (e) { return null; }

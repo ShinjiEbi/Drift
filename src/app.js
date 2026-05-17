@@ -7,7 +7,8 @@ import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import { CHRONICLES, CHRONICLE_SCENES } from './chronicles.js';
 import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$ } from './util.js';
 import { S, setS, freshState, computeRates, capOf, buildTime, crewCap, canBuild, startBuild, finishBuild, GRAVITES, VIES, BODY_TYPES, SYS_PREFIXES, GREEK, CONSTELL, genSystemName, POETIC_NAMES, genBodyName, genBody, genSystem, genGalaxy, describeBody, bodyThreatLevel, bodyRewardLevel, FIRST_NAMES, LAST_NAMES, ORIGINS, rollPick, rollWeighted, gaussInt, genName, genStats, genSkills, genTraits, genCandidate, crewUsage, aliveCrew, tickCount, tickOnce, tick, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind, trainingTargetLevel, findInstructor, formationBonuses, save, load, exportSave, importSave, resetGame } from './state.js';
-import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal } from './ui.js';
+import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers } from './ui.js';
+import { notif } from './notifications.js';
 'use strict';
 
 // ============================================================
@@ -400,6 +401,8 @@ export function discoverBlueprint(bpId, source = 'expédition') {
   if (isNew) {
     S.discoveries[bpId] = { firstFoundAt: S.meta.gameMin, source };
     log('success', `Nouveau schéma découvert : <em>${BLUEPRINTS[bpId].nom}</em>.`);
+    // 0.26.1 : notification dédiée
+    notif.blueprint(BLUEPRINTS[bpId].nom);
   }
   return isNew;
 }
@@ -569,6 +572,8 @@ function finishResearch(researchId) {
   S.techCompleted[r.techId] = { at: S.meta.gameMin };
   const tech = TECH_TREE[r.techId];
   log('success', `Recherche complétée : <em>${tech?.nom || '?'}</em>.`);
+  // 0.26 : notification dédiée
+  notif.researchDone(tech?.nom || r.techId);
 }
 
 // Bonus du staff laboratoire (Chercheur senior, Bio-spécialiste)
@@ -598,10 +603,21 @@ export function tickResearch() {
   const lb = laboratoryBonuses();
   // Mode automatisé sans Chercheur : 30% de la vitesse normale
   const autoMult = lb.activeProd ? 1.0 : JOB_BASE_FRACTION;
+  
+  // 0.25 : bonus de vitesse depuis modules avec researchSpeedBonus (mémoire cristalline)
+  let modBonus = 1.0;
+  for (const id of Object.keys(S.modules || {})) {
+    const def = MODULES[id];
+    const m = S.modules[id];
+    if (def?.researchSpeedBonus && m?.level > 0) {
+      modBonus += def.researchSpeedBonus(m.level);
+    }
+  }
+  
   const finished = [];
   for (const r of S.research) {
     const tech = TECH_TREE[r.techId];
-    let progress = MIN_PER_TICK * autoMult / lb.speedMult;
+    let progress = MIN_PER_TICK * autoMult * modBonus / lb.speedMult;
     if (tech?.branch === 'bio') progress *= lb.bioBonus;
     r.doneMin += progress;
     if (r.doneMin >= r.totalMin) finished.push(r);
@@ -949,6 +965,8 @@ function tryAssignChronicle(body) {
         currentSceneId: null  // scène en cours dans l'épisode courant
       };
       log('success', `<em>${c.nom}</em> — Une chronique se révèle sur ${body.name}.`);
+      // 0.26 : notification dédiée
+      notif.chronicleStart(c.nom, body.name);
       return;
     }
   }
@@ -1039,8 +1057,13 @@ function endChronicleEpisode(body) {
     body.chronicle.completed = true;
     body.chronicle.ending = body.chronicle.ending || 'completed';
     log('success', `Chronique <em>${c.nom}</em> achevée sur ${body.name}.`);
+    // 0.26 : notification dédiée
+    notif.chronicleDone(c.nom);
   } else {
-    log('neutral', `Épisode <em>${c.episodes[body.chronicle.episodeIdx-1].title}</em> achevé. Reviens pour la suite.`);
+    const epTitle = c.episodes[body.chronicle.episodeIdx-1].title;
+    log('neutral', `Épisode <em>${epTitle}</em> achevé. Reviens pour la suite.`);
+    // 0.26 : notification dédiée
+    notif.episodeDone(c.nom, epTitle);
   }
 }
 
@@ -1053,6 +1076,8 @@ function endChronicleWith(body, endingId) {
   if (c) {
     const endingText = c.endings?.[endingId] || 'Fin de la chronique.';
     log('success', `<em>${c.nom}</em> — ${endingText}`);
+    // 0.26 : notification dédiée
+    notif.chronicleDone(c.nom);
   }
 }
 
@@ -1474,6 +1499,8 @@ export function finishTraining(session) {
       }
     }
     log('success', `<em>${member.name}</em> achève sa formation en ${TRAINING_PROGRAMS[session.skill].nom} (niv ${session.targetLvl}).${extra}${specMsg}`);
+    // 0.26 : notification dédiée
+    notif.trainingDone(member.name, TRAINING_PROGRAMS[session.skill].nom);
   }
   // 0.22 — Reprend son poste s'il en a un, sinon devient libre + auto-assign
   returnToBase(member);
@@ -1742,6 +1769,8 @@ export function finishTreatment(treatment) {
       const pick = pool[Math.floor(Math.random() * pool.length)];
       member.sequels.push({ key: pick, since: S.meta.gameMin });
       sequelMsg = ` Séquelle : <em>${SEQUELS[pick].nom}</em>.`;
+      // 0.26.1 : notification dédiée
+      notif.sequel(member.name, SEQUELS[pick].nom);
     }
   }
   // Cas spécial mutation : "soigner" = annuler la mutation, mais peut laisser une séquelle
@@ -1757,6 +1786,8 @@ export function finishTreatment(treatment) {
   // Récupération de santé partielle
   member.sante = Math.min(100, member.sante + def.severity * 8);
   log('success', `<em>${member.name}</em> est rétabli(e) de ${def.nom.toLowerCase()}.${sequelMsg}`);
+  // 0.26 : notification dédiée
+  notif.treatmentDone(member.name);
   // Si plus aucun statut actif, sortie automatique
   if (member.statuts.length === 0) {
     returnToBase(member);
@@ -1783,6 +1814,8 @@ function memberDies(member, cause = 'cause inconnue') {
     }
   }
   log('warn', `<em>${member.name}</em> est décédé(e). ${cause} L'équipage est en deuil.`);
+  // 0.26 : notification dédiée (critique)
+  notif.death(member.name, cause);
   // 0.18 — Trauma psy sur amis proches, baume pour les rivaux
   triggerGriefOnFriends(member);
 }
@@ -2364,6 +2397,8 @@ export function triggerIncident(incidentId, silent = false) {
 
   // Affiche la modale d'incident
   showIncidentModal(incidentId, victim);
+  // 0.26 : notification dédiée (critique, pour qu'on la voie même si on est ailleurs)
+  notif.incident(inc.titre || incidentId);
 }
 
 // Applique l'outcome d'un choix d'incident
@@ -2856,6 +2891,8 @@ function triggerColonyEvent(eventId, silent = false) {
   m.innerHTML = renderColonyEventContent();
   bg.classList.add('show');
   hookColonyEventModal();
+  // 0.26.1 : notification dédiée (warn — événement en attente de décision)
+  notif.colonyEvent(ev.titre || eventId);
 }
 
 function renderColonyEventContent() {
@@ -3191,6 +3228,8 @@ export function adjustReputation(factionId, delta) {
     const ft = FACTION_TYPES[f.type];
     log(delta > 0 ? 'success' : 'warn',
       `<em>${f.name}</em> est désormais <b>${factionStatus(f.reputation).label}</b>.`);
+    // 0.26.1 : notification dédiée
+    notif.reputationSeuil(f.name, factionStatus(f.reputation).label.toLowerCase());
   }
 }
 
@@ -3639,6 +3678,9 @@ function onReturn(exp) {
     ? `Pertes : ${lost}. Cargaison : ${lootStr}${itemsStr}.`
     : `Cargaison : ${lootStr}${itemsStr}.`;
   log(outcomeKind, `<em>${vesselNameOf(exp)}</em> rentre de <em>${body?.name || 'mission'}</em>. ${summary}`);
+  // 0.26 : notification dédiée (sévérité selon pertes)
+  const sysName = S.galaxy.systems.find(s => s.id === exp.systemId)?.name || '?';
+  notif.expReturn(`${sysName} · ${body?.name || '?'}`, summary);
   // Historique
   S.expHistory.unshift({
     finishedAt: S.meta.gameMin,
@@ -4159,6 +4201,9 @@ function resolveExpedition(exp, body, sys) {
 
 
 function setupHandlers() {
+  // 0.26 : installer les handlers du panneau de notifications
+  try { setupNotifHandlers(); } catch (e) { console.warn('[BOOT] setupNotifHandlers:', e); }
+
   $('#btnRename').addEventListener('click', () => {
     showModal({
       title: 'Renommer la colonie',

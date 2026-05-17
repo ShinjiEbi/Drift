@@ -48,8 +48,38 @@
       <b id="gameTime">J1 · 00:00</b>
       <span id="realTime">session 0:00</span>
     </div>
+    <button id="notifBell" class="notif-bell" title="Notifications" aria-label="Notifications">
+      <span class="bell-icon">🔔</span>
+      <span class="bell-badge" id="bellBadge" hidden>0</span>
+    </button>
     <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil">⤓</button>
   </header>
+
+  <!-- 0.26 — Panneau de notifications coulissant (caché par défaut) -->
+  <div class="notif-panel-overlay" id="notifPanelOverlay" hidden></div>
+  <aside class="notif-panel" id="notifPanel" hidden aria-label="Notifications">
+    <header class="np-header">
+      <h2>Notifications</h2>
+      <button class="np-close" id="notifPanelClose" aria-label="Fermer">✕</button>
+    </header>
+    <div class="np-filters" id="notifFilters">
+      <button class="np-filter active" data-filter="all">Toutes</button>
+      <button class="np-filter" data-filter="event">Événements</button>
+      <button class="np-filter" data-filter="crew">Équipage</button>
+      <button class="np-filter" data-filter="expedition">Expéd.</button>
+      <button class="np-filter" data-filter="research">Recherche</button>
+      <button class="np-filter" data-filter="chronicle">Chroniques</button>
+      <button class="np-filter" data-filter="economy">Économie</button>
+    </div>
+    <div class="np-actions">
+      <button id="notifMarkAllRead" class="np-action">Tout marquer lu</button>
+      <button id="notifClearAll" class="np-action danger">Tout effacer</button>
+      <button id="notifPushToggle" class="np-action" hidden>Activer les push</button>
+    </div>
+    <div class="np-list" id="notifList">
+      <!-- Liste générée dynamiquement -->
+    </div>
+  </aside>
 
   <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
   <div class="res-bar" id="resBar">
@@ -121,6 +151,15 @@
         <h1 class="head">Modules</h1>
         <div class="subhead">Construction séquentielle, un chantier à la fois</div>
         <div class="modules" id="modulesList"></div>
+        <!-- 0.26.1 — Bandeau Synthétiseur quantique (caché si module pas construit) -->
+        <div id="synthesisBanner" class="synthesis-banner" hidden>
+          <div class="sb-header">
+            <span class="sb-icon">⚛</span>
+            <span class="sb-title">Synthétiseur quantique</span>
+            <button id="openSynthesis" class="sb-btn">Convertir</button>
+          </div>
+          <div class="sb-sub">Réarrange la matière. Conversions disponibles selon niveau.</div>
+        </div>
       </div>
 
       <div class="subview" id="subview-assignments">
@@ -314,7 +353,34 @@
         })
         .catch((err) => console.warn('[PWA] Échec d\'enregistrement du SW :', err));
     });
+
+    // 0.26 — Quand l'utilisateur clique une notif système, le SW poste un message
+    // pour qu'on navigue vers l'onglet cible
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'NOTIF_NAVIGATE' && event.data.target) {
+        const target = event.data.target;
+        // Petit délai pour que l'UI soit prête
+        setTimeout(() => {
+          const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target}"]`);
+          if (tabBtn) tabBtn.click();
+        }, 300);
+      }
+    });
   }
+
+  // 0.26 — Si l'app est ouverte avec ?tab=xxx (depuis SW openWindow), bascule sur cet onglet
+  document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    if (tabParam) {
+      setTimeout(() => {
+        const tabBtn = document.querySelector(`nav.tabs button[data-tab="${tabParam}"]`);
+        if (tabBtn) tabBtn.click();
+        // Nettoie l'URL pour ne pas garder le paramètre
+        window.history.replaceState({}, '', window.location.pathname);
+      }, 500);
+    }
+  });
 
   // Capture l'événement d'installabilité (Android/Chrome principalement)
   let deferredPrompt = null;

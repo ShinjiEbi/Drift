@@ -1,12 +1,27 @@
 // catalog.js — données statiques du jeu (modules, vaisseaux, items, schémas, techs, scènes...)
 // Extrait depuis app.js lors de la phase de modularisation
 
+// ============================================================
+//   FORMULES ÉCONOMIQUES DE PROGRESSION (0.25.0)
+// ============================================================
+// Courbe TRIANGULAIRE pour les coûts (au lieu de quadratique brutal) :
+//   triCost(l) = l*(l+1)/2 → 1, 3, 6, 10, 15, 21 (ratio max ×21 au lieu de ×36)
+// Bonus de production par palier :
+//   stepBonus(l) = 1.0 si l≤2, 1.2 si l∈[3..4], 1.4 si l∈[5..6], 1.6 si l≥7
+//   → monter en niveau devient économiquement intéressant à chaque palier
+// Ces formules sont utilisées dans les cost: et prod: ci-dessous.
+const triCost = l => l * (l + 1) / 2;
+const stepBonus = l => l <= 2 ? 1.0 : l <= 4 ? 1.2 : l <= 6 ? 1.4 : 1.6;
+
 export const MODULES = {
+  // ============================================================
+  //   MODULES DE BASE (tier 1)
+  // ============================================================
   commandement: {
     nom: 'Centre de commandement',
     desc: "Cœur logique de l'avant-poste. Sa survie conditionne la nôtre.",
     maxLevel: 5,
-    cost: l => ({ metal: 80*l*l, cristal: 40*l*l, energie: 0 }),
+    cost: l => ({ metal: 80*triCost(l), cristal: 40*triCost(l) }),
     time: l => 8*l,
     prereq: () => ({}),
     effect: () => "Débloque les autres modules. Niveau requis pour les paliers."
@@ -15,39 +30,44 @@ export const MODULES = {
     nom: 'Générateur solaire',
     desc: "Voilures photovoltaïques tendues sur la roche. Silence et lumière.",
     maxLevel: 8,
-    cost: l => ({ metal: 30*l + 15*l*l, cristal: 10*l*l }),
+    cost: l => ({ metal: Math.round(30*triCost(l)), cristal: Math.round(15*triCost(l)) }),
     time: l => 5*l,
     prereq: l => l===1 ? {} : { commandement: 1 },
-    prod: l => ({ energie: 6*l + 2*(l-1) }),
-    effect: l => `+${6*l + 2*(l-1)} énergie/min`
+    // 0.25 : énergie de base relevée +33% (8 au lieu de 6)
+    prod: l => ({ energie: Math.round((8*l + 2*(l-1)) * stepBonus(l)) }),
+    effect: l => `+${Math.round((8*l + 2*(l-1)) * stepBonus(l))} énergie/min`
   },
   mine_surface: {
     nom: 'Mine de surface',
     desc: "Extraction des veines affleurantes. Bruit constant, vibrations.",
     maxLevel: 8,
-    cost: l => ({ metal: 50*l*l, cristal: 20*l*l, energie: 0 }),
+    cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(20*triCost(l)) }),
     time: l => 6*l,
     prereq: () => ({ commandement: 1 }),
-    prod:   l => ({ metal: 5*l, cristal: 2*l }),
+    // 0.25 : prod cristal doublée (4 au lieu de 2)
+    prod: l => ({
+      metal: Math.round(5*l * stepBonus(l)),
+      cristal: Math.round(4*l * stepBonus(l))
+    }),
     upkeep: l => ({ energie: 2*l }),
-    effect: l => `+${5*l} métal · +${2*l} cristal /min · −${2*l} énergie`
+    effect: l => `+${Math.round(5*l * stepBonus(l))} métal · +${Math.round(4*l * stepBonus(l))} cristal /min · −${2*l} énergie`
   },
   hydroponie: {
     nom: 'Hydroponie',
     desc: "Bacs scellés, lampes UV, mousses comestibles. L'odeur s'accroche aux vêtements.",
     maxLevel: 6,
-    cost: l => ({ metal: 60*l*l, cristal: 30*l*l, biomasse: 10*l }),
+    cost: l => ({ metal: Math.round(60*triCost(l)), cristal: Math.round(30*triCost(l)), biomasse: 10*l }),
     time: l => 7*l,
     prereq: () => ({ commandement: 1 }),
-    prod:   l => ({ biomasse: 4*l }),
+    prod: l => ({ biomasse: Math.round(4*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 3*l }),
-    effect: l => `+${4*l} biomasse/min · −${3*l} énergie`
+    effect: l => `+${Math.round(4*l * stepBonus(l))} biomasse/min · −${3*l} énergie`
   },
   habitat: {
     nom: 'Habitat',
     desc: "Couchettes empilées, cloisons fines, vapeurs de café synthétique.",
     maxLevel: 5,
-    cost: l => ({ metal: 90*l*l, cristal: 40*l*l, biomasse: 5*l }),
+    cost: l => ({ metal: Math.round(90*triCost(l)), cristal: Math.round(40*triCost(l)), biomasse: 5*l }),
     time: l => 9*l,
     prereq: () => ({ commandement: 1 }),
     capCrew: l => 4*l,
@@ -58,30 +78,32 @@ export const MODULES = {
     nom: 'Laboratoire',
     desc: "Banc d'analyse spectrale, hotte à flux laminaire, écrans figés sur des spectres.",
     maxLevel: 6,
-    cost: l => ({ metal: 100*l, cristal: 100*l*l, datacubes: l>1 ? 5*l : 0 }),
+    // 0.25 : coût cristal divisé par 2 (50*tri au lieu de 100*l²)
+    cost: l => ({ metal: Math.round(100*l), cristal: Math.round(50*triCost(l)), datacubes: l>1 ? 5*l : 0 }),
     time: l => 12*l,
     prereq: () => ({ commandement: 2 }),
-    prod:   l => ({ datacubes: 1*l }),
+    // 0.25 : prod datacubes augmentée 50% (1.5*l au lieu de 1*l brut → 0.75 effectif)
+    prod: l => ({ datacubes: Math.round(1.5*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 5*l }),
     flag: 'recherche',
-    effect: l => `+${1*l} datacube/min · −${5*l} énergie · débloque la recherche`
+    effect: l => `+${Math.round(1.5*l * stepBonus(l))} datacube/min · −${5*l} énergie · débloque la recherche`
   },
   atelier: {
     nom: 'Atelier',
     desc: "Imprimantes, étaux, copeaux. Tout ce qui se casse finit ici.",
     maxLevel: 5,
-    cost: l => ({ metal: 150*l, cristal: 60*l }),
+    cost: l => ({ metal: Math.round(150*l), cristal: Math.round(60*l) }),
     time: l => 10*l,
     prereq: () => ({ commandement: 2 }),
     upkeep: l => ({ energie: 3*l }),
     flag: 'fabrication',
-    effect: l => `Permet la fabrication d'items et d'équipement (phase ultérieure)`
+    effect: l => `Permet la fabrication d'items et d'équipement`
   },
   hangar: {
     nom: 'Hangar',
     desc: "Voûte ouverte sur le ciel. Le sas grince à chaque cycle.",
     maxLevel: 5,
-    cost: l => ({ metal: 200*l, cristal: 80*l, energie: 30*l }),
+    cost: l => ({ metal: Math.round(200*l), cristal: Math.round(80*l), energie: Math.round(30*l) }),
     time: l => 15*l,
     prereq: () => ({ commandement: 2, atelier: 1 }),
     upkeep: l => ({ energie: 2*l }),
@@ -92,7 +114,7 @@ export const MODULES = {
     nom: 'Antenne longue portée',
     desc: "Paraboles enchâssées dans le permafrost. Captent ce qu'on n'attendait pas.",
     maxLevel: 5,
-    cost: l => ({ metal: 80*l, cristal: 100*l }),
+    cost: l => ({ metal: Math.round(80*l), cristal: Math.round(100*l) }),
     time: l => 11*l,
     prereq: () => ({ commandement: 1 }),
     upkeep: l => ({ energie: 2*l }),
@@ -103,7 +125,7 @@ export const MODULES = {
     nom: 'Balise de recrutement',
     desc: "Émetteur longue portée diffusant les conditions d'engagement. Les candidats se signalent par message-relais.",
     maxLevel: 4,
-    cost: l => ({ metal: 50*l*l, cristal: 30*l*l, energie: 10*l }),
+    cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(30*triCost(l)), energie: Math.round(10*l) }),
     time: l => 8*l,
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 1*l }),
@@ -114,7 +136,7 @@ export const MODULES = {
     nom: 'Centre de formation',
     desc: "Salles de simulation, bibliothèque de protocoles, mannequins d'exercice. Les colons en sortent meilleurs ou cassés.",
     maxLevel: 4,
-    cost: l => ({ metal: 120*l, cristal: 80*l, datacubes: l>1 ? 5*l : 0 }),
+    cost: l => ({ metal: Math.round(120*l), cristal: Math.round(80*l), datacubes: l>1 ? 5*l : 0 }),
     time: l => 14*l,
     prereq: () => ({ commandement: 2, habitat: 1 }),
     upkeep: l => ({ energie: 3*l, biomasse: 1*l }),
@@ -125,12 +147,108 @@ export const MODULES = {
     nom: 'Infirmerie',
     desc: "Lits suspendus, scanners portables, odeur d'antiseptique. Le silence y est différent.",
     maxLevel: 5,
-    cost: l => ({ metal: 100*l, cristal: 70*l, biomasse: 10*l }),
+    cost: l => ({ metal: Math.round(100*l), cristal: Math.round(70*l), biomasse: Math.round(10*l) }),
     time: l => 12*l,
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 2*l, biomasse: 1*l }),
     flag: 'soins',
     effect: l => `${2*l} lits · diagnostics et traitements jusqu'au palier ${l}`
+  },
+
+  // ============================================================
+  //   MODULES TIER 2 (0.25) — débloqués par recherches
+  //   Marqués par tier:2 et requireTech: 'tech_xxx'
+  // ============================================================
+  mine_profonde: {
+    nom: 'Mine profonde',
+    desc: "Foreuses laser, ascenseurs miniers, tunnels jusqu'au manteau. Les ouvriers en remontent plus vieux.",
+    maxLevel: 4,
+    tier: 2,
+    requireTech: 'tech_mining_advanced',
+    cost: l => ({ metal: Math.round(800*triCost(l)/3), cristal: Math.round(400*triCost(l)/3), energie: Math.round(100*l) }),
+    time: l => 24*l,
+    prereq: () => ({ commandement: 3, mine_surface: 3, atelier: 1 }),
+    // Très forte production, lourdement coûteuse en énergie/biomasse
+    prod: l => ({
+      metal: Math.round(25*l * stepBonus(l)),
+      cristal: Math.round(15*l * stepBonus(l))
+    }),
+    upkeep: l => ({ energie: 15*l, biomasse: 5*l }),
+    effect: l => `+${Math.round(25*l * stepBonus(l))} métal · +${Math.round(15*l * stepBonus(l))} cristal /min · −${15*l} énergie · −${5*l} biomasse`
+  },
+  reacteur_fusion: {
+    nom: 'Réacteur à fusion',
+    desc: "Tore magnétique scellé, plasma à 150 millions de degrés. Sa pulsation devient le métronome de la colonie.",
+    maxLevel: 3,
+    tier: 2,
+    requireTech: 'tech_fusion',
+    cost: l => ({ metal: Math.round(1000*triCost(l)/3), cristal: Math.round(800*triCost(l)/3), datacubes: 30*l }),
+    time: l => 36*l,
+    prereq: () => ({ commandement: 3, generateur_solaire: 4 }),
+    // Énorme production d'énergie, demande biomasse (algues pour eau lourde) et cristal (réfrigérant)
+    prod: l => ({ energie: Math.round(50*l * stepBonus(l)) }),
+    upkeep: l => ({ biomasse: 10*l, cristal: 2*l }),
+    effect: l => `+${Math.round(50*l * stepBonus(l))} énergie/min · −${10*l} biomasse · −${2*l} cristal`
+  },
+  bioreacteur: {
+    nom: 'Bioréacteur',
+    desc: "Cuves de fermentation aux parois translucides, où des cultures cellulaires synthétisent à la fois protéines et données génomiques.",
+    maxLevel: 3,
+    tier: 2,
+    requireTech: 'tech_bioreacteur',
+    cost: l => ({ metal: Math.round(600*triCost(l)/3), cristal: Math.round(500*triCost(l)/3), biomasse: 30*l }),
+    time: l => 30*l,
+    prereq: () => ({ commandement: 3, hydroponie: 3, laboratoire: 2 }),
+    // Production hybride biomasse + datacubes
+    prod: l => ({
+      biomasse: Math.round(20*l * stepBonus(l)),
+      datacubes: Math.round(1*l * stepBonus(l))
+    }),
+    upkeep: l => ({ energie: 10*l }),
+    effect: l => `+${Math.round(20*l * stepBonus(l))} biomasse · +${Math.round(1*l * stepBonus(l))} datacube /min · −${10*l} énergie`
+  },
+  synthetiseur_quantique: {
+    nom: 'Synthétiseur quantique',
+    desc: "Chambre de réarrangement atomique. Convertit la matière à la demande, mais demande une énergie obscène.",
+    maxLevel: 2,
+    tier: 2,
+    requireTech: 'tech_stockage_quantique',
+    cost: l => ({ metal: Math.round(1200*l), cristal: Math.round(1000*l), datacubes: 50*l }),
+    time: l => 48*l,
+    prereq: () => ({ commandement: 4, atelier: 3, laboratoire: 3 }),
+    // Pas de prod directe, mais débloque la conversion de ressources via UI
+    upkeep: l => ({ energie: 20*l }),
+    flag: 'synthese',
+    effect: l => `Convertit ressources via UI dédiée · −${20*l} énergie`
+  },
+  silo_cryogenique: {
+    nom: 'Silo cryogénique',
+    desc: "Cuves scellées à atmosphère contrôlée. La conservation devient une science exacte.",
+    maxLevel: 4,
+    tier: 2,
+    requireTech: 'tech_stockage_cryo',
+    cost: l => ({ metal: Math.round(400*triCost(l)/3), cristal: Math.round(200*triCost(l)/3) }),
+    time: l => 18*l,
+    prereq: () => ({ commandement: 2 }),
+    // Bonus de capacité de stockage
+    capBonus: l => ({ metal: 500*l, cristal: 400*l, biomasse: 200*l }),
+    upkeep: l => ({ energie: 2*l }),
+    effect: l => `+${500*l} cap métal · +${400*l} cap cristal · +${200*l} cap biomasse · −${2*l} énergie`
+  },
+  memoire_cristalline: {
+    nom: 'Mémoire cristalline',
+    desc: "Matrices de stockage utilisant les propriétés ondulatoires de cristaux exotiques. Chaque cristal contient une bibliothèque.",
+    maxLevel: 3,
+    tier: 2,
+    requireTech: 'tech_memoire_cristalline',
+    cost: l => ({ metal: Math.round(500*triCost(l)/3), cristal: Math.round(600*triCost(l)/3), datacubes_alien: 20*l }),
+    time: l => 30*l,
+    prereq: () => ({ commandement: 3, laboratoire: 3 }),
+    // Bonus de capacité datacubes + bonus de recherche (effet géré dans techEffects)
+    capBonus: l => ({ datacubes: 200*l }),
+    researchSpeedBonus: l => 0.10 * l,  // +10% par niveau
+    upkeep: l => ({ energie: 5*l }),
+    effect: l => `+${200*l} cap datacubes · +${10*l}% vitesse recherche · −${5*l} énergie`
   }
 };
 
@@ -275,7 +393,8 @@ export const ITEM_ORIGINS = {
   alien_a:  { nom: 'Alien-A',    color: '#b09bd0' },
   alien_b:  { nom: 'Alien-B',    color: '#7a9b6e' },
   mixte:    { nom: 'Mixte',      color: '#5a8ba8' },
-  exotique: { nom: 'Exotique',   color: '#e9b76a' }
+  exotique: { nom: 'Exotique',   color: '#e9b76a' },
+  anomalie: { nom: 'Anomalie',   color: '#a26fbb' }  // 0.27 — items uniques de chroniques
 };
 
 
@@ -376,6 +495,18 @@ export const ITEMS = {
     nom: "Arme à résonance",
     type: 'weapon', origin: 'alien_a',
     desc: "Arme énergétique cristalline. Brise les structures alien à distance."
+  },
+
+  // ===== Items uniques de chroniques (0.27) =====
+  compas_cosmique: {
+    nom: "Compas cosmique",
+    type: 'tool', origin: 'anomalie',
+    desc: "Aiguille immobile qui pointe vers un point précis de la galaxie. Récupéré au cœur de l'Anneau Tracé. Personne ne sait ce qu'elle désigne — mais elle pointe toujours dans la même direction."
+  },
+  fragment_anneau: {
+    nom: "Fragment d'anneau",
+    type: 'tool', origin: 'anomalie',
+    desc: "Éclat de matière non-identifiée. Sa densité change selon l'observation. Inutilisable comme matériau, fascinant à étudier."
   }
 };
 
@@ -612,7 +743,27 @@ export const TECH_TREE = {
     cost:{ datacubes:250, time: 960 },
     prereq:{ tech:['tech_genetique'], requireArc:'arc_couvee' },
     effects:{ resourceMult:{ biomasse:1.40 }, treatmentSpeedMult: 0.70, sequelChanceMult: 0.30 },
-    desc:"Biologie alien-B intégrée. Biomasse +40%, soins -30%, séquelles divisées par 3." }
+    desc:"Biologie alien-B intégrée. Biomasse +40%, soins -30%, séquelles divisées par 3." },
+
+  // ============ NOUVELLES TECHS 0.25 — débloquent les modules tier 2 ============
+
+  tech_fusion: { branch:'ingenierie', tier:3, nom:"Confinement à fusion",
+    cost:{ datacubes:150, time: 720 },
+    prereq:{ tech:['tech_efficience_solaire', 'tech_batteries_avancees'] },
+    effects:{ unlockModule: 'reacteur_fusion' },
+    desc:"Maîtrise du confinement magnétique à long terme. Débloque le module Réacteur à fusion (énergie massive)." },
+
+  tech_bioreacteur: { branch:'bio', tier:3, nom:"Bioréacteurs intégrés",
+    cost:{ datacubes:120, time: 720 },
+    prereq:{ tech:['tech_nutrition', 'tech_hydroponie_avancee'] },
+    effects:{ unlockModule: 'bioreacteur' },
+    desc:"Cultures cellulaires multifonctions. Débloque le module Bioréacteur (biomasse + datacubes)." },
+
+  tech_memoire_cristalline: { branch:'exotique', tier:3, nom:"Mémoire cristalline",
+    cost:{ datacubes:150, datacubes_alien:15, time: 840 },
+    prereq:{ tech:['tech_principes_xeno', 'tech_voilure_cristal'] },
+    effects:{ unlockModule: 'memoire_cristalline' },
+    desc:"Stockage de données dans la trame cristalline. Débloque le module Mémoire cristalline (cap datacubes + vitesse recherche)." }
 };
 
 
