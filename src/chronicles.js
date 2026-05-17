@@ -225,9 +225,82 @@ export const CHRONICLES = {
       'liberation_hadrien':    "Tu as libéré Hadrien — en l'achevant, ou en le ramenant. Dans les deux cas, ce n'est plus tout à fait un homme qui revient (ou meurt).",
       'eveil_total':           "Tu as nourri la Couvée jusqu'à l'éveil total. Elle est consciente. Elle te bénit. Elle te demande de partir et de ne jamais revenir."
     }
+  },
+
+  // ------------------------------------------------------------
+  //   L'ANNEAU TRACÉ — Chronique anomalie spatiale, 3 épisodes
+  // ------------------------------------------------------------
+  // Conditions : atmosphere anormale OU biome exotique. Présence géométrique
+  // inexplicable. 1 personnage récurrent (Dr. Élie Calvet, physicienne).
+  // Ton : contemplatif, inquiétant, sans ennemi. Le mystère vient de
+  // l'observation et de l'interprétation.
+  'anneau_trace': {
+    id: 'anneau_trace',
+    nom: "L'Anneau Tracé",
+    teaser: "Un cercle parfait, immobile, qui change de place quand on ne le regarde pas.",
+    
+    requires: {
+      atmosphere: ['anormale', 'exotique'],
+      biome: ['desert', 'glace', 'volcanique', 'exotique', 'asteroide', 'jungle']
+    },
+    spawnChance: 0.30,
+    
+    characters: {
+      elie:   { name: 'Dr. Élie Calvet', age: 39, role: 'Physicienne théoricienne', voice: 'précise, inquiète' }
+    },
+    
+    initialFlags: {
+      observations: 0,            // nombre d'observations rigoureuses (0-5)
+      elie_status: 'present',     // 'present' | 'allie' | 'mort' | 'absent' | 'obsedee'
+      elie_obsession: 0,          // 0-3, augmente quand on appuie sur les choix scientifiques
+      anneau_classifie: null,     // 'instrument' | 'verrou' | 'porte' | null
+      contact_etabli: false,      // a touché l'anneau (geste interdit)
+      autre_anneau: false,        // a découvert qu'il en existe d'autres
+      gardien_eveille: false,     // a déclenché une réaction de l'anneau
+      compas_obtenu: false        // le compas cosmique a été récupéré
+    },
+    
+    episodes: [
+      {
+        title: "La géométrie",
+        intro: "Tu approches du site signalé par les capteurs. L'anomalie est visible avant même que tu te poses : un cercle gigantesque, parfaitement régulier, à un mètre du sol. Aucune ombre, aucun bruit. Élie Calvet, ton experte embarquée, ne dit plus rien depuis dix minutes.",
+        firstScene: 'chron_anneau_ep1_approche'
+      },
+      {
+        title: "Les régularités",
+        introByFlag: {
+          anneau_classifie: {
+            'instrument':  "Tu reviens avec une hypothèse : c'est un instrument, peut-être un compas. Élie a passé six jours à compiler les données. Elle veut continuer.",
+            'verrou':      "Tu reviens parce que tu n'as pas le choix. Si c'est un verrou, comme le pense Élie, alors quelque chose attend de l'autre côté. Et tu veux savoir quoi.",
+            'porte':       "Tu reviens avec une idée folle : si c'est une porte, alors elle s'ouvre. Et si elle s'ouvre, quelque chose entre — ou quelque chose sort."
+          }
+        },
+        defaultIntro: "Tu reviens. Tu n'as pas vraiment décidé pourquoi. L'anneau est toujours là. Sauf qu'il a légèrement bougé, semble-t-il.",
+        firstScene: 'chron_anneau_ep2_observation'
+      },
+      {
+        title: "L'autre côté",
+        introByFlag: {
+          gardien_eveille: {
+            true:  "Quelque chose a changé. L'anneau émet désormais une vibration sub-sonique. Élie dit qu'il « répond ». À quoi exactement, elle ne sait pas.",
+            false: "L'anneau attend. Toi aussi tu attends quelque chose, sans pouvoir le nommer."
+          }
+        },
+        defaultIntro: "Tu reviens parce qu'il faut bien finir ce qu'on a commencé.",
+        firstScene: 'chron_anneau_ep3_seuil'
+      }
+    ],
+    
+    endings: {
+      'science_pure':       "Tu as observé sans toucher. Élie publie ses travaux à bord. L'anneau reste là, intact. Tu ramènes des mesures qui changent la physique. Et un compas qui pointe vers d'autres anneaux.",
+      'obsession_elie':     "Élie ne revient pas. Elle a choisi de rester pour continuer ses observations. Tu ne la reverras pas. Elle t'a laissé ses notes — et le compas.",
+      'porte_ouverte':      "Tu as ouvert. Quelque chose est passé — dans un sens ou dans l'autre. L'anneau est tombé. Élie est revenue changée. Tu portes désormais une chose.",
+      'verrou_brise':       "Tu as détruit le verrou. Quelque chose s'est libéré sur cette planète. Tu ne sais pas quoi. Élie pense qu'il faut prévenir. Tu pars sans avoir compris.",
+      'silence_respecte':   "Tu as choisi de ne pas comprendre. Tu pars sans rien emporter. Élie ne comprend pas, mais te respecte. L'anneau reste, dans son cercle parfait, à attendre quelqu'un d'autre."
+    }
   }
 
-  // FUTUR : anneau_trace (anomalie), veilleurs_beth (civ_active), marche_etrange (fusion)
+  // FUTUR : veilleurs_beth (civ_active), marche_etrange (fusion)
 };
 
 
@@ -1507,6 +1580,297 @@ export const CHRONICLE_SCENES = [
           loot: { biomasse: 10 },
           morale: -2,
           endChronicle: 'fuite_marquee'
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   SCÈNES — L'ANNEAU TRACÉ
+  // ============================================================
+
+  // ---- Épisode 1 : LA GÉOMÉTRIE (3 scènes) ----
+
+  {
+    id: 'chron_anneau_ep1_approche',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 0 },
+    text: (flags) => `À deux cents mètres, tu coupes les moteurs. L'anneau a un diamètre que tu n'oses estimer — une centaine de mètres, peut-être plus. Pas de matière visible, ou bien une matière qui ne renvoie rien. Élie murmure : « Il n'a pas d'épaisseur. C'est un cercle, pas un anneau. » Puis, plus bas : « Et c'est impossible. »`,
+    choices: [
+      {
+        label: "L'approcher à pied avec Élie",
+        outcome: {
+          log: "Vous marchez ensemble. À cinq mètres, l'anneau ne réagit toujours pas. Élie pose un capteur au sol. L'écran de son tablette se brouille puis se stabilise. Elle prend trois minutes pour réfléchir.",
+          setFlags: { observations: '+1' },
+          next: 'chron_anneau_ep1_premiere_obs'
+        }
+      },
+      {
+        label: "Envoyer un drone, rester en retrait",
+        outcome: {
+          log: "Le drone fait trois passes. Sur les images, aucune différence : l'anneau est exactement identique sous tous les angles. Cela ne devrait pas être possible en 3D. Élie note dans son carnet sans dire un mot.",
+          setFlags: { observations: '+1' },
+          next: 'chron_anneau_ep1_premiere_obs'
+        }
+      },
+      {
+        label: "Tirer un projectile inerte à travers",
+        outcome: {
+          log: "Le projectile passe — mais ne ressort pas de l'autre côté. Il n'a pas frappé l'anneau. Il a juste cessé d'exister à l'intérieur. Élie s'assoit dans le sable. « Nous n'aurions pas dû faire ça. »",
+          setFlags: { observations: '+1', gardien_eveille: true },
+          next: 'chron_anneau_ep1_premiere_obs'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_anneau_ep1_premiere_obs',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 0 },
+    text: (flags) => `Vous campez à 100 mètres pour la nuit. Au matin, l'anneau a bougé. Pas de beaucoup — peut-être deux mètres vers l'est. Aucun de vous ne l'a vu se déplacer. Élie a passé la nuit à le regarder. Elle dit qu'il n'a pas bougé tant qu'elle l'observait. « Il attend qu'on cligne des yeux. »`,
+    choices: [
+      {
+        label: "Programmer des relevés en continu pendant 3 jours",
+        outcome: {
+          log: "Vous montez un système de captation. Au bout de 72h, vous avez plus de données qu'aucune équipe humaine n'en a jamais collecté sur une anomalie. Élie commence à voir un motif.",
+          setFlags: { observations: '+2', anneau_classifie: 'instrument' },
+          next: 'chron_anneau_ep1_motif'
+        }
+      },
+      {
+        label: "Tenter de contraindre l'anneau (cage de Faraday improvisée)",
+        outcome: {
+          log: "Vous tendez des câbles tout autour. L'anneau ne réagit pas. Mais au matin, votre installation a disparu. Pas démontée — disparue. Comme le projectile. Élie classe l'objet comme un \"verrou actif\".",
+          setFlags: { observations: '+1', anneau_classifie: 'verrou', gardien_eveille: true },
+          next: 'chron_anneau_ep1_motif'
+        }
+      },
+      {
+        label: "Élie veut le toucher. Tu la laisses faire.",
+        outcome: {
+          log: "Elle s'approche. Sa main passe — pas à travers, mais autour. L'anneau l'évite. Elle pleure sans bruit. « Il sait que je suis là. Il ne veut juste pas. »",
+          setFlags: { observations: '+1', anneau_classifie: 'porte', contact_etabli: true, elie_obsession: '+1' },
+          next: 'chron_anneau_ep1_motif'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_anneau_ep1_motif',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 0 },
+    text: (flags) => `Élie a trouvé quelque chose. « Ses déplacements ne sont pas aléatoires. Il trace une figure, lentement, sur la surface de la planète. Une figure géométrique. » Elle te montre les coordonnées. C'est presque un cercle, mais pas tout à fait : c'est une **ellipse**. Et le foyer pointe vers le ciel — vers un point précis dans la constellation voisine.`,
+    choices: [
+      {
+        label: "Partir avec les données. Revenir mieux préparés.",
+        outcome: {
+          log: "Vous repartez. Élie passe les jours suivants à calculer. Elle te dit que ce qu'elle a vu \"change tout\".",
+          setFlags: { observations: '+1' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Lancer un scan profond pour cartographier le motif complet",
+        outcome: {
+          log: "Le scan révèle que l'ellipse couvre plusieurs kilomètres et est presque complète. L'anneau finira son tracé dans environ 40 jours-jeu. Élie pense que quelque chose se passera à ce moment-là.",
+          setFlags: { observations: '+1' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Tenter de bloquer le tracé : poser une balise dans la trajectoire",
+        outcome: {
+          log: "Vous placez la balise. Au matin, elle a disparu. L'anneau a contourné sa position de cinquante mètres avant de reprendre son tracé. Il a évité. Il a donc compris.",
+          setFlags: { observations: '+1', gardien_eveille: true },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ---- Épisode 2 : LES RÉGULARITÉS (3 scènes) ----
+
+  {
+    id: 'chron_anneau_ep2_observation',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 1 },
+    text: (flags) => {
+      const opt = flags.gardien_eveille
+        ? `L'anneau vibre maintenant à très basse fréquence. Tes capteurs en deviennent fous à quelques mètres. Élie est plus calme qu'à la dernière visite, mais plus pâle aussi.`
+        : `L'anneau a continué son tracé pendant ton absence. La figure est presque complète. Élie a remarqué qu'à l'approche du tracé final, les déplacements deviennent plus petits, plus précis.`;
+      return opt;
+    },
+    choices: [
+      {
+        label: "Camper sur place et observer le tracé jusqu'au bout",
+        outcome: {
+          log: "Tu restes. Tu vois l'anneau bouger — pas vraiment vu, plutôt deviné. À chaque clignement, il est plus loin. Élie reste éveillée toute la nuit, et celle d'après, et celle d'après.",
+          setFlags: { observations: '+1', elie_obsession: '+1' },
+          next: 'chron_anneau_ep2_echo'
+        }
+      },
+      {
+        label: "Aller chercher dans les ruines, voir s'il y a des traces d'anciens visiteurs",
+        outcome: {
+          log: "Tu fouilles. Tu trouves des marques au sol, érodées par le temps : un autre cercle, beaucoup plus ancien, à demi enfoui. Et un fragment métallique qui ne ressemble à rien de connu.",
+          setFlags: { observations: '+1', autre_anneau: true },
+          loot: { datacubes: 8 },
+          next: 'chron_anneau_ep2_echo'
+        }
+      },
+      {
+        label: "Élie veut entrer en transe d'observation prolongée. Tu refuses ou accepte ?",
+        outcome: {
+          log: "Tu acceptes. Elle reste cinq jours sans dormir, en observation continue. L'anneau ne bouge pas tant qu'elle regarde. Quand elle s'effondre enfin, l'anneau a bondi de trente mètres en un instant.",
+          setFlags: { observations: '+2', elie_obsession: '+2' },
+          next: 'chron_anneau_ep2_echo'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_anneau_ep2_echo',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 1 },
+    text: (flags) => {
+      const intro = flags.autre_anneau
+        ? `Tu as trouvé des traces d'un autre anneau ancien. Élie compile toutes les données et fait une découverte : `
+        : `Élie te montre ses notes. Elle a calculé quelque chose : `;
+      return intro + `« Ce n'est pas le seul. Les anomalies signalées par d'autres explorateurs, dans d'autres systèmes — leurs descriptions correspondent. Il y a au moins trois anneaux dans cette galaxie. Et leurs ellipses convergent vers un même point. »`;
+    },
+    choices: [
+      {
+        label: "Demander à Élie de modéliser le point de convergence",
+        outcome: {
+          log: "Elle travaille toute la nuit. Le matin, elle te montre une carte. Le point converge dans une zone de la galaxie où aucun système n'est cartographié. « Il y a quelque chose là-bas. Quelque chose que ces anneaux désignent. »",
+          setFlags: { observations: '+1' },
+          next: 'chron_anneau_ep2_choix'
+        }
+      },
+      {
+        label: "Essayer de communiquer : émettre des fréquences vers l'anneau",
+        outcome: {
+          log: "Tu émets des séquences mathématiques — premiers nombres, pi, suite de Fibonacci. Pendant deux jours, rien. Au troisième jour, l'anneau modifie son tracé : il dessine maintenant une spirale. Une réponse ?",
+          setFlags: { observations: '+1', gardien_eveille: true },
+          next: 'chron_anneau_ep2_choix'
+        }
+      },
+      {
+        label: "Tenter de récupérer le fragment de l'autre anneau (s'il existe)",
+        req: { flag: { key: 'autre_anneau', equals: true } },
+        outcome: {
+          log: "Tu déterres le fragment. C'est un éclat de matériau qui pèse trop. Élie le scanne : sa densité augmente quand on le regarde, diminue quand on regarde ailleurs. « Comme l'anneau, en miniature. » Tu l'embarques.",
+          setFlags: { observations: '+1' },
+          loot: { cristal: 20, datacubes: 5 },
+          item: 'fragment_anneau',
+          next: 'chron_anneau_ep2_choix'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_anneau_ep2_choix',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 1 },
+    text: (flags) => {
+      const elie_intense = flags.elie_obsession >= 2;
+      return elie_intense
+        ? `Élie a maigri. Elle dort à peine et parle de l'anneau comme d'un être conscient. « Il sait que nous savons. Il attend que je décide. » Tu sens qu'il faut faire un choix : continuer avec elle, ou la mettre en sécurité.`
+        : `Tu as accumulé assez de données pour formuler trois hypothèses. Élie te demande laquelle tu veux poursuivre. C'est ton choix maintenant.`;
+    },
+    choices: [
+      {
+        label: "Classer comme INSTRUMENT (un compas, un dispositif d'orientation)",
+        outcome: {
+          log: "Vous décidez ensemble : c'est un instrument. Si on le respecte, il continuera à fonctionner. Il ne faut pas le toucher.",
+          setFlags: { anneau_classifie: 'instrument' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Classer comme VERROU (quelque chose est emprisonné dedans)",
+        outcome: {
+          log: "Élie pense qu'il y a une menace de l'autre côté. « S'il faut le briser, on le brisera. Mais d'abord, il faut savoir. »",
+          setFlags: { anneau_classifie: 'verrou' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Classer comme PORTE (un seuil ouvrable)",
+        req: { flag: { key: 'contact_etabli', equals: true } },
+        outcome: {
+          log: "Une porte. Vers où ? Tu ne sais pas. Mais une porte se franchit. Élie prépare déjà le matériel.",
+          setFlags: { anneau_classifie: 'porte' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ---- Épisode 3 : L'AUTRE CÔTÉ (2 scènes vers les 5 fins) ----
+
+  {
+    id: 'chron_anneau_ep3_seuil',
+    chronicleEpisode: { chronicle: 'anneau_trace', episode: 2 },
+    text: (flags) => {
+      const elie_in_danger = flags.elie_obsession >= 3;
+      let base = `L'ellipse est complète. L'anneau ne bouge plus depuis trois jours. Il est désormais fixe au centre du tracé qu'il a dessiné. Tu sens que c'est le moment.`;
+      if (elie_in_danger) {
+        base += ` Élie n'a pas dormi depuis huit jours. Elle parle à l'anneau. L'anneau ne répond pas, mais elle continue. Tu dois agir.`;
+      } else {
+        base += ` Élie te regarde et attend ton signal.`;
+      }
+      return base;
+    },
+    choices: [
+      {
+        label: "Observer encore, sans toucher. Repartir avec les données.",
+        outcome: {
+          log: "Vous restez trois jours encore, à mesurer, à compiler. Puis vous remontez à bord. L'anneau est encore là, immobile. Élie regarde par le hublot pendant tout le décollage. Elle ne dit rien.",
+          setFlags: { compas_obtenu: true },
+          loot: { cristal: 30, datacubes: 25 },
+          item: 'compas_cosmique',
+          endChronicle: 'science_pure'
+        }
+      },
+      {
+        label: "Laisser Élie rester. Embarquer sans elle.",
+        req: { flag: { key: 'elie_obsession', min: 2 } },
+        outcome: {
+          log: "Tu lui poses la main sur l'épaule. Elle te sourit pour la première fois depuis des semaines. « Je vais bien. Pars. » Tu pars. Elle reste, avec son anneau, dans le silence du désert. Tu emportes ses dernières notes — et un objet qu'elle t'a glissé dans la poche.",
+          setFlags: { compas_obtenu: true, elie_status: 'obsedee' },
+          item: 'compas_cosmique',
+          loot: { datacubes: 15 },
+          endChronicle: 'obsession_elie'
+        }
+      },
+      {
+        label: "Si PORTE : entrer dans l'anneau",
+        req: { flag: { key: 'anneau_classifie', equals: 'porte' } },
+        outcome: {
+          log: "Tu passes. Élie crie. Tu ne sais plus si tu es passé ou si quelque chose t'a remplacé. Quand tu te retournes, l'anneau est tombé. Il est sur le sable, métal et silence. Élie ne te regarde plus de la même manière. Tu repars avec ce que tu es maintenant.",
+          setFlags: { compas_obtenu: true },
+          item: 'compas_cosmique',
+          loot: { datacubes: 40, cristal: 50 },
+          morale: -5,
+          endChronicle: 'porte_ouverte'
+        }
+      },
+      {
+        label: "Si VERROU : briser l'anneau",
+        req: { flag: { key: 'anneau_classifie', equals: 'verrou' } },
+        outcome: {
+          log: "Vous utilisez vos charges. L'anneau résiste, puis cède d'un coup. Pas de bruit, juste l'absence soudaine. Et un courant froid qui passe à travers vous. Élie regarde autour d'elle : « Quelque chose est sorti. Quelque chose est ici, maintenant. »",
+          setFlags: { compas_obtenu: false },
+          loot: { datacubes: 30, cristal: 40 },
+          morale: -3,
+          endChronicle: 'verrou_brise'
+        }
+      },
+      {
+        label: "Tout détruire et fuir sans rien emporter",
+        outcome: {
+          log: "Tu détruis ton matériel d'observation. Tu effaces les données. Vous repartez les mains vides. Élie te regarde longuement. Puis elle te dit : « Merci. » Vous ne reparlerez jamais de l'anneau.",
+          setFlags: {},
+          endChronicle: 'silence_respecte'
         }
       }
     ]

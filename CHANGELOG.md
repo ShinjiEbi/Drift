@@ -1,77 +1,105 @@
 # CHANGELOG
 
-## 0.26.1 — Polish notifications + tier 2 visibles + synthétiseur
+## 0.27.0 — L'Anneau Tracé (4ème chronique)
 
-Cycle de finition qui boucle proprement les deux features récentes
-(notifications 0.26 + modules tier 2 0.25) et débloque le module
-synthétiseur quantique qui attendait depuis 0.25.
+Première chronique narrative depuis 0.24. Ton volontairement très
+différent des 3 précédentes : pas d'ennemi, pas de PNJ vivants à
+sauver. Juste une **présence géométrique inexplicable** qui défie la
+physique. Plus contemplatif, plus inquiétant.
 
-### 5 nouveaux hooks notifs
+### Pitch
 
-- **Blueprint découvert** (`success`) : "Schéma découvert : Module de stockage"
-- **Séquelle gagnée** (`warn`) : "Voronova : séquelle permanente — Cécité partielle"
-- **Réputation seuil** (`success`/`warn`/`critical` selon sens) : "Pèlerins est désormais Ami"
-- **Événement de colonie** (`warn`) : "Banquet de fortune" (notif en plus de la modale)
-- **Capacité saturée** (`warn`) : "Stocks saturés : Métal" — avec anti-spam intelligent
+Un cercle parfait, immobile, qui change de place quand on ne le
+regarde pas. Ne réagit ni à la chaleur, ni au radar, ni au son.
 
-L'anti-spam capacité saturée : dès qu'on atteint le plafond avec une
-production positive, une notif est envoyée. Plus aucune notification
-de saturation pour cette ressource pendant 12h-jeu, sauf si le stock
-redescend sous 90% du cap puis resature (cycle complet).
+Selon les choix du joueur, le récit révèle l'anneau comme :
+- **Instrument** : un compas cosmique, partie d'un système plus vaste
+  (3 anneaux dans la galaxie convergent vers un point unique)
+- **Verrou** : quelque chose est emprisonné de l'autre côté
+- **Porte** : un seuil ouvrable, mais on ne sait pas vers où
 
-### Modules tier 2 enfin visibles dans l'UI
+### Structure
 
-- **Badge "TIER 2"** : pastille ambrée dans le titre du module
-- **Verrouillage tech visuel** : `🔒 Requiert : Confinement à fusion` à la
-  place du bouton Construire
-- **Support coût `datacubes_alien`** : affichage correct du coût en
-  datacubes alien (mémoire cristalline) avec lecture depuis `S.alienDatacubes`
+- **Apparition** : planètes avec atmosphere `anormale` ou `exotique`,
+  biome varié (désert, glace, volcanique, jungle, exotique, astéroïde)
+- **Spawn** : 30%
+- **3 épisodes** :
+  1. La géométrie (3 scènes : approche, observation, motif)
+  2. Les régularités (3 scènes : retour, écho, classification)
+  3. L'autre côté (1 scène finale avec 5 choix vers les 5 fins)
+- **7 scènes spécialisées** au total
+- **5 fins distinctes** :
+  - `science_pure` : observation pure, ramène le compas cosmique
+  - `obsession_elie` : Élie reste, on emporte ses notes et le compas
+  - `porte_ouverte` : franchissement, quelque chose passe (sens incertain)
+  - `verrou_brise` : destruction, quelque chose se libère
+  - `silence_respecte` : refus de comprendre, départ les mains vides
 
-### Synthétiseur quantique opérationnel
+### Personnage récurrent
 
-Quand tu construis le module (débloqué par `tech_stockage_quantique`),
-un bandeau ambré apparaît sous la liste des modules. Bouton "Convertir"
-→ modale dédiée avec liste des conversions.
+**Dr. Élie Calvet** (39 ans, physicienne théoricienne) — voix précise,
+inquiète. Embarquée comme spécialiste. Peut :
+- Devenir alliée permanente (si on l'embarque dans le retour)
+- Mourir (rare, dans les pires fins)
+- Sombrer dans l'obsession (si elie_obsession ≥ 3 à la fin)
 
-**Recettes disponibles** :
-- Niveau 1 (3 recettes) :
-  - 20 Métal → 10 Cristal (−5 énergie)
-  - 20 Cristal → 30 Métal (−5 énergie)
-  - 15 Biomasse → 25 Métal (−8 énergie)
-- Niveau 2 (3 recettes en plus) :
-  - 25 Biomasse → 5 Datacubes (−12 énergie)
-  - 5 Datacubes → 60 Cristal (−10 énergie)
-  - 20 Cristal → 25 Biomasse (−10 énergie)
+L'obsession augmente quand le joueur appuie sur les choix scientifiques
+extrêmes (transe d'observation, communication active avec l'anneau).
 
-Chaque conversion respecte le cap de stockage. Recettes désactivées
-visuellement si tu n'as pas les ressources ou l'énergie.
+### Nouveaux items
 
-### Son discret pour notifs critiques
+- **Compas cosmique** (`compas_cosmique`) : aiguille qui pointe toujours
+  vers le même point de la galaxie. Récupéré dans les fins favorables
+  de l'Anneau. Mécaniquement présent dans l'inventaire — usage futur
+  potentiel pour débloquer d'autres anomalies.
+- **Fragment d'anneau** (`fragment_anneau`) : éclat de matière dont la
+  densité change selon l'observation. Récupéré dans la scène "Écho" si
+  on a trouvé l'ancien anneau au préalable.
+- **Origine `anomalie`** ajoutée à `ITEM_ORIGINS` (couleur violette
+  `#a26fbb`).
 
-Web Audio API natif (pas de fichier audio à charger) :
-- **Critique** : 2 bips sci-fi (660Hz → 440Hz, courts et descendants)
-- **Warn** : 1 bip aigu doux (880Hz, très court)
-- **Info / Success** : silencieux
+### Mécaniques narratives spécifiques
 
-Le son ne joue que si l'utilisateur a déjà interagi avec la page
-(politique navigateur). Aucune permission supplémentaire requise.
+- **Flag `observations`** (0-5) : compte les observations rigoureuses,
+  influence subtilement les textes
+- **Flag `elie_obsession`** (0-3) : seuil pour fin "obsession"
+- **Flag `anneau_classifie`** : `instrument` | `verrou` | `porte`
+  — détermine quels choix de fin sont disponibles
+- **Flag `autre_anneau`** : débloque la scène du fragment ancien
+- **Flag `gardien_eveille`** : modifie les intros et textes des
+  épisodes suivants
+- **Flag `contact_etabli`** : prérequis pour classer "porte"
 
 ### Tests
 
-✓ 5 nouveaux hooks notifs validés en runtime
-✓ Anti-spam capacité saturée : 1 notif par épisode de saturation
-✓ Modules tier 2 affichent bien le badge et le verrouillage tech
-✓ Synthétiseur : modale fonctionnelle, conversions appliquées, cap respecté
-✓ 1440 ticks (24h jeu) sans erreur
-✓ Tous les modules JS syntaxiquement valides
+✓ 7 scènes, tous les liens `next` et `endChronicle` valides
+✓ Tous les items référencés (compas, fragment) existent dans le catalog
+✓ `req.flag` corrigés (utilise `equals:` et `min:`, comme le moteur)
+✓ Items utilisent `item:` (singulier), pas `addItem`
+✓ Parcours complet simulé fonctionne (3 épisodes, fin atteinte)
+✓ 1440 ticks (24h) sans erreur — pas de régression
+✓ Compatibilité saves : aucune migration nécessaire
 
-### Statut hooks notifs
+### Statut chroniques
 
-Le système couvre maintenant **18 événements** :
-- 5 ajoutés en 0.26.1 (blueprint, séquelle, réputation, événement, cap)
-- 13 préexistants en 0.26.0 (construction, recherche, formation, soin,
-  mort, candidat, recrutement, retour expé, incident, 3 hooks chroniques)
+| ID | Nom | Type cible | Spawn | Scènes | Fins |
+|---|---|---|---|---|---|
+| pulsar_silencieux | Le Pulsar Silencieux | ruines humaines | 35% | 8 | 5 |
+| sanctuaire_vert | Le Sanctuaire Vert | ruines alien_a | 30% | 12 | 5 |
+| couvee_dormante | La Couvée Dormante | ruines alien_b | 45% | 8 | 6 |
+| **anneau_trace** | **L'Anneau Tracé** | **atm. anormale/exotique** | **30%** | **7** | **5** |
 
+**Total** : 4 chroniques, 35 scènes spécialisées, 21 fins distinctes,
+10 personnages incarnés.
+
+### À venir
+
+- `veilleurs_beth` : 5ème chronique (civilisation humaine perdue,
+  alternative aux ruines humaines)
+- `marche_etrange` : 6ème chronique (fusion de cultures alien)
+- Combat narratif scénarisé (0.28)
+
+## 0.26.1 — Polish notifications + tier 2 visibles + synthétiseur
 ## 0.26.0 — Système de notifications + push natives
 ## 0.25.0 — Rééquilibrage économique + 6 modules tier 2
 ## 0.24.2 — Fix critique horloge + 3 passes hardening

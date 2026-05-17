@@ -358,9 +358,51 @@ function handleNotifAction(notifId) {
 
 // Installe les handlers une seule fois (au boot)
 let _notifHandlersInstalled = false;
+
+// 0.27.1 : DIAGNOSTIC — triple-clic sur la cloche → injecte une notif test
+// et affiche l'état du système. À retirer une fois le problème résolu.
+function runDiagnostic() {
+  const out = [];
+  out.push('=== DIAGNOSTIC NOTIFS ===');
+  out.push(`Version : ${VERSION}`);
+  out.push(`S.notifications : ${Array.isArray(S?.notifications) ? 'array(' + S.notifications.length + ')' : typeof S?.notifications}`);
+  out.push(`#notifBell : ${!!$('#notifBell')}`);
+  out.push(`#bellBadge : ${!!$('#bellBadge')}`);
+  out.push(`#notifPanel : ${!!$('#notifPanel')}`);
+  out.push(`Handlers installés : ${_notifHandlersInstalled}`);
+  out.push(`__notifsRefresh : ${typeof window.__notifsRefresh}`);
+  out.push(`Permission : ${typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'}`);
+  out.push(`Push enabled : ${isPushEnabled()}`);
+  // Injecter une notif test directement dans le state
+  try {
+    if (!S.notifications) S.notifications = [];
+    const testNotif = {
+      id: 'diag_' + Date.now(),
+      timestamp: Date.now(),
+      gameMin: S.meta?.gameMin || 0,
+      type: 'event',
+      severity: 'warn',
+      title: '⚙ NOTIF TEST DIAGNOSTIC',
+      body: 'Si tu vois cette notif dans le panneau, le système fonctionne. Ouvre la cloche pour vérifier.',
+      read: false,
+      dismissed: false
+    };
+    S.notifications.unshift(testNotif);
+    if (window.__notifsRefresh) window.__notifsRefresh();
+    out.push('Injection : OK (total = ' + S.notifications.length + ')');
+  } catch (e) {
+    out.push('Injection : ERREUR — ' + e.message);
+  }
+  alert(out.join('\n'));
+}
+
 export function setupNotifHandlers() {
   if (_notifHandlersInstalled) return;
   _notifHandlersInstalled = true;
+
+  // 0.27.1 : triple-tap sur la cloche → diagnostic
+  let tapCount = 0;
+  let tapTimer = null;
 
   const bell = $('#notifBell');
   const closeBtn = $('#notifPanelClose');
@@ -372,6 +414,15 @@ export function setupNotifHandlers() {
   const list = $('#notifList');
 
   if (bell) bell.addEventListener('click', () => {
+    // 0.27.1 : triple-tap rapide → diagnostic
+    tapCount++;
+    if (tapTimer) clearTimeout(tapTimer);
+    tapTimer = setTimeout(() => { tapCount = 0; }, 1500);
+    if (tapCount >= 3) {
+      tapCount = 0;
+      runDiagnostic();
+      return;
+    }
     openNotifPanel();
   });
   if (closeBtn) closeBtn.addEventListener('click', closeNotifPanel);

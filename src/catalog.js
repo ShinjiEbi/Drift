@@ -393,7 +393,8 @@ export const ITEM_ORIGINS = {
   alien_a:  { nom: 'Alien-A',    color: '#b09bd0' },
   alien_b:  { nom: 'Alien-B',    color: '#7a9b6e' },
   mixte:    { nom: 'Mixte',      color: '#5a8ba8' },
-  exotique: { nom: 'Exotique',   color: '#e9b76a' }
+  exotique: { nom: 'Exotique',   color: '#e9b76a' },
+  anomalie: { nom: 'Anomalie',   color: '#a26fbb' }  // 0.27 — items uniques de chroniques
 };
 
 
@@ -494,6 +495,18 @@ export const ITEMS = {
     nom: "Arme à résonance",
     type: 'weapon', origin: 'alien_a',
     desc: "Arme énergétique cristalline. Brise les structures alien à distance."
+  },
+
+  // ===== Items uniques de chroniques (0.27) =====
+  compas_cosmique: {
+    nom: "Compas cosmique",
+    type: 'tool', origin: 'anomalie',
+    desc: "Aiguille immobile qui pointe vers un point précis de la galaxie. Récupéré au cœur de l'Anneau Tracé. Personne ne sait ce qu'elle désigne — mais elle pointe toujours dans la même direction."
+  },
+  fragment_anneau: {
+    nom: "Fragment d'anneau",
+    type: 'tool', origin: 'anomalie',
+    desc: "Éclat de matière non-identifiée. Sa densité change selon l'observation. Inutilisable comme matériau, fascinant à étudier."
   }
 };
 
