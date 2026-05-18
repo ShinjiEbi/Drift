@@ -56,12 +56,20 @@ export const MODULES = {
     nom: 'Hydroponie',
     desc: "Bacs scellés, lampes UV, mousses comestibles. L'odeur s'accroche aux vêtements.",
     maxLevel: 6,
-    cost: l => ({ metal: Math.round(60*triCost(l)), cristal: Math.round(30*triCost(l)), biomasse: 10*l }),
+    // 0.27.2 : niv 1 gratuit en biomasse (les graines suffisent). Niv 2+ : 10*(l-1) biomasse.
+    cost: l => ({
+      metal: Math.round(60*triCost(l)),
+      cristal: Math.round(30*triCost(l)),
+      biomasse: l > 1 ? 10*(l-1) : 0
+    }),
     time: l => 7*l,
     prereq: () => ({ commandement: 1 }),
-    prod: l => ({ biomasse: Math.round(4*l * stepBonus(l)) }),
+    // 0.27.2 : prod doublée (8*l au lieu de 4*l) pour qu'hydroponie niv 1
+    // soit autosuffisante même sans staff affecté (sinon JOB_BASE_FRACTION 30%
+    // la rend déficitaire vs upkeep habitat).
+    prod: l => ({ biomasse: Math.round(8*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 3*l }),
-    effect: l => `+${Math.round(4*l * stepBonus(l))} biomasse/min · −${3*l} énergie`
+    effect: l => `+${Math.round(8*l * stepBonus(l))} biomasse/min · −${3*l} énergie`
   },
   habitat: {
     nom: 'Habitat',
@@ -153,6 +161,33 @@ export const MODULES = {
     upkeep: l => ({ energie: 2*l, biomasse: 1*l }),
     flag: 'soins',
     effect: l => `${2*l} lits · diagnostics et traitements jusqu'au palier ${l}`
+  },
+
+  // 0.29 — Bâtiment diplomatique
+  ambassade: {
+    nom: 'Ambassade',
+    desc: "Salle des Accords, traducteurs cristallins, archives protocolaires. Le seuil où les factions s'écoutent vraiment.",
+    maxLevel: 5,
+    cost: l => ({ metal: Math.round(150*triCost(l)), cristal: Math.round(120*triCost(l)), biomasse: Math.round(30*l) }),
+    time: l => 14*l,
+    prereq: () => ({ commandement: 2, habitat: 1 }),
+    upkeep: l => ({ energie: 3*l, biomasse: 1*l }),
+    flag: 'diplomatie',
+    // Effets par niveau :
+    //   niv 1 : débloque diplomatie, 1 mission // (déjà existant comme tickDiplomaticMissions)
+    //   niv 2 : 2 missions //, +10% bonus rep
+    //   niv 3 : 3 missions, débloque construction Émissaire
+    //   niv 4 : 4 missions, débloque routes commerciales (préparé 0.30)
+    //   niv 5 : 5 missions, débloque alliances formelles (préparé 0.30+)
+    effect: l => {
+      const features = [];
+      features.push(`${l} mission(s) diplomatique(s) //`);
+      if (l >= 2) features.push(`+${(l-1)*10}% rep`);
+      if (l >= 3) features.push("Émissaire");
+      if (l >= 4) features.push("routes commerciales");
+      if (l >= 5) features.push("alliances formelles");
+      return features.join(' · ');
+    }
   },
 
   // ============================================================
@@ -328,6 +363,12 @@ export const MODULE_JOBS = {
     { role: 'qualite',     req: { skill: { key: 'medecine', min: 4 } }, label: 'Spécialiste' },
     { role: 'logistique',  req: {}, label: 'Aide-soignant' },
     { role: 'support',     req: { trait: 'medic_ne' }, label: 'Médecin de campagne' }
+  ],
+  // 0.29 — postes diplomatiques
+  ambassade: [
+    { role: 'production',  req: { skill: { key: 'leadership', min: 2 } }, label: 'Ambassadeur' },
+    { role: 'qualite',     req: { skill: { key: 'leadership', min: 4 } }, label: 'Plénipotentiaire' },
+    { role: 'support',     req: { skill: { key: 'science', min: 1 } }, label: 'Attaché culturel' }
   ]
 };
 
@@ -346,7 +387,8 @@ export const MODULE_JOBS = {
 export const VESSELS = {
   vedette: {
     nom: 'Vedette d\'exploration',
-    places: 3, speed: 0.7, cargo: 30, equipSlots: 2, fuelPerPc: 8,
+    // 0.28 : cargo ×2 (était 30)
+    places: 3, speed: 0.7, cargo: 60, equipSlots: 2, fuelPerPc: 8,
     hangarReq: 1,
     cost: { metal: 250, cristal: 120, energie: 50 },
     buildHours: 24,
@@ -354,7 +396,8 @@ export const VESSELS = {
   },
   navette: {
     nom: 'Navette polyvalente',
-    places: 4, speed: 1.0, cargo: 60, equipSlots: 4, fuelPerPc: 12,
+    // 0.28 : cargo ×2 (était 60)
+    places: 4, speed: 1.0, cargo: 120, equipSlots: 4, fuelPerPc: 12,
     hangarReq: 2,
     cost: { metal: 450, cristal: 200, energie: 80 },
     buildHours: 36,
@@ -362,7 +405,8 @@ export const VESSELS = {
   },
   cargo: {
     nom: 'Cargo lourd',
-    places: 6, speed: 1.4, cargo: 140, equipSlots: 6, fuelPerPc: 18,
+    // 0.28 : cargo ×2.5 (était 140) — le spécialiste mérite son écart
+    places: 6, speed: 1.4, cargo: 350, equipSlots: 6, fuelPerPc: 18,
     hangarReq: 3,
     cost: { metal: 700, cristal: 280, energie: 120 },
     buildHours: 48,
@@ -370,11 +414,26 @@ export const VESSELS = {
   },
   cuirasse: {
     nom: 'Vaisseau cuirassé',
-    places: 4, speed: 1.2, cargo: 50, equipSlots: 8, fuelPerPc: 22,
+    // 0.28 : cargo ×2 (était 50)
+    places: 4, speed: 1.2, cargo: 100, equipSlots: 8, fuelPerPc: 22,
     hangarReq: 4,
     cost: { metal: 900, cristal: 400, energie: 150, datacubes: 20 },
     buildHours: 60,
     flavor: "Plaques de blindage stratifiées, deux tourelles. Pour les zones où la diplomatie échoue."
+  },
+  // 0.29 — Vaisseau diplomatique
+  emissaire: {
+    nom: 'Émissaire',
+    places: 4, speed: 1.2, cargo: 80, equipSlots: 4, fuelPerPc: 14,
+    hangarReq: 2,
+    cost: { metal: 600, cristal: 280, energie: 100, datacubes: 10 },
+    buildHours: 42,
+    // 0.29 : prérequis particuliers — Ambassade niv 3 + tech diplomatie cosmopolite
+    requireModule: { ambassade: 3 },
+    requireTech: 'tech_diplomatie_cosmopolite',
+    // Spécialité : bonus de réputation sur missions diplomatiques (×1.5)
+    diplomaticBonus: 1.5,
+    flavor: "Coque ornée, salon de réception, traducteurs cristallins. Le visiteur arrive en partenaire, pas en visiteur."
   }
 };
 
@@ -507,6 +566,18 @@ export const ITEMS = {
     nom: "Fragment d'anneau",
     type: 'tool', origin: 'anomalie',
     desc: "Éclat de matière non-identifiée. Sa densité change selon l'observation. Inutilisable comme matériau, fascinant à étudier."
+  },
+
+  // ===== Items uniques de chroniques (0.27.4) =====
+  disque_veilleurs: {
+    nom: "Disque des Veilleurs",
+    type: 'tool', origin: 'humain',
+    desc: "Disque mémoire archivique de la colonie Beth. Contient les vraies archives — manifeste d'évacuation, plans techniques de l'orbiteur Beth-3, journaux des derniers Anciens. Lourd à porter."
+  },
+  sceau_marche: {
+    nom: "Sceau du Marché",
+    type: 'tool', origin: 'mixte',
+    desc: "Médaillon d'opale gravé de motifs entrelacés — humains, cristallins, organiques. Sert de laissez-passer pour les marchés clandestins de la galaxie. Personne ne sait combien il en existe ni qui les distribue vraiment."
   }
 };
 
@@ -763,7 +834,27 @@ export const TECH_TREE = {
     cost:{ datacubes:150, datacubes_alien:15, time: 840 },
     prereq:{ tech:['tech_principes_xeno', 'tech_voilure_cristal'] },
     effects:{ unlockModule: 'memoire_cristalline' },
-    desc:"Stockage de données dans la trame cristalline. Débloque le module Mémoire cristalline (cap datacubes + vitesse recherche)." }
+    desc:"Stockage de données dans la trame cristalline. Débloque le module Mémoire cristalline (cap datacubes + vitesse recherche)." },
+
+  // ============ 0.29 — TECHS DIPLOMATIQUES (branche bio, axe leadership) ============
+
+  tech_diplomatie_cosmopolite: { branch:'bio', tier:2, nom:"Diplomatie cosmopolite",
+    cost:{ datacubes:100, time: 600 },
+    prereq:{ tech:['tech_hydroponie_avancee'] },
+    effects:{ unlockVessel: 'emissaire', diplomaticBonus: 1.10 },
+    desc:"Protocoles de premier contact, traduction culturelle. Débloque la construction de l'Émissaire. +10% gains de réputation diplomatique." },
+
+  tech_commerce_interstellaire: { branch:'bio', tier:3, nom:"Commerce interstellaire",
+    cost:{ datacubes:140, time: 720 },
+    prereq:{ tech:['tech_diplomatie_cosmopolite'] },
+    effects:{ unlockTradeRoutes: true, diplomaticBonus: 1.20 },
+    desc:"Conventions de transit, escortes croisées. Prérequis aux routes commerciales (Ambassade niv 4). +20% gains rep." },
+
+  tech_traites_formels: { branch:'bio', tier:4, nom:"Traités formels",
+    cost:{ datacubes:180, time: 900 },
+    prereq:{ tech:['tech_commerce_interstellaire'] },
+    effects:{ unlockAlliances: true, diplomaticBonus: 1.30 },
+    desc:"Droit interstellaire, jurisprudence multi-espèces. Permet de nouer des alliances formelles (Ambassade niv 5). +30% gains rep." }
 };
 
 

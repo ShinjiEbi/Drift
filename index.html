@@ -48,38 +48,8 @@
       <b id="gameTime">J1 · 00:00</b>
       <span id="realTime">session 0:00</span>
     </div>
-    <button id="notifBell" class="notif-bell" title="Notifications" aria-label="Notifications">
-      <span class="bell-icon">🔔</span>
-      <span class="bell-badge" id="bellBadge" hidden>0</span>
-    </button>
     <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil">⤓</button>
   </header>
-
-  <!-- 0.26 — Panneau de notifications coulissant (caché par défaut) -->
-  <div class="notif-panel-overlay" id="notifPanelOverlay" hidden></div>
-  <aside class="notif-panel" id="notifPanel" hidden aria-label="Notifications">
-    <header class="np-header">
-      <h2>Notifications</h2>
-      <button class="np-close" id="notifPanelClose" aria-label="Fermer">✕</button>
-    </header>
-    <div class="np-filters" id="notifFilters">
-      <button class="np-filter active" data-filter="all">Toutes</button>
-      <button class="np-filter" data-filter="event">Événements</button>
-      <button class="np-filter" data-filter="crew">Équipage</button>
-      <button class="np-filter" data-filter="expedition">Expéd.</button>
-      <button class="np-filter" data-filter="research">Recherche</button>
-      <button class="np-filter" data-filter="chronicle">Chroniques</button>
-      <button class="np-filter" data-filter="economy">Économie</button>
-    </div>
-    <div class="np-actions">
-      <button id="notifMarkAllRead" class="np-action">Tout marquer lu</button>
-      <button id="notifClearAll" class="np-action danger">Tout effacer</button>
-      <button id="notifPushToggle" class="np-action" hidden>Activer les push</button>
-    </div>
-    <div class="np-list" id="notifList">
-      <!-- Liste générée dynamiquement -->
-    </div>
-  </aside>
 
   <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
   <div class="res-bar" id="resBar">
@@ -314,6 +284,7 @@
 
   <footer class="actions">
     <button id="btnRename">Renommer</button>
+    <button id="btnPushToggle" title="Recevoir une notification système quand un événement se produit pendant que l'app est en arrière-plan">🔕 Notifs téléphone</button>
     <button id="btnExport">Exporter save</button>
     <button id="btnImport">Importer</button>
     <button id="btnReset">Recommencer</button>

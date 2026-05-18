@@ -14,11 +14,8 @@ import {
 } from './catalog.js';
 import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import {
-  NOTIF_TYPES, NOTIF_SEVERITIES,
-  getNotifs, getNotifPermission, requestNotifPermission,
-  isPushEnabled, setPushEnabled,
-  markNotifRead, markAllNotifsRead, dismissNotif, dismissAllNotifs,
-  unreadNotifsCount
+  getNotifPermission, requestNotifPermission,
+  isPushEnabled, setPushEnabled
 } from './notifications.js';
 import {
   S, crewCap, capOf, computeRates, canBuild, startBuild, crewUsage, aliveCrew,
@@ -76,8 +73,6 @@ export function render() {
   renderArcs();
   renderDiplomacy();
   renderJournal();
-  // 0.26 : maj cloche notifs
-  renderNotifBell();
 }
 
 function renderHeader() {
@@ -115,12 +110,21 @@ function renderResBar() {
     if (!cell || !val) continue;
     const cur = S.res[k] || 0;
     const cap = capOf(k);
-    val.textContent = fmt(cur);
-    cell.classList.remove('low', 'full');
-    if (cur >= cap * 0.95) cell.classList.add('full');
+    const over = (S.overflow && S.overflow[k]) || 0;  // 0.28
+    // Affichage : valeur normale + suffixe "+X" si overflow
+    if (over > 0) {
+      val.innerHTML = `${fmt(cur)}<span class="rb-overflow">+${fmt(over)}</span>`;
+    } else {
+      val.textContent = fmt(cur);
+    }
+    cell.classList.remove('low', 'full', 'overflow');
+    if (over > 0) cell.classList.add('overflow');
+    else if (cur >= cap * 0.95) cell.classList.add('full');
     else if (cur < cap * 0.1) cell.classList.add('low');
-    // Tooltip avec capacité et taux
-    cell.title = `${RES_LABELS[k]} : ${fmt(cur)} / ${fmt(cap)}`;
+    // Tooltip avec capacité, taux et overflow
+    let tip = `${RES_LABELS[k]} : ${fmt(cur)} / ${fmt(cap)}`;
+    if (over > 0) tip += ` · surplus ${fmt(over)} (sera réabsorbé)`;
+    cell.title = tip;
   }
   // Population
   const pop = $('#rbPop');
@@ -171,6 +175,44 @@ function collectAlerts() {
   if (wounded.length > 0) {
     alerts.push({ text: `${wounded.length} blessé${wounded.length > 1 ? 's' : ''} grave${wounded.length > 1 ? 's' : ''} sans soin`, critical: true, action: 'medical' });
   }
+  // 0.27.2 — Biomasse critique sans hydroponie (early game alert)
+  const hydroLevel = S.modules?.hydroponie?.level || 0;
+  const biomasse = S.res?.biomasse || 0;
+  const biomasseCap = capOf('biomasse');
+  if (hydroLevel === 0 && biomasse < biomasseCap * 0.3) {
+    alerts.push({
+      text: biomasse < 20
+        ? `Biomasse critique (${biomasse}). Construis une hydroponie d'urgence`
+        : `Biomasse basse (${biomasse}). Pense à construire une hydroponie`,
+      critical: biomasse < 20,
+      action: 'build_hydro'
+    });
+  }
+  // 0.28 — Effets temporaires actifs (buffs/debuffs)
+  if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
+    const now = S.meta?.gameMin || 0;
+    const active = S.activeBuffs.filter(b => b.expiresAt > now);
+    if (active.length > 0) {
+      const minutesLeft = Math.min(...active.map(b => b.expiresAt - now));
+      const hoursLeft = Math.round(minutesLeft / 60);
+      const negCount = active.filter(b => b.value && b.value < 1).length;
+      const text = active.length === 1
+        ? `${active[0].label || 'Effet actif'} · ${hoursLeft}h`
+        : `${active.length} effets actifs · prochain ${hoursLeft}h`;
+      alerts.push({ text, critical: negCount > 0, action: 'effects' });
+    }
+  }
+
+  // 0.28 — Modules désactivés temporairement
+  const disabled = Object.keys(S.modules || {}).filter(id => {
+    const m = S.modules[id];
+    return m?.disabledUntil && m.disabledUntil > (S.meta?.gameMin || 0);
+  });
+  if (disabled.length > 0) {
+    const names = disabled.map(id => MODULES[id]?.nom || id).join(', ');
+    alerts.push({ text: `Modules hors service : ${names}`, critical: true, action: 'modules' });
+  }
+
   // Colons libres sans poste
   const free = (S.crew || []).filter(m => m.statut === 'libre');
   if (free.length > 0) {
@@ -181,6 +223,20 @@ function collectAlerts() {
   if (fullRes.length > 0) {
     const labels = fullRes.map(k => RES_LABELS[k]).join(', ');
     alerts.push({ text: `Stocks saturés : ${labels}`, critical: false, action: 'stocks' });
+  }
+  // 0.28 — Buffs/debuffs actifs
+  if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
+    const now = S.meta?.gameMin || 0;
+    const active = S.activeBuffs.filter(b => b.expiresAt > now);
+    for (const b of active) {
+      const remaining = Math.max(0, b.expiresAt - now);
+      const sign = b.type === 'prodMult' && b.value < 1 ? 'critical' : false;
+      alerts.push({
+        text: `${b.label || 'Effet en cours'} (${Math.round(remaining/60)}h restantes)`,
+        critical: sign,
+        action: null
+      });
+    }
   }
   return alerts;
 }
@@ -213,297 +269,73 @@ function showAlertsModal(alerts) {
   });
 }
 
+
 // ============================================================
-//   0.26 — Notifications : cloche + panneau coulissant
+//   0.27.3 — Toggle push uniquement (panneau notifs retiré)
 // ============================================================
+// L'ancienne cloche/panneau de notifications a été retirée car redondante
+// avec le journal de bord. Il reste juste un bouton dans le footer pour
+// activer/désactiver les notifications système (push natives quand l'app
+// est en arrière-plan).
 
-// État local : filtre actif dans le panneau
-let _notifFilter = 'all';
-
-// Repaint la cloche (badge + état)
-export function renderNotifBell() {
-  const bell = $('#notifBell');
-  const badge = $('#bellBadge');
-  if (!bell || !badge) return;
-  const count = unreadNotifsCount();
-  if (count > 0) {
-    bell.classList.add('has-unread');
-    badge.hidden = false;
-    badge.textContent = count > 99 ? '99+' : String(count);
-  } else {
-    bell.classList.remove('has-unread');
-    badge.hidden = true;
-  }
-}
-
-// Formate un timestamp gameMin en "J47 14:23"
-function fmtGameTime(gameMin) {
-  const day = Math.floor(gameMin / (24*60)) + 1;
-  const h = Math.floor((gameMin % (24*60)) / 60);
-  const m = Math.floor(gameMin % 60);
-  return `J${day} ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-}
-
-// Repaint la liste des notifs dans le panneau (si ouvert)
-function renderNotifList() {
-  const list = $('#notifList');
-  if (!list) return;
-  const notifs = _notifFilter === 'all' ? getNotifs() : getNotifs(_notifFilter);
-  if (notifs.length === 0) {
-    list.innerHTML = '<div class="np-empty">Aucune notification.</div>';
-    return;
-  }
-  list.innerHTML = notifs.map(n => {
-    const typeDef = NOTIF_TYPES[n.type] || { label: n.type, icon: '•' };
-    const unread = !n.read ? 'unread' : '';
-    const sev = `severity-${n.severity}`;
-    const meta = `${typeDef.label} · ${fmtGameTime(n.gameMin)}`;
-    const body = n.body ? `<div class="np-body">${escapeHTML(n.body)}</div>` : '';
-    const actionBtn = n.action
-      ? `<button class="np-btn np-btn-primary" data-notif-action="${n.id}">${escapeHTML(n.action.label || 'Voir')}</button>`
-      : '';
-    return `<div class="np-item ${unread} ${sev}" data-notif-id="${n.id}">
-      <span class="np-icon">${typeDef.icon}</span>
-      <div class="np-content">
-        <div class="np-meta">${meta}</div>
-        <div class="np-title">${escapeHTML(n.title)}</div>
-        ${body}
-        <div class="np-buttons">
-          ${actionBtn}
-          ${!n.read ? `<button class="np-btn" data-notif-read="${n.id}">Marquer lu</button>` : ''}
-          <button class="np-btn dismiss" data-notif-dismiss="${n.id}">Effacer</button>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-// Échappe le HTML basique (titres/bodies de notif peuvent contenir des caractères spéciaux)
-function escapeHTML(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-// Ouvre le panneau et marque comme vus (mais pas lus — l'utilisateur doit cliquer)
-function openNotifPanel() {
-  const panel = $('#notifPanel');
-  const overlay = $('#notifPanelOverlay');
-  if (!panel || !overlay) return;
-  panel.hidden = false;
-  overlay.hidden = false;
-  renderNotifList();
-  // Mettre à jour l'état du bouton push toggle si présent
-  renderPushToggle();
-}
-
-// Ferme le panneau
-function closeNotifPanel() {
-  const panel = $('#notifPanel');
-  const overlay = $('#notifPanelOverlay');
-  if (!panel || !overlay) return;
-  panel.hidden = true;
-  overlay.hidden = true;
-}
-
-// Affiche/masque le bouton "Activer les push" selon le support et l'état
-function renderPushToggle() {
-  const btn = $('#notifPushToggle');
-  if (!btn) return;
-  const perm = getNotifPermission();
-  if (perm === 'unsupported') {
-    btn.hidden = true;
-    return;
-  }
-  btn.hidden = false;
-  if (perm === 'granted' && isPushEnabled()) {
-    btn.textContent = 'Push activé ✓';
-    btn.classList.add('active');
-  } else if (perm === 'granted') {
-    btn.textContent = 'Activer les push';
-    btn.classList.remove('active');
-  } else if (perm === 'denied') {
-    btn.textContent = 'Push bloqué (paramètres)';
-    btn.disabled = true;
-    btn.classList.remove('active');
-  } else {
-    btn.textContent = 'Activer les push';
-    btn.classList.remove('active');
-  }
-}
-
-// Action principale d'une notif : ouvre l'onglet cible
-function handleNotifAction(notifId) {
-  const n = getNotifs().find(x => x.id === notifId);
-  if (!n || !n.action) return;
-  // Marque comme lu et ferme le panneau
-  markNotifRead(notifId);
-  closeNotifPanel();
-  // Navigation : action.target peut être un nom d'onglet
-  const target = n.action.target;
-  if (typeof target === 'string') {
-    // Simule un clic sur l'onglet
-    const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target}"]`);
-    if (tabBtn) tabBtn.click();
-  } else if (target && typeof target === 'object' && target.tab) {
-    const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target.tab}"]`);
-    if (tabBtn) tabBtn.click();
-  }
-  // Refresh la cloche (count diminué)
-  renderNotifBell();
-}
-
-// Installe les handlers une seule fois (au boot)
-let _notifHandlersInstalled = false;
-
-// 0.27.1 : DIAGNOSTIC — triple-clic sur la cloche → injecte une notif test
-// et affiche l'état du système. À retirer une fois le problème résolu.
-function runDiagnostic() {
-  const out = [];
-  out.push('=== DIAGNOSTIC NOTIFS ===');
-  out.push(`Version : ${VERSION}`);
-  out.push(`S.notifications : ${Array.isArray(S?.notifications) ? 'array(' + S.notifications.length + ')' : typeof S?.notifications}`);
-  out.push(`#notifBell : ${!!$('#notifBell')}`);
-  out.push(`#bellBadge : ${!!$('#bellBadge')}`);
-  out.push(`#notifPanel : ${!!$('#notifPanel')}`);
-  out.push(`Handlers installés : ${_notifHandlersInstalled}`);
-  out.push(`__notifsRefresh : ${typeof window.__notifsRefresh}`);
-  out.push(`Permission : ${typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'}`);
-  out.push(`Push enabled : ${isPushEnabled()}`);
-  // Injecter une notif test directement dans le state
-  try {
-    if (!S.notifications) S.notifications = [];
-    const testNotif = {
-      id: 'diag_' + Date.now(),
-      timestamp: Date.now(),
-      gameMin: S.meta?.gameMin || 0,
-      type: 'event',
-      severity: 'warn',
-      title: '⚙ NOTIF TEST DIAGNOSTIC',
-      body: 'Si tu vois cette notif dans le panneau, le système fonctionne. Ouvre la cloche pour vérifier.',
-      read: false,
-      dismissed: false
-    };
-    S.notifications.unshift(testNotif);
-    if (window.__notifsRefresh) window.__notifsRefresh();
-    out.push('Injection : OK (total = ' + S.notifications.length + ')');
-  } catch (e) {
-    out.push('Injection : ERREUR — ' + e.message);
-  }
-  alert(out.join('\n'));
-}
+let _pushHandlersInstalled = false;
 
 export function setupNotifHandlers() {
-  if (_notifHandlersInstalled) return;
-  _notifHandlersInstalled = true;
+  if (_pushHandlersInstalled) return;
+  _pushHandlersInstalled = true;
 
-  // 0.27.1 : triple-tap sur la cloche → diagnostic
-  let tapCount = 0;
-  let tapTimer = null;
+  const btn = $('#btnPushToggle');
+  if (!btn) return;
 
-  const bell = $('#notifBell');
-  const closeBtn = $('#notifPanelClose');
-  const overlay = $('#notifPanelOverlay');
-  const filters = $('#notifFilters');
-  const markAll = $('#notifMarkAllRead');
-  const clearAll = $('#notifClearAll');
-  const pushToggle = $('#notifPushToggle');
-  const list = $('#notifList');
+  // État initial du bouton
+  refreshPushButton();
 
-  if (bell) bell.addEventListener('click', () => {
-    // 0.27.1 : triple-tap rapide → diagnostic
-    tapCount++;
-    if (tapTimer) clearTimeout(tapTimer);
-    tapTimer = setTimeout(() => { tapCount = 0; }, 1500);
-    if (tapCount >= 3) {
-      tapCount = 0;
-      runDiagnostic();
+  btn.addEventListener('click', async () => {
+    const perm = getNotifPermission();
+    if (perm === 'unsupported') {
+      toast("Ton navigateur ne supporte pas les notifications.");
       return;
     }
-    openNotifPanel();
-  });
-  if (closeBtn) closeBtn.addEventListener('click', closeNotifPanel);
-  if (overlay) overlay.addEventListener('click', closeNotifPanel);
-
-  // Filtres
-  if (filters) filters.addEventListener('click', (e) => {
-    const btn = e.target.closest('.np-filter');
-    if (!btn) return;
-    _notifFilter = btn.dataset.filter || 'all';
-    // Mise à jour visuelle
-    filters.querySelectorAll('.np-filter').forEach(b => b.classList.toggle('active', b === btn));
-    renderNotifList();
-  });
-
-  // Tout marquer lu
-  if (markAll) markAll.addEventListener('click', () => {
-    markAllNotifsRead();
-    renderNotifBell();
-    renderNotifList();
-  });
-
-  // Tout effacer
-  if (clearAll) clearAll.addEventListener('click', () => {
-    if (!confirm('Effacer toutes les notifications (sauf critiques non lues) ?')) return;
-    dismissAllNotifs();
-    renderNotifBell();
-    renderNotifList();
-  });
-
-  // Push toggle
-  if (pushToggle) pushToggle.addEventListener('click', async () => {
-    const perm = getNotifPermission();
-    if (perm === 'denied' || perm === 'unsupported') return;
+    if (perm === 'denied') {
+      toast("Permission refusée. Active les notifs dans les paramètres du navigateur.");
+      return;
+    }
     if (perm === 'default') {
       const result = await requestNotifPermission();
       if (result !== 'granted') {
-        toast('Permission refusée pour les notifications système');
-        renderPushToggle();
+        toast("Permission refusée");
+        refreshPushButton();
         return;
       }
     }
-    // Toggle l'état
+    // Toggle
     const newState = !isPushEnabled();
     setPushEnabled(newState);
-    toast(newState ? 'Notifications push activées' : 'Notifications push désactivées');
-    renderPushToggle();
+    toast(newState ? "Notifications téléphone activées" : "Notifications téléphone désactivées");
+    refreshPushButton();
   });
+}
 
-  // Délégation sur la liste : clics sur boutons d'item
-  if (list) list.addEventListener('click', (e) => {
-    const t = e.target;
-    if (!t) return;
-    if (t.dataset.notifAction) {
-      handleNotifAction(t.dataset.notifAction);
-      return;
-    }
-    if (t.dataset.notifRead) {
-      markNotifRead(t.dataset.notifRead);
-      renderNotifBell();
-      renderNotifList();
-      return;
-    }
-    if (t.dataset.notifDismiss) {
-      dismissNotif(t.dataset.notifDismiss);
-      renderNotifBell();
-      renderNotifList();
-      return;
-    }
-  });
-
-  // Hook global appelé par pushNotif() pour repeindre immédiatement
-  if (typeof window !== 'undefined') {
-    window.__notifsRefresh = () => {
-      renderNotifBell();
-      const panel = $('#notifPanel');
-      if (panel && !panel.hidden) {
-        renderNotifList();
-      }
-    };
+// Met à jour le label du bouton selon l'état
+function refreshPushButton() {
+  const btn = $('#btnPushToggle');
+  if (!btn) return;
+  const perm = getNotifPermission();
+  if (perm === 'unsupported') {
+    btn.textContent = '🔕 Notifs non supportées';
+    btn.disabled = true;
+    return;
   }
+  if (perm === 'denied') {
+    btn.textContent = '🔕 Notifs bloquées';
+    btn.title = "Permission refusée dans le navigateur";
+    return;
+  }
+  const on = isPushEnabled();
+  btn.textContent = on ? '🔔 Notifs téléphone' : '🔕 Notifs téléphone';
+  btn.title = on
+    ? "Tapez pour désactiver les notifications système"
+    : "Tapez pour activer les notifications système (lorsque l'app est en arrière-plan)";
 }
 
 function renderResources() {
@@ -598,9 +430,19 @@ function renderModules() {
     const tierBadge = def.tier === 2 ? '<span class="tier-badge">TIER 2</span>' : '';
     const lockedClass = (lockedByPrereq || lockedByTech) ? 'locked' : '';
 
-    return `<div class="module ${lockedClass}" data-id="${id}">
+    // 0.28 : module désactivé temporairement
+    const modState = S.modules[id];
+    let disabledBadge = '';
+    let disabledClass = '';
+    if (modState && modState.disabledUntil && modState.disabledUntil > (S.meta?.gameMin || 0)) {
+      const remaining = modState.disabledUntil - S.meta.gameMin;
+      disabledBadge = `<span class="disabled-badge">HORS SERVICE · ${fmtMin(remaining)}</span>`;
+      disabledClass = 'mod-disabled';
+    }
+
+    return `<div class="module ${lockedClass} ${disabledClass}" data-id="${id}">
       <div class="title-row">
-        <div class="name">${def.nom}${tierBadge}</div>
+        <div class="name">${def.nom}${tierBadge}${disabledBadge}</div>
         <div class="level">${cur === 0 ? '— NON CONSTRUIT' : `NIVEAU ${cur}${isMax ? ' (MAX)' : ''}`}</div>
       </div>
       <div class="desc">${def.desc}</div>
