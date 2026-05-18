@@ -8,7 +8,7 @@ import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNA
 import { rngFor, rPick, rWeighted, rInt, fmtMin } from './util.js';
 import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, autoAssignAllFreeMembers, autoAssignMember } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
-import { notif, purgeOldNotifs } from './notifications.js';
+import { notif } from './notifications.js';
 
 // ============================================================
 
@@ -50,6 +50,16 @@ export function freshState() {
     techCompleted: {},      // { techId: { at } }
     research: [],           // [{ id, techId, totalMin, doneMin, startedAt }]
     alienDatacubes: 0,      // ressource virtuelle obtenue depuis ruines alien
+    // 0.28 — overflow : ressources d'expédition au-delà du cap
+    // Se vide quand le cap se libère. Limite : 2× cap normal.
+    overflow: { metal: 0, cristal: 0, energie: 0, biomasse: 0, datacubes: 0 },
+    // 0.28 — effets temporaires actifs (debuffs, buffs)
+    activeBuffs: [],
+    // 0.28 — marques historiques de la colonie (entrées du journal de longue durée)
+    historicalMarks: [],
+    // 0.28 — incidents en chaîne en attente
+    pendingChainIncidents: [],
+    queuedIncidents: [],
     // 0.14 — atelier (file de fabrications)
     fabrication: [],        // [{ id, fabId, totalMin, doneMin, startedAt }]
     // 0.18 — relations sociales : { "id1|id2": affinity }
@@ -66,6 +76,12 @@ export function freshState() {
     // 0.21 — diplomatie
     factions: {},             // { factionId: { id, type, name, reputation, ... } }
     diplomaticMissions: [],   // [{ id, factionId, memberId, startedAt, duration }]
+    // 0.29 — diplomatie étendue (préparation routes/alliances pour 0.30+)
+    diplomacy: {
+      routes: [],         // [{ id, factionId, vesselId, established, deliveredCount }]
+      alliances: [],      // [{ factionId, since, terms }]
+      treaties: []        // [{ factionId, type, since }]
+    },
     // 0.26 — notifications
     notifications: [],
     // 0.9.0 — affectations aux postes : map "modKey:slotIdx" → memberId
@@ -96,7 +112,9 @@ export function computeRates() {
   for (const id of Object.keys(S.modules)) {
     const m = S.modules[id];
     const def = MODULES[id];
-    if (!def) continue;
+    if (!def || !m) continue;  // 0.29 : skip si module entry est undefined/null
+    // 0.28 : module désactivé temporairement (disabledUntil) — pas de prod, pas d'upkeep
+    if (m.disabledUntil && m.disabledUntil > (S.meta?.gameMin || 0)) continue;
     const eff = moduleEfficiency(id);
     // Bonus de tech ciblé sur ce module
     const moduleTechMult = tech.moduleProdMult[id] || 1;
@@ -119,6 +137,21 @@ export function computeRates() {
   // Coût biomasse supplémentaire pour les colons affectés (vivres actifs)
   const activeWorkers = S.crew.filter(m => m.statut === 'travail').length;
   rate.biomasse -= activeWorkers * (EXPED_BIOMASSE_PER_HOUR * JOB_BIOMASSE_MULT) / 60 * tech.workerBiomasseMult;
+
+  // 0.28 : applique buffs/debuffs actifs (prodMult global)
+  if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
+    let prodMult = 1;
+    for (const b of S.activeBuffs) {
+      if (b.type === 'prodMult' && typeof b.value === 'number') {
+        prodMult *= b.value;
+      }
+    }
+    if (prodMult !== 1) {
+      for (const k of RESOURCES) {
+        if (rate[k] > 0) rate[k] *= prodMult;  // n'affecte que la prod, pas la conso
+      }
+    }
+  }
 
   return rate;
 }
@@ -631,27 +664,33 @@ export function tickOnce(opts = {}) {
   const rate = computeRates();
   let energyShortfall = false;
   if (!S.flags.capWarned) S.flags.capWarned = {};  // 0.26.1 — dédoublonne les notifs cap saturé
+  if (!S.overflow) S.overflow = { metal: 0, cristal: 0, energie: 0, biomasse: 0, datacubes: 0 };  // 0.28
   for (const k of RESOURCES) {
     let next = S.res[k] + rate[k];
     if (next < 0) {
       if (k === 'energie') energyShortfall = true;
       next = 0;
     }
-    if (next > capOf(k)) {
+    const cap = capOf(k);
+    if (next > cap) {
       // 0.26.1 : notification quand on commence à perdre de la prod par saturation
-      // (uniquement quand rate > 0 et qu'on n'a pas déjà notifié récemment)
       if (rate[k] > 0 && !silent) {
         const lastWarnedAt = S.flags.capWarned[k] || -99999;
-        // Cooldown : pas de nouvelle alerte tant que le stock n'est pas redescendu sous 90% pendant 12h jeu
         if (S.meta.gameMin - lastWarnedAt > 720) {
           S.flags.capWarned[k] = S.meta.gameMin;
           notif.capReached(RES_LABELS[k]);
         }
       }
-      next = capOf(k);
-    } else if (next < capOf(k) * 0.9) {
-      // Stock redescendu : on autorise une nouvelle notif si ça resature
+      next = cap;
+    } else if (next < cap * 0.9) {
       delete S.flags.capWarned[k];
+    }
+    // 0.28 : si on a de l'overflow ET de la place dans le cap normal, on transfère
+    if (S.overflow[k] > 0 && next < cap) {
+      const space = cap - next;
+      const transfer = Math.min(space, S.overflow[k]);
+      next += transfer;
+      S.overflow[k] -= transfer;
     }
     S.res[k] = next;
   }
@@ -756,9 +795,33 @@ export function tickOnce(opts = {}) {
     }
   }
 
-  // 0.26 : purge auto des notifs anciennes (toutes les 60 ticks = chaque heure jeu)
-  if (tickCount % 60 === 0) {
-    try { purgeOldNotifs(); } catch (e) {}
+  // 0.28 : nettoyage des buffs/debuffs expirés
+  if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
+    const now = S.meta.gameMin || 0;
+    const before = S.activeBuffs.length;
+    S.activeBuffs = S.activeBuffs.filter(b => b.expiresAt > now);
+    if (S.activeBuffs.length < before && !silent) {
+      log('neutral', "Un effet temporaire s'est dissipé.");
+    }
+  }
+
+  // 0.28 : déclenchement différé d'incidents en chaîne
+  if (Array.isArray(S.pendingChainIncidents) && S.pendingChainIncidents.length > 0) {
+    const now = S.meta.gameMin || 0;
+    const toTrigger = S.pendingChainIncidents.filter(p => p.triggerAt <= now);
+    if (toTrigger.length > 0) {
+      S.pendingChainIncidents = S.pendingChainIncidents.filter(p => p.triggerAt > now);
+      if (!silent) {
+        for (const t of toTrigger) {
+          try {
+            // Déclenche immédiatement l'incident — la fonction triggerIncident est dans app.js
+            // mais on n'a pas d'accès direct ici. On marque pour le prochain tick d'incidents.
+            S.queuedIncidents = S.queuedIncidents || [];
+            S.queuedIncidents.push(t.incidentId);
+          } catch(e) {}
+        }
+      }
+    }
   }
 
   tickCount++;
@@ -990,6 +1053,17 @@ export function load() {
     // body.chronicle est ajouté à la première visite par tryAssignChronicle()
     // 0.26 : système de notifications
     if (!Array.isArray(data.notifications)) data.notifications = [];
+    // 0.28 : overflow ressources
+    if (!data.overflow) data.overflow = { metal: 0, cristal: 0, energie: 0, biomasse: 0, datacubes: 0 };
+    // 0.28 : buffs actifs (debuffs temporaires)
+    if (!Array.isArray(data.activeBuffs)) data.activeBuffs = [];
+    // 0.28 : marques historiques de la colonie
+    if (!Array.isArray(data.historicalMarks)) data.historicalMarks = [];
+    // 0.28 : incidents en chaîne en attente
+    if (!Array.isArray(data.pendingChainIncidents)) data.pendingChainIncidents = [];
+    if (!Array.isArray(data.queuedIncidents)) data.queuedIncidents = [];
+    // 0.29 : diplomatie étendue
+    if (!data.diplomacy) data.diplomacy = { routes: [], alliances: [], treaties: [] };
     data.meta.version = VERSION;
     return data;
   } catch (e) { return null; }

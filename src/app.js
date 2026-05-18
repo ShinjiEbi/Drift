@@ -227,6 +227,17 @@ export function autoAssignAllFreeMembers() {
 // Calcule le coefficient d'efficacité d'un bâtiment selon ses postes pourvus
 // Renvoie { fillFraction (0–1), prodMult, qualityBonus, upkeepMult, securityBonus, supportBonus, jobsTotal, jobsFilled }
 export function moduleEfficiency(modKey) {
+  // 0.28 : si module désactivé temporairement, ne produit rien et ne consomme rien
+  const mod = S.modules?.[modKey];
+  if (mod?.disabledUntil && mod.disabledUntil > (S.meta?.gameMin || 0)) {
+    return { fillFraction: 0, prodMult: 0, qualityBonus: 0, upkeepMult: 0, securityBonus: 0, supportBonus: 0, jobsTotal: 0, jobsFilled: 0, disabled: true };
+  }
+  // Si le timer est expiré, on nettoie
+  if (mod?.disabledUntil && mod.disabledUntil <= (S.meta?.gameMin || 0)) {
+    delete mod.disabledUntil;
+    try { log('success', `<em>${MODULES[modKey].nom}</em> de nouveau opérationnel.`); } catch(e) {}
+  }
+
   const jobs = jobsForModule(modKey);
   if (jobs.length === 0) {
     // Pas de niveau / pas de postes → mode automatisé
@@ -649,7 +660,9 @@ export function techEffectsAccumulated() {
     expeditionToxicImmune: false,
     vesselFuelMult:      1,
     vesselSpeedMult:     1,
-    scanRangeBonus:      0
+    scanRangeBonus:      0,
+    // 0.29 — bonus diplomatique cumulé (multiplicateur, défaut 1.0)
+    diplomaticBonus:     1.0
   };
   if (!S.techCompleted) return acc;
   for (const id in S.techCompleted) {
@@ -681,6 +694,8 @@ export function techEffectsAccumulated() {
     if (e.vesselFuelMult) acc.vesselFuelMult *= e.vesselFuelMult;
     if (e.vesselSpeedMult) acc.vesselSpeedMult *= e.vesselSpeedMult;
     if (typeof e.scanRangeBonus === 'number') acc.scanRangeBonus += e.scanRangeBonus;
+    // 0.29 — diplomaticBonus en multiplicatif
+    if (typeof e.diplomaticBonus === 'number') acc.diplomaticBonus *= e.diplomaticBonus;
   }
   return acc;
 }
@@ -1926,10 +1941,45 @@ const INCIDENTS = {
     severity: 2,
     text: "Une galerie de la mine s'effondre partiellement. {worker} était à proximité.",
     choices: [
-      { label: "Évacuer immédiatement", outcome: { loss: { metal: 30, cristal: 15 }, log: "Évacuation rapide. Pertes matérielles, mais personne d'autre n'est blessé." } },
-      { label: "Tenter de stabiliser et continuer", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { loss: { metal: 10 }, log: "L'équipe stabilise le boyau. Le travail reprend rapidement." } },
-      { label: "Sauver d'abord la victime", outcome: { status: 'blessure_legere', target: 'staff', loss: { metal: 50, cristal: 25 }, log: "{worker} est dégagé. Mais la mine est inutilisable un moment." } }
+      {
+        label: "Évacuer immédiatement",
+        outcome: {
+          loss: { metal: 30, cristal: 15 },
+          disableModule: 360,  // 0.28 : mine HS pendant 6h jeu
+          log: "Évacuation rapide. La mine est mise hors service le temps de la sécurisation."
+        }
+      },
+      {
+        label: "Tenter de stabiliser et continuer",
+        req: { skill: { key: 'ingenierie', min: 2 } },
+        outcome: {
+          loss: { metal: 10 },
+          log: "L'équipe stabilise le boyau. Le travail reprend rapidement."
+        }
+      },
+      {
+        label: "Sauver d'abord la victime",
+        outcome: {
+          status: 'blessure_legere',
+          target: 'staff',
+          loss: { metal: 50, cristal: 25 },
+          moralAll: 1,  // 0.28 : ×3 → +3 moral pour tous (acte humain reconnu)
+          historicalMark: "{worker} a été sauvé d'un éboulement au prix de matériel.",
+          log: "{worker} est dégagé. Le geste a marqué l'équipage."
+        }
+      },
+      {
+        label: "Forcer la reprise immédiate, ignorer les risques",
+        outcome: {
+          status: 'blessure_grave', target: 'staff',
+          damageModule: true,  // 0.28 : mine perd un niveau
+          moralAll: -2,  // ×3 = -6 moral collectif
+          generateRivalry: true,
+          chainIncident: { id: 'mine_eboulement', delay: 1440 },  // un autre éboulement dans 24h
+          historicalMark: "Le commandement a forcé une reprise dans une galerie instable. {worker} y est resté.",
+          log: "{worker} est gravement blessé. La structure souffre. L'équipage murmure."
+        }
+      }
     ]
   },
   mine_filon_riche: {
@@ -1950,12 +2000,39 @@ const INCIDENTS = {
     requireMinLevel: 3,
     text: "Une créature inconnue émerge des profondeurs de la mine. {worker} la voit en premier.",
     choices: [
-      { label: "Repousser à coups de pioche", risky: { stat: 'vigueur', dc: 6,
+      {
+        label: "Repousser à coups de pioche",
+        risky: {
+          stat: 'vigueur', dc: 6,
           success: { loss: { metal: 15 }, log: "La créature retraite. Travail interrompu, mais rien de plus." },
-          fail: { status: 'blessure_grave', target: 'staff', loss: { metal: 30 }, log: "{worker} a été blessé sérieusement." } } },
-      { label: "Sceller la galerie", outcome: { loss: { metal: 20, cristal: 10 }, log: "Galerie scellée définitivement. La créature est prisonnière en bas." } },
-      { label: "Attaquer en groupe armé", req: { skill: { key: 'combat', min: 2 } },
-        outcome: { gain: { biomasse: 30 }, log: "La créature est abattue. Sa carcasse fournit de la matière organique." } }
+          fail: {
+            status: 'blessure_grave', target: 'staff',
+            loss: { metal: 30 },
+            disableModule: 480,  // 8h HS
+            historicalMark: "Une créature a surgi de la mine et blessé {worker}.",
+            log: "{worker} a été blessé sérieusement. La galerie est temporairement abandonnée."
+          }
+        }
+      },
+      {
+        label: "Sceller la galerie",
+        outcome: {
+          loss: { metal: 20, cristal: 10 },
+          damageModule: true,  // perd un niveau définitivement
+          historicalMark: "Une galerie de la mine a été scellée — une créature inconnue y dort encore.",
+          log: "Galerie scellée définitivement. La créature est prisonnière en bas. La mine est diminuée."
+        }
+      },
+      {
+        label: "Attaquer en groupe armé",
+        req: { skill: { key: 'combat', min: 2 } },
+        outcome: {
+          gain: { biomasse: 30 },
+          moralAll: 1,  // ×3 = +3
+          historicalMark: "L'équipage a abattu une créature des profondeurs.",
+          log: "La créature est abattue. Sa carcasse fournit de la matière organique. L'équipage en parle longtemps."
+        }
+      }
     ]
   },
 
@@ -1965,12 +2042,39 @@ const INCIDENTS = {
     severity: 2,
     text: "Une cuve d'hydroponie présente des signes de contamination. Couleur, odeur, mucus en surface.",
     choices: [
-      { label: "Vider et désinfecter", outcome: { loss: { biomasse: 40 }, log: "Cuve sauvée mais récolte perdue." } },
-      { label: "Identifier l'agent", req: { skill: { key: 'medecine', min: 2 } },
-        outcome: { loss: { biomasse: 15 }, gain: { datacubes: 8 }, log: "Diagnostic rapide. Pertes minimisées et données récoltées." } },
-      { label: "Ignorer et espérer", risky: { stat: 'sangfroid', dc: 5,
+      {
+        label: "Vider et désinfecter",
+        outcome: {
+          loss: { biomasse: 40 },
+          disableModule: 240,  // 4h jeu HS
+          log: "Cuve sauvée mais récolte perdue. L'hydroponie reste arrêtée le temps du nettoyage."
+        }
+      },
+      {
+        label: "Identifier l'agent",
+        req: { skill: { key: 'medecine', min: 2 } },
+        outcome: {
+          loss: { biomasse: 15 },
+          gain: { datacubes: 8 },
+          log: "Diagnostic rapide. Pertes minimisées et données récoltées."
+        }
+      },
+      {
+        label: "Ignorer et espérer",
+        risky: {
+          stat: 'sangfroid', dc: 5,
           success: { loss: { biomasse: 5 }, log: "La contamination se résorbe d'elle-même. Coup de chance." },
-          fail: { loss: { biomasse: 80 }, status: 'pathogene_alien', target: 'staff', log: "La contamination s'est étendue. Un colon est touché." } } }
+          fail: {
+            loss: { biomasse: 80 },
+            status: 'pathogene_alien', target: 'staff',
+            debuff: { type: 'prodMult', value: 0.7, duration: 720, label: 'Hydroponie contaminée' },
+            damageModule: true,
+            moralAll: -2,  // ×3 = -6
+            historicalMark: "L'hydroponie a été abandonnée à la contamination. {worker} en a payé le prix.",
+            log: "La contamination s'est étendue. {worker} est touché. La production souffre durablement."
+          }
+        }
+      }
     ]
   },
   hydro_recolte_abondante: {
@@ -2004,10 +2108,31 @@ const INCIDENTS = {
     requireMinLevel: 3,
     text: "Une éruption locale crée un pic électrique. Les régulateurs saturent.",
     choices: [
-      { label: "Couper le réseau immédiatement", outcome: { loss: { energie: 30 }, log: "Réseau coupé à temps. Stocks préservés." } },
-      { label: "Tenter de canaliser", risky: { stat: 'sangfroid', dc: 6,
-          success: { gain: { energie: 50 }, log: "Pic canalisé en stockage. Bonus inattendu." },
-          fail: { loss: { energie: 60, cristal: 20 }, status: 'blessure_legere', target: 'staff', log: "L'opérateur a pris une décharge." } } }
+      {
+        label: "Couper le réseau immédiatement",
+        outcome: {
+          loss: { energie: 30 },
+          log: "Réseau coupé à temps. Stocks préservés."
+        }
+      },
+      {
+        label: "Tenter de canaliser",
+        risky: {
+          stat: 'sangfroid', dc: 6,
+          success: {
+            gain: { energie: 50 },
+            log: "Pic canalisé en stockage. Bonus inattendu."
+          },
+          fail: {
+            loss: { energie: 60, cristal: 20 },
+            status: 'blessure_legere',
+            target: 'staff',
+            damageModule: true,  // 0.28 : générateur perd 1 niveau
+            historicalMark: "Le générateur solaire a brûlé sous une éruption. Un opérateur a été blessé.",
+            log: "L'opérateur a pris une décharge. Les panneaux sont partiellement détruits."
+          }
+        }
+      }
     ]
   },
 
@@ -2018,10 +2143,37 @@ const INCIDENTS = {
     requireMinLevel: 2,
     text: "Un de nos vaisseaux a été saboté pendant la nuit. Coque rayée, conduits trafiqués.",
     choices: [
-      { label: "Enquêter sérieusement", req: { skill: { key: 'science', min: 2 } },
-        outcome: { gain: { datacubes: 8 }, log: "Indices recueillis. Le saboteur a peut-être laissé une signature." } },
-      { label: "Réparer en urgence", outcome: { loss: { metal: 50, cristal: 20 }, log: "Réparations effectuées. Origine du sabotage non identifiée." } },
-      { label: "Renforcer la sécurité", outcome: { loss: { metal: 20 }, log: "Patrouille renforcée. Cher mais préventif." } }
+      {
+        label: "Enquêter sérieusement",
+        req: { skill: { key: 'science', min: 2 } },
+        outcome: {
+          gain: { datacubes: 8 },
+          historicalMark: "Une enquête a mis au jour un saboteur dans nos rangs.",
+          log: "Indices recueillis. Le saboteur a peut-être laissé une signature."
+        }
+      },
+      {
+        label: "Réparer en urgence",
+        outcome: {
+          loss: { metal: 50, cristal: 20 },
+          log: "Réparations effectuées. Origine du sabotage non identifiée."
+        }
+      },
+      {
+        label: "Renforcer la sécurité — couvre-feu généralisé",
+        outcome: {
+          loss: { metal: 20 },
+          moralAll: -2,  // ×3 = -6 moral durable
+          debuff: {
+            type: 'prodMult',
+            value: 0.85,
+            duration: 2880,  // 48h jeu (2 jours)
+            label: "Climat de méfiance — prod -15%"
+          },
+          historicalMark: "Un couvre-feu a été imposé après un sabotage. L'équipage en garde le souvenir.",
+          log: "Patrouille renforcée et couvre-feu. La méfiance s'installe pour quelques jours."
+        }
+      }
     ]
   },
   hangar_decouverte: {
@@ -2348,6 +2500,13 @@ function incidentProbability(modKey) {
 
 // Tirage par tick : pour chaque bâtiment, tente un incident
 export function tickIncidents(silent = false) {
+  // 0.28 : déclencher d'abord les incidents en chaîne en attente (déclenchés par d'autres choix)
+  if (Array.isArray(S.queuedIncidents) && S.queuedIncidents.length > 0) {
+    const queued = S.queuedIncidents.shift();
+    triggerIncident(queued, silent);
+    return;
+  }
+
   // Si on est en mode silent (rattrapage offline), on saute les incidents qui demandent une décision
   if (S.meta.gameMin < S.nextIncidentMin) return;
 
@@ -2433,15 +2592,18 @@ export function applyIncidentChoice(inc, choice, victim) {
   }
   if (!outcome) return true;
 
+  // 0.28 : multiplicateur d'impact pour rendre les choix mémorables (×3)
+  const OUTCOME_MULT = 3;
+
   // Applique
   if (outcome.loss) {
     for (const k in outcome.loss) {
-      S.res[k] = Math.max(0, (S.res[k] || 0) - outcome.loss[k]);
+      S.res[k] = Math.max(0, (S.res[k] || 0) - outcome.loss[k] * OUTCOME_MULT);
     }
   }
   if (outcome.gain) {
     for (const k in outcome.gain) {
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + outcome.gain[k]);
+      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + outcome.gain[k] * OUTCOME_MULT);
     }
   }
   if (outcome.status) {
@@ -2453,13 +2615,76 @@ export function applyIncidentChoice(inc, choice, victim) {
     if (target) inflictStatus(target, outcome.status, "incident");
   }
   if (outcome.moralAll) {
+    // 0.28 : moral durable — la valeur est × 3 pour avoir un impact ressenti
+    // (était souvent -2/+2 jusqu'ici, donc devient -6/+6, et ça affecte TOUS les colons)
     for (const m of aliveCrew()) {
-      m.moral = Math.max(0, Math.min(100, m.moral + outcome.moralAll));
+      m.moral = Math.max(0, Math.min(100, m.moral + outcome.moralAll * 3));
     }
   }
   if (outcome.delayResearch && S.research?.length > 0) {
-    for (const r of S.research) r.doneMin = Math.max(0, r.doneMin - outcome.delayResearch);
+    for (const r of S.research) r.doneMin = Math.max(0, r.doneMin - outcome.delayResearch * OUTCOME_MULT);
   }
+
+  // 0.28 : NOUVEAUX EFFETS DURABLES
+  // — damageModule : module perd un niveau (effet sévère, permanent jusqu'à reconstruction)
+  if (outcome.damageModule && inc.modKey) {
+    const mod = S.modules[inc.modKey];
+    if (mod && mod.level > 1) {
+      mod.level--;
+      log('warn', `<em>${MODULES[inc.modKey].nom}</em> est endommagé : niveau ramené à ${mod.level}.`);
+    } else if (mod && mod.level === 1) {
+      log('warn', `<em>${MODULES[inc.modKey].nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`);
+    }
+  }
+  // — disableModule : module hors service pendant N minutes-jeu
+  if (outcome.disableModule && inc.modKey) {
+    const duration = outcome.disableModule;
+    const mod = S.modules[inc.modKey];
+    if (mod) {
+      mod.disabledUntil = (S.meta.gameMin || 0) + duration;
+      log('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${Math.round(duration/60)}h jeu.`);
+    }
+  }
+  // — debuff : pénalité globale temporaire (ex: { type: 'prodMult', value: 0.8, duration: 1440 })
+  if (outcome.debuff) {
+    if (!S.activeBuffs) S.activeBuffs = [];
+    S.activeBuffs.push({
+      ...outcome.debuff,
+      sourceLabel: inc.text || 'Incident',
+      startedAt: S.meta.gameMin,
+      expiresAt: (S.meta.gameMin || 0) + (outcome.debuff.duration || 720)
+    });
+    log('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
+  }
+  // — generateRivalry : crée une rivalité durable entre la victime et un autre colon
+  if (outcome.generateRivalry && victim) {
+    const others = aliveCrew().filter(m => m.id !== victim.id);
+    if (others.length > 0) {
+      const other = others[Math.floor(Math.random() * others.length)];
+      const key = [victim.id, other.id].sort().join('|');
+      if (!S.relations) S.relations = {};
+      S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
+      log('warn', `<em>${victim.name}</em> et <em>${other.name}</em> se brouillent durablement.`);
+    }
+  }
+  // — chainIncident : déclenche un autre incident plus tard
+  if (outcome.chainIncident) {
+    if (!S.pendingChainIncidents) S.pendingChainIncidents = [];
+    S.pendingChainIncidents.push({
+      incidentId: outcome.chainIncident.id,
+      triggerAt: (S.meta.gameMin || 0) + (outcome.chainIncident.delay || 720)
+    });
+  }
+  // — historicalMark : entrée dans le journal historique de la colonie
+  if (outcome.historicalMark) {
+    if (!S.historicalMarks) S.historicalMarks = [];
+    S.historicalMarks.push({
+      at: S.meta.gameMin,
+      text: outcome.historicalMark,
+      victim: victim?.name || null
+    });
+  }
+
   if (outcome.log) {
     const cleanLog = outcome.log.replace(/\{worker\}/g, victim ? `<em>${victim.name}</em>` : 'un colon');
     log(inc.positive ? 'success' : 'warn', cleanLog);
@@ -2977,18 +3202,21 @@ export function applyColonyEventChoice(eventId, choice, actors) {
   }
 
   const o = choice.outcome || {};
+  
+  // 0.28 : multiplicateur d'impact
+  const OUTCOME_MULT = 3;
 
   // Pertes / gains de ressources
   if (o.loss) {
-    for (const k in o.loss) S.res[k] = Math.max(0, (S.res[k] || 0) - o.loss[k]);
+    for (const k in o.loss) S.res[k] = Math.max(0, (S.res[k] || 0) - o.loss[k] * OUTCOME_MULT);
   }
   if (o.gain) {
-    for (const k in o.gain) S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + o.gain[k]);
+    for (const k in o.gain) S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + o.gain[k] * OUTCOME_MULT);
   }
-  // Moral collectif
+  // Moral collectif — 0.28 : impact durable (×3)
   if (o.moralAll) {
     for (const m of aliveCrew()) {
-      m.moral = Math.max(0, Math.min(100, m.moral + o.moralAll));
+      m.moral = Math.max(0, Math.min(100, m.moral + o.moralAll * 3));
     }
   }
   // Ajustement d'affinité ciblé
@@ -3034,6 +3262,36 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     const bpId = rollBlueprint([o.randomBlueprint]);
     if (bpId) addBlueprintToInventory(bpId, 'événement');
   }
+
+  // 0.28 : NOUVEAUX EFFETS DURABLES (mêmes que pour les incidents)
+  // — debuff : pénalité globale temporaire
+  if (o.debuff) {
+    if (!S.activeBuffs) S.activeBuffs = [];
+    S.activeBuffs.push({
+      ...o.debuff,
+      sourceLabel: ev.titre || ev.id || 'Événement',
+      startedAt: S.meta.gameMin,
+      expiresAt: (S.meta.gameMin || 0) + (o.debuff.duration || 720)
+    });
+    log('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
+  }
+  // — generateRivalry entre primary et secondary
+  if (o.generateRivalry && primary && secondary) {
+    const key = [primary.id, secondary.id].sort().join('|');
+    if (!S.relations) S.relations = {};
+    S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
+    log('warn', `<em>${primary.name}</em> et <em>${secondary.name}</em> se brouillent durablement.`);
+  }
+  // — historicalMark : entrée dans le journal historique de la colonie
+  if (o.historicalMark) {
+    if (!S.historicalMarks) S.historicalMarks = [];
+    S.historicalMarks.push({
+      at: S.meta.gameMin,
+      text: o.historicalMark,
+      victim: primary?.name || null
+    });
+  }
+
   // Log final
   if (o.log) {
     const cleanLog = o.log
@@ -3307,6 +3565,19 @@ export function launchDiplomaticMission(factionId, memberId) {
     toast(`${m.name} n'est pas disponible.`);
     return;
   }
+  // 0.29 — Limite de missions parallèles selon niveau d'Ambassade
+  // niv 0 : 1 mission (legacy fallback) ; niv N : N missions //
+  const ambassadeLvl = S.modules?.ambassade?.level || 0;
+  const maxParallel = Math.max(1, ambassadeLvl);
+  const active = (S.diplomaticMissions || []).length;
+  if (active >= maxParallel) {
+    if (ambassadeLvl === 0) {
+      toast("Mission en cours. Construis l'Ambassade pour en gérer plusieurs en parallèle.");
+    } else {
+      toast(`Limite atteinte : ${maxParallel} mission(s) // (Ambassade niv ${ambassadeLvl}).`);
+    }
+    return;
+  }
   // Coût provisions
   const cost = 25;
   if ((S.res.biomasse || 0) < cost) {
@@ -3357,11 +3628,25 @@ function completeDiplomaticMission(mis) {
   const roll = 1 + Math.floor(Math.random() * 10);
   const total = roll + skill + Math.floor((stat - 5) / 2);
   const dc = 8;
+  
+  // 0.29 — calcul du bonus diplomatique cumulé
+  let diploMult = 1.0;
+  // Bonus Ambassade : +10% par niveau au-dessus du 1er
+  const ambassadeLvl = S.modules?.ambassade?.level || 0;
+  if (ambassadeLvl >= 2) diploMult += (ambassadeLvl - 1) * 0.10;
+  // Bonus techs diplomatiques
+  const tech = techEffectsAccumulated();
+  if (tech.diplomaticBonus) diploMult *= tech.diplomaticBonus;
+  // Bonus Émissaire : ×1.5 si la mission a été lancée avec ce vaisseau
+  if (mis.vesselType === 'emissaire') diploMult *= 1.5;
+  
   if (total >= dc) {
-    // Succès : +20 à +30 réputation
-    const gain = 20 + Math.floor(Math.random() * 11);
+    // Succès : +20 à +30 réputation, modulé par diploMult
+    const baseGain = 20 + Math.floor(Math.random() * 11);
+    const gain = Math.round(baseGain * diploMult);
     adjustReputation(faction.id, gain);
-    log('success', `<em>${member.name}</em> revient de mission diplomatique. <em>${faction.name}</em> : réputation +${gain}.`);
+    const bonusLabel = diploMult > 1.05 ? ` (×${diploMult.toFixed(2)})` : '';
+    log('success', `<em>${member.name}</em> revient de mission diplomatique. <em>${faction.name}</em> : réputation +${gain}${bonusLabel}.`);
     // Bonus : petit moral pour le colon
     member.moral = Math.min(100, member.moral + 5);
   } else {
@@ -3420,6 +3705,26 @@ export function canBuildVessel(typeKey) {
   // Capacité hangar : 1 vaisseau par niveau
   const fleetCount = S.fleet.length;
   if (fleetCount >= hangarLvl) return { ok:false, why:`Capacité hangar atteinte (${hangarLvl})` };
+  
+  // 0.29 — check prérequis tech (ex. Émissaire requiert tech_diplomatie_cosmopolite)
+  if (def.requireTech) {
+    if (!S.techCompleted || !S.techCompleted[def.requireTech]) {
+      const techNom = TECH_TREE[def.requireTech]?.nom || def.requireTech;
+      return { ok:false, why:`Requiert la tech ${techNom}` };
+    }
+  }
+  // 0.29 — check prérequis modules (ex. Émissaire requiert Ambassade niv 3)
+  if (def.requireModule) {
+    for (const modId in def.requireModule) {
+      const reqLvl = def.requireModule[modId];
+      const curLvl = S.modules[modId]?.level || 0;
+      if (curLvl < reqLvl) {
+        const modNom = MODULES[modId]?.nom || modId;
+        return { ok:false, why:`Requiert ${modNom} niv ${reqLvl}` };
+      }
+    }
+  }
+  
   for (const k in def.cost) {
     if (S.res[k] < def.cost[k]) return { ok:false, why:`Ressources insuffisantes (${RES_LABELS[k]})` };
   }
@@ -3638,9 +3943,31 @@ function onReturn(exp) {
     if (!m || m.statut === 'mort') continue;
     returnToBase(m);
   }
-  // Crédite ressources accumulées
+  // 0.28 : crédite ressources accumulées avec OVERFLOW
+  // Le surplus au-delà du cap normal va dans S.overflow (limite : 2× cap).
+  if (!S.overflow) S.overflow = { metal: 0, cristal: 0, energie: 0, biomasse: 0, datacubes: 0 };
   for (const k in exp.accumulatedLoot) {
-    S.res[k] = Math.min(capOf(k) || Infinity, S.res[k] + exp.accumulatedLoot[k]);
+    const amount = exp.accumulatedLoot[k];
+    if (amount <= 0) continue;
+    const cap = capOf(k) || Infinity;
+    const overflowCap = cap * 2;  // limite overflow à 2× cap normal
+    const totalAvailable = (S.res[k] || 0) + (S.overflow[k] || 0);
+    const totalAfter = totalAvailable + amount;
+    
+    if (totalAfter <= cap) {
+      // Tout rentre dans le stock normal
+      S.res[k] = totalAfter;
+    } else if (totalAfter <= overflowCap) {
+      // Remplit le cap normal, le reste va en overflow
+      S.res[k] = cap;
+      S.overflow[k] = totalAfter - cap;
+    } else {
+      // Dépasse même l'overflow : on plafonne, le reste est perdu
+      S.res[k] = cap;
+      S.overflow[k] = cap;  // cap overflow = cap normal
+      const lost = totalAfter - overflowCap;
+      log('warn', `Surplus de ${RES_LABELS[k]} perdu : ${lost} (capacité dépassée).`);
+    }
   }
   // Crédite datacubes alien (ressource virtuelle, pas cappée)
   if (exp.accumulatedAlienDatacubes) {

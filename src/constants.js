@@ -1,7 +1,7 @@
 // constants.js — constantes globales (versions, multiplicateurs, libellés)
 // Extrait depuis app.js lors de la modularisation
 
-export const VERSION = '0.27.1';
+export const VERSION = '0.29.0';
 
 export const SAVE_KEY = 'drift_save_v1';
 
@@ -41,7 +41,7 @@ export const RES_LABELS = {
 
 // Stocks de départ : de quoi construire le premier vrai module
 export const START_RESOURCES = {
-  metal: 220, cristal: 90, energie: 100, biomasse: 50, datacubes: 0
+  metal: 220, cristal: 90, energie: 100, biomasse: 100, datacubes: 0
 }
 
 // Capacité de stockage (modulable plus tard via modules de stockage)

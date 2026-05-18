@@ -298,9 +298,167 @@ export const CHRONICLES = {
       'verrou_brise':       "Tu as détruit le verrou. Quelque chose s'est libéré sur cette planète. Tu ne sais pas quoi. Élie pense qu'il faut prévenir. Tu pars sans avoir compris.",
       'silence_respecte':   "Tu as choisi de ne pas comprendre. Tu pars sans rien emporter. Élie ne comprend pas, mais te respecte. L'anneau reste, dans son cercle parfait, à attendre quelqu'un d'autre."
     }
+  },
+
+  // ------------------------------------------------------------
+  //   LES VEILLEURS DE BETH — Chronique civilisation humaine vivante, 3 épisodes
+  // ------------------------------------------------------------
+  // Conditions : ruines humaines + biome viable. Civilisation isolée depuis ~400 ans
+  // qui garde une installation orbitale en perte de fonctionnement. Trois personnages
+  // récurrents (Eyla, Karn, le Prêtre). Ton ethnologique, premier contact.
+  'veilleurs_beth': {
+    id: 'veilleurs_beth',
+    nom: 'Les Veilleurs de Beth',
+    teaser: "Des humains vivent encore ici. Ils gardent quelque chose, mais ils ne savent plus quoi.",
+    
+    requires: {
+      ruines: 'humaines',
+      biome: ['terrestre', 'tropical', 'jungle', 'toundra', 'desert']
+    },
+    spawnChance: 0.30,
+    
+    characters: {
+      eyla:    { name: 'Eyla',      age: 73, role: 'Première Veilleuse',  voice: 'douce, écoute plus qu\'elle ne parle' },
+      karn:    { name: 'Karn',      age: 24, role: 'Jeune Veilleur',      voice: 'méfiant, curieux' },
+      pretre:  { name: 'Le Prêtre', age: 56, role: 'Gardien des Présents', voice: 'rituelle, hostile' }
+    },
+    
+    initialFlags: {
+      contact: null,            // 'amical' | 'tendu' | 'hostile' | null
+      verite_revelee: false,    // a expliqué que les "Présents" viennent d'une orbiteur
+      eyla_confiance: 0,        // -2 à +3
+      karn_lien: 0,             // 0 à 3
+      pretre_status: 'present', // 'present' | 'humilie' | 'allié' | 'mort'
+      orbiteur_localise: false, // a trouvé/identifié l'installation orbitale
+      orbiteur_repare: false,   // a réparé l'installation
+      presents_pris: false,     // a emporté des "Présents" sans demander
+      offrande_faite: false     // a fait une offrande lors d'une cérémonie
+    },
+    
+    episodes: [
+      {
+        title: "Le contact",
+        intro: "Les capteurs ont confirmé des signaux de vie. Quand tu te poses, tu n'es pas seul à attendre. Des silhouettes encerclent le vaisseau, immobiles, dans des tuniques claires. Le plus vieux d'entre eux lève une main. Ce n'est pas une menace, ni un salut — c'est un signe que tu ne comprends pas.",
+        firstScene: 'chron_veilleurs_ep1_arrivee'
+      },
+      {
+        title: "Le rite",
+        introByFlag: {
+          contact: {
+            'amical':  "Eyla t'attend à l'entrée du village. Elle te connaît maintenant. Karn observe à distance, comme toujours.",
+            'tendu':   "Tu reviens. Les Veilleurs ne te chassent pas, mais ils ne te saluent pas non plus. Eyla a vieilli en quelques jours.",
+            'hostile': "Tu reviens malgré tout. Le Prêtre se tient sur le seuil du temple, armé d'une lance de cérémonie. Eyla est plus loin, presque cachée. Quelque chose a changé."
+          }
+        },
+        defaultIntro: "Tu reviens parce que tu as vu quelque chose la première fois — un détail qui n'était pas rituel, mais technique. Il faut comprendre.",
+        firstScene: 'chron_veilleurs_ep2_temple'
+      },
+      {
+        title: "Les Présents",
+        introByFlag: {
+          orbiteur_localise: {
+            true:  "Tu sais maintenant ce qui pleut sur eux. Une orbiteur de l'ancienne colonie, encore en activité, dérégulée. Elle leur envoie des capsules de survie au hasard. C'est ce qu'ils appellent les Présents.",
+            false: "Tu n'as pas tout compris encore. Quelque chose alimente leur foi, et ce n'est ni dieu ni hasard."
+          }
+        },
+        defaultIntro: "Tu reviens parce qu'il faut finir ce qui a commencé.",
+        firstScene: 'chron_veilleurs_ep3_choix'
+      }
+    ],
+    
+    endings: {
+      'diplomatie':          "Tu es devenu un visiteur attendu. Les Veilleurs ne savent toujours pas ce que tu sais, mais ils acceptent tes offrandes et te donnent les leurs. Tu commerces avec eux — sans jamais rien briser.",
+      'revelation_brutale':  "Tu as dit la vérité. Tu as montré que les Présents venaient d'une machine. Le Prêtre a hurlé, Eyla est restée silencieuse. Le rite s'est éteint dans les semaines suivantes. Sans foi, les Veilleurs n'ont pas trouvé de raison de continuer. Tu emportes leur disque, et leur silence.",
+      'reparation_silencieuse': "Tu es monté en orbite. Tu as réparé la machine. Elle pleuvra des Présents encore cent ans. Les Veilleurs ne sauront jamais. Eyla te regarde repartir comme si elle savait, mais elle ne dit rien. Karn aussi. Tu pars avec une dette qu'ils ne te réclameront jamais.",
+      'conversion_karn':     "Karn est monté à bord avec toi. Il a vu trop, il ne pouvait plus rester. Sa tribu pense qu'il est mort lors d'un rite. Il vit maintenant à l'avant-poste, partagé entre deux mondes, et précieux pour les deux.",
+      'sacrilege':           "Tu as pris ce qu'il y avait à prendre, les Présents inutilisés, le disque, et tu es parti. Les Veilleurs ne comprendront pas où sont passés leurs trésors. Ils accuseront le ciel. Le ciel ne répondra plus."
+    }
+  },
+
+  // ------------------------------------------------------------
+  //   LE MARCHÉ ÉTRANGE — Chronique fusion alien, 3 épisodes
+  // ------------------------------------------------------------
+  // Conditions : planètes avec plusieurs types de ruines OU signal mixte.
+  // Bazar interstellaire où trois cultures se rencontrent. Pas d'antagoniste
+  // principal — trois marchands aux intérêts opposés. Ton commerçant,
+  // négociation, dettes.
+  'marche_etrange': {
+    id: 'marche_etrange',
+    nom: 'Le Marché Étrange',
+    teaser: "Un bazar de fortune où humains, cristallins et symbiotes s'échangent ce qu'aucun n'avoue convoiter.",
+    
+    requires: {
+      ruines: ['mixtes', 'humaines', 'alien_a', 'alien_b'],
+      biome: ['terrestre', 'tropical', 'desert', 'jungle', 'asteroide', 'volcanique']
+    },
+    spawnChance: 0.30,
+    
+    characters: {
+      kherda:    { name: 'Khêr-Da',    age: 134, role: 'Marchand hybride',     voice: 'calme, précise, ironique' },
+      tisseuse:  { name: 'La Tisseuse', age: 0,   role: 'Marchande de promesses', voice: 'multiple, comme un chœur' },
+      voln:      { name: 'Voln',       age: 38,  role: 'Naufragé rabatteur',    voice: 'rauque, désespérée' }
+    },
+    
+    initialFlags: {
+      contact: null,             // 'curieux' | 'mefiant' | 'arrogant'
+      reputation_marche: 0,      // -3 à +3
+      kherda_lien: 0,            // -2 à +3
+      voln_aide: 0,              // 0 à 3
+      dette_tisseuse: false,     // a accepté une promesse à la Tisseuse
+      patron_revele: false,      // a découvert qui contrôle le marché
+      patron_identite: null,     // 'kherda' | 'consortium' | 'entite_alien'
+      route_etablie: false,      // a établi une route commerciale
+      effondrement: false,       // le marché s'effondre suite à actions du joueur
+      sceau_obtenu: false        // a obtenu le sceau du marché
+    },
+    
+    episodes: [
+      {
+        title: "Le bazar",
+        intro: "Tu te poses à proximité du signal. Ce n'est pas une ville ni une ruine — c'est un marché. Des tentes hybrides, des stalls de matière non-identifiée, et un mouvement de figures hétéroclites entre les allées. Personne ne semble surpris de te voir. Au contraire : trois marchands s'avancent immédiatement vers ton vaisseau, comme s'ils t'attendaient.",
+        firstScene: 'chron_marche_ep1_arrivee'
+      },
+      {
+        title: "Les transactions",
+        introByFlag: {
+          contact: {
+            'curieux':   "Khêr-Da t'attend à son stand. Voln rôde un peu plus loin. La Tisseuse n'apparaît que la nuit, dit-on.",
+            'mefiant':   "Tu reviens en restant sur tes gardes. Les marchands t'observent comme un acheteur potentiel — ou une marchandise.",
+            'arrogant':  "Tu reviens en imposant. Khêr-Da hausse un sourcil mais te salue. Les autres sont plus distants."
+          }
+        },
+        defaultIntro: "Tu reviens. Le marché a quelque chose à t'apprendre.",
+        firstScene: 'chron_marche_ep2_marchands'
+      },
+      {
+        title: "Le Patron",
+        introByFlag: {
+          patron_revele: {
+            true:  "Tu sais maintenant qui tient les fils. La question n'est plus 'qui dirige' mais 'qu'est-ce que je fais avec ça'.",
+            false: "Tu sens qu'il y a une autre couche. Quelqu'un orchestre tout ça en silence. Il est temps de chercher."
+          }
+        },
+        defaultIntro: "Tu reviens pour finir ce qui se joue ici. Ou pour le rompre.",
+        firstScene: 'chron_marche_ep3_revelation'
+      }
+    ],
+    
+    endings: {
+      'marchand_expert':   "Tu es devenu un visage connu au Marché. Khêr-Da te salue à chaque visite. Tu as établi une route commerciale stable — les caravanes croisent les tiennes deux fois par mois. Tu n'as pas tout compris du Marché, mais tu y prospères.",
+      'dette_eternelle':   "Tu as accepté la promesse de la Tisseuse. Tu ne sais pas ce qu'elle te demandera, ni quand. Elle finira par te le réclamer, et ce jour-là tu obéiras — c'est la nature du pacte. Mais d'ici là, elle t'a tout donné.",
+      'sauvetage_voln':    "Voln est monté à bord avec toi. Il pleurait. Il portait un sac avec rien dedans — il n'avait jamais rien possédé là-bas. Il vit maintenant à l'avant-poste. Il refait surface lentement, parle peu, mais il connaît le Marché. Il est précieux.",
+      'patron_negocie':    "Tu as trouvé le Patron. Tu as négocié directement avec lui. Le Marché continue d'exister, mais désormais tu as une ligne directe. Tu n'es plus un client — tu es un partenaire. Ce qui veut dire que tu portes une responsabilité aussi.",
+      'effondrement':      "Tu as poussé trop loin. Tu as triché, manipulé, accumulé. Quelqu'un t'a démasqué — peut-être Khêr-Da, peut-être la Tisseuse. Le Marché s'est défait en trois jours. Tu repars riche mais maudit. Si tu reviens un jour, il n'y aura plus personne pour te vendre quoi que ce soit."
+    }
   }
 
-  // FUTUR : veilleurs_beth (civ_active), marche_etrange (fusion)
+  // Cycle des chroniques complet (6/6) :
+  // - pulsar_silencieux (humains morts)
+  // - sanctuaire_vert (alien_a)
+  // - couvee_dormante (alien_b)
+  // - anneau_trace (anomalie)
+  // - veilleurs_beth (humains vivants)
+  // - marche_etrange (fusion)
 };
 
 
@@ -1871,6 +2029,583 @@ export const CHRONICLE_SCENES = [
           log: "Tu détruis ton matériel d'observation. Tu effaces les données. Vous repartez les mains vides. Élie te regarde longuement. Puis elle te dit : « Merci. » Vous ne reparlerez jamais de l'anneau.",
           setFlags: {},
           endChronicle: 'silence_respecte'
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   SCÈNES — LES VEILLEURS DE BETH
+  // ============================================================
+
+  // ---- Épisode 1 : LE CONTACT (3 scènes) ----
+
+  {
+    id: 'chron_veilleurs_ep1_arrivee',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 0 },
+    text: (flags) => `Une trentaine de Veilleurs encerclent ton vaisseau. Aucun n'est armé visiblement. La plus vieille — une femme aux yeux laiteux, ils sont aveugles — s'avance. Derrière elle, un homme plus jeune, méfiant, et un troisième en robe écarlate qui te dévisage avec une hostilité claire. La vieille parle un français étrange, archaïque : « Étranger. As-tu été envoyé par le Ciel ? »`,
+    choices: [
+      {
+        label: "Répondre que oui : tu viens du ciel, c'est la vérité technique",
+        outcome: {
+          log: "Les Veilleurs s'inclinent. Le Prêtre se redresse, dévisage la jeune femme aveugle. Eyla dit doucement : « Alors les Présents redoubleront. Bénis sois-tu. » Tu n'as rien promis, mais tu as accepté un rôle.",
+          setFlags: { contact: 'amical', eyla_confiance: '+1' },
+          next: 'chron_veilleurs_ep1_village'
+        }
+      },
+      {
+        label: "Répondre que non, tu es un voyageur comme eux, juste plus loin",
+        outcome: {
+          log: "Silence long. Eyla incline la tête. Le Prêtre crache au sol. Karn — le jeune — vous fixe alternativement. Eyla finit par dire : « Alors tu es égaré. Viens. Tu auras à manger. » Tu as gagné de la confiance, mais perdu du mystère.",
+          setFlags: { contact: 'amical', eyla_confiance: '+2', karn_lien: '+1' },
+          next: 'chron_veilleurs_ep1_village'
+        }
+      },
+      {
+        label: "Ne rien dire, attendre que d'autres se présentent",
+        outcome: {
+          log: "Le silence se prolonge. Eyla finit par hocher la tête, comme si tu avais répondu. Le Prêtre, lui, ne te quitte pas des yeux. On t'emmène au village, mais quelque chose d'inquiet s'est installé.",
+          setFlags: { contact: 'tendu' },
+          next: 'chron_veilleurs_ep1_village'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_veilleurs_ep1_village',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 0 },
+    text: (flags) => {
+      const intro = flags.contact === 'amical'
+        ? `Le village est petit, peut-être deux cents âmes. Les habitations sont des cylindres métalliques fondus dans la terre — d'anciens modules de la colonie initiale, recyclés. Les Veilleurs t'observent, sans peur ni curiosité — comme on regarde un événement météorologique. Eyla te conduit chez elle.`
+        : `On te conduit à travers le village comme on conduirait un suspect. Les Veilleurs se reculent à ton passage. Tu remarques les habitations : ce sont d'anciens modules de la colonie, recyclés. Ils vivent dans nos propres ruines, sans le savoir.`;
+      return intro;
+    },
+    choices: [
+      {
+        label: "Poser des questions à Eyla sur leur histoire",
+        outcome: {
+          log: "Eyla te raconte : il y a environ 400 ans, le Ciel a cessé de parler. Les Anciens ont disparu. Mais le Ciel a continué à envoyer des Présents — des capsules tombant du firmament avec de la nourriture, parfois des outils, parfois rien. Cela a duré depuis. Aucun de ses parents n'a vu le Ciel parler, mais tous ont vu les Présents.",
+          setFlags: { eyla_confiance: '+1' },
+          next: 'chron_veilleurs_ep1_present'
+        }
+      },
+      {
+        label: "Observer en silence et noter ce qui t'entoure",
+        outcome: {
+          log: "Tu vois les détails : tatouages en circuit imprimé sur leurs joues. Des symboles de constellation cousus sur leurs tuniques. Et au centre du village, un module dressé verticalement, peint en blanc — c'est leur temple. Une caisse de présents non ouvrables est exposée comme un autel.",
+          setFlags: { karn_lien: '+1' },
+          next: 'chron_veilleurs_ep1_present'
+        }
+      },
+      {
+        label: "Demander à voir le Prêtre",
+        outcome: {
+          log: "Le Prêtre te reçoit, mais sans Eyla. Sa voix est plate, rituelle. Il t'explique que tu es un Visiteur, que les Visiteurs viennent du Ciel, mais qu'ils ne sont pas le Ciel. Et que ceux qui veulent comprendre les Présents sont des hérétiques. Le ton est clair.",
+          setFlags: { contact: 'hostile' },
+          next: 'chron_veilleurs_ep1_present'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_veilleurs_ep1_present',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 0 },
+    text: (flags) => `Un cri retentit dans le village. Tout le monde se met à courir vers la place. Tu suis. Au centre, une capsule métallique fume légèrement — elle est tombée du ciel pendant que tu parlais. Le Prêtre se précipite, lève les bras. La capsule est un module d'urgence standard, modèle CN-22, datant facilement de 350 ans. Elle contient des rations protéinées. Les Veilleurs s'agenouillent.`,
+    choices: [
+      {
+        label: "Te joindre à la cérémonie en silence",
+        outcome: {
+          log: "Tu t'agenouilles avec eux. Karn te regarde, étonné. Eyla sourit imperceptiblement. Le Prêtre passe son regard sur toi sans s'arrêter. Tu as fait le bon choix, du moins pour cette fois.",
+          setFlags: { offrande_faite: true, eyla_confiance: '+1', karn_lien: '+1' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Examiner la capsule discrètement",
+        outcome: {
+          log: "Tu t'approches assez pour lire la plaque : CN-22, série 4471. C'est une capsule de l'orbiteur Beth-3, qui devait servir de relais médical à la colonie originale. Elle est encore active. Karn a vu ton regard. Il ne dit rien, mais il a vu.",
+          setFlags: { orbiteur_localise: true, karn_lien: '+1' },
+          loot: { datacubes: 5 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Prendre une ration pour analyse",
+        outcome: {
+          log: "Tu glisses une ration dans ta poche pendant que les Veilleurs prient. Le Prêtre te voit. Son visage ne change pas, mais ses yeux se durcissent. Tu as commis un sacrilège — même si rien ne sera dit ce soir.",
+          setFlags: { presents_pris: true, contact: 'hostile', pretre_status: 'present' },
+          loot: { biomasse: 10 },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ---- Épisode 2 : LE RITE (3 scènes) ----
+
+  {
+    id: 'chron_veilleurs_ep2_temple',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 1 },
+    text: (flags) => {
+      const intro = flags.contact === 'amical'
+        ? `Eyla te conduit jusqu'au temple — le module vertical peint en blanc. À l'intérieur, des étagères couvertes de Présents anciens : outils inutilisables, fragments d'écran, objets dont personne ne connaît plus le nom. C'est leur bibliothèque, leur musée, leur autel.`
+        : `Tu t'es introduit dans le temple alors que les Veilleurs étaient ailleurs. À l'intérieur, des étagères couvertes de Présents anciens. Une vraie archive — non identifiée par ceux qui la gardent.`;
+      return intro;
+    },
+    choices: [
+      {
+        label: "Chercher un objet qui pourrait être un dispositif de stockage",
+        outcome: {
+          log: "Tu trouves un disque cristallin d'un mètre de diamètre, accroché au mur. Manifestement, c'est un support de données ancien — disque mémoire archivique de la colonie Beth, type O-9. Il est intact. Eyla apparaît derrière toi. « C'est le Cœur. On ne le touche pas. »",
+          setFlags: { eyla_confiance: '-1' },
+          next: 'chron_veilleurs_ep2_eyla'
+        }
+      },
+      {
+        label: "Demander à Eyla ce que sont vraiment les Présents",
+        req: { flag: { key: 'contact', equals: 'amical' } },
+        outcome: {
+          log: "Eyla réfléchit longtemps. Puis : « Mon grand-père disait que les Présents tombent moins souvent qu'avant. Avant, c'était trois fois par mois. Maintenant, deux fois, trois fois par an. » Elle se tait. Puis ajoute, plus doucement : « Le Prêtre dit que c'est notre faute. »",
+          setFlags: { eyla_confiance: '+1' },
+          next: 'chron_veilleurs_ep2_eyla'
+        }
+      },
+      {
+        label: "Sortir avant d'être vu",
+        outcome: {
+          log: "Tu sors. Personne ne t'a vu. Mais tu as compris ce qu'il y a dans ce temple, et tu vas devoir choisir quoi en faire.",
+          setFlags: {},
+          next: 'chron_veilleurs_ep2_eyla'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_veilleurs_ep2_eyla',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 1 },
+    text: (flags) => {
+      const intro = flags.eyla_confiance >= 2
+        ? `Eyla te prend à part le soir. « Tu poses trop de questions. Le Prêtre te surveille. Il faut que tu saches quelque chose. » Elle hésite, puis : « J'ai été élue Première Veilleuse parce que je doute. Le Prêtre, lui, croit. C'est lui qui dirige le rite. Mais moi je sens que quelque chose ne va pas. »`
+        : `Eyla te regarde longuement avant de parler. « Tu n'es pas un envoyé du Ciel. Tu es un homme. Comme nous. Sois prudent — le Prêtre veut t'éloigner. »`;
+      return intro;
+    },
+    choices: [
+      {
+        label: "Lui dire la vérité : les Présents viennent d'une machine, pas d'un dieu",
+        outcome: {
+          log: "Eyla reste silencieuse longtemps. Puis : « Je le savais. Je le savais. » Elle pleure sans larmes — ses yeux ne peuvent plus. « Si tu dis cela aux autres, ils mourront. Sans foi, ils ne tiendront pas. Tu dois choisir : la vérité, ou eux. »",
+          setFlags: { verite_revelee: true, eyla_confiance: '+1' },
+          next: 'chron_veilleurs_ep2_karn'
+        }
+      },
+      {
+        label: "Lui demander où Karn passe ses nuits",
+        outcome: {
+          log: "Eyla sourit faiblement. « Karn dort dans les ruines, à l'est. Il pense que je ne le sais pas. Il cherche dans les vieux modules. Il croit y trouver quelque chose. » Elle marque une pause. « Si tu lui parles, sois gentil. C'est un enfant qui a déjà trop vu. »",
+          setFlags: { karn_lien: '+1' },
+          next: 'chron_veilleurs_ep2_karn'
+        }
+      },
+      {
+        label: "Lui promettre de ne rien révéler",
+        outcome: {
+          log: "Eyla te touche le poignet. « Merci. Mais tu vas savoir, et tu vas devoir choisir. Tu reviendras nous voir, alors ? » Tu hoches la tête. Tu ne sais pas si tu mens.",
+          setFlags: { eyla_confiance: '+2' },
+          next: 'chron_veilleurs_ep2_karn'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_veilleurs_ep2_karn',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 1 },
+    text: (flags) => `Karn t'aborde la nuit, à l'écart du village. Sa voix tremble : « J'ai vu des choses dans les ruines à l'est. Des écrans qui s'allument quand on les touche. Des mots dans la langue des Anciens. Personne ne veut écouter. Le Prêtre dit que c'est démoniaque. Toi, tu sais lire ces choses ? »`,
+    choices: [
+      {
+        label: "Lui proposer de l'emmener voir l'orbiteur",
+        outcome: {
+          log: "Tu emmènes Karn à bord. Tu lui montres ce que tu as scanné : l'orbiteur Beth-3 en lente déchéance, ses systèmes mourants. Karn pleure. Pas de tristesse — de compréhension. Il dit : « Alors c'est fini. Les Présents vont s'arrêter. » Il te regarde : « Tu peux le réparer ? »",
+          setFlags: { orbiteur_localise: true, karn_lien: '+2' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Lui apprendre à lire les écrans qu'il a trouvés",
+        outcome: {
+          log: "Vous passez la nuit dans les ruines à l'est. Tu lui montres comment activer un terminal. Karn lit pour la première fois les vraies archives — la colonie Beth, l'évacuation manquée, l'orbiteur qui devait revenir. Il ne dit rien, mais à l'aube il est différent.",
+          setFlags: { karn_lien: '+2', orbiteur_localise: true },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Lui dire de se taire, pour sa sécurité",
+        outcome: {
+          log: "Tu lui dis que le Prêtre a raison de craindre — pas parce que c'est démoniaque, mais parce que la vérité tuerait sa tribu. Karn te dévisage. « Alors tu sais aussi. » Il s'éloigne. Tu l'as perdu.",
+          setFlags: { karn_lien: '-2' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ---- Épisode 3 : LES PRÉSENTS (1 scène finale avec 5 fins possibles) ----
+
+  {
+    id: 'chron_veilleurs_ep3_choix',
+    chronicleEpisode: { chronicle: 'veilleurs_beth', episode: 2 },
+    text: (flags) => {
+      let base = `Tu sais maintenant. L'orbiteur Beth-3 est en orbite basse, ses systèmes ne tiendront plus longtemps. Encore peut-être un an, peut-être trois — puis plus de Présents. Les Veilleurs ne survivront pas à cet effondrement de foi. Tu es revenu une fois de plus. Le village est calme. Eyla t'attend.`;
+      if (flags.karn_lien >= 2) {
+        base += ` Karn est avec elle. Il porte un sac sur l'épaule, comme prêt à partir.`;
+      }
+      if (flags.pretre_status === 'present' && flags.verite_revelee) {
+        base += ` Le Prêtre est là aussi. Il te dévisage.`;
+      }
+      return base;
+    },
+    choices: [
+      {
+        label: "Continuer la diplomatie : commerce, présents, jamais la vérité",
+        outcome: {
+          log: "Tu repars avec un accord tacite. Eyla acquiesce. Tu reviendras tous les six mois apporter ce que tu peux, prendre ce qu'ils donnent. C'est un mensonge, mais un mensonge qui les fait vivre.",
+          setFlags: {},
+          loot: { biomasse: 30, datacubes: 5 },
+          endChronicle: 'diplomatie'
+        }
+      },
+      {
+        label: "Révéler publiquement la vérité au village entier",
+        outcome: {
+          log: "Tu prends la parole devant tous. Tu expliques l'orbiteur, la machine, les capsules programmées. Le Prêtre te frappe au visage. Eyla ne dit rien. Karn pleure. Tu repars avec le disque mémoire. Quelques mois plus tard, tu apprends par signaux radio que le village s'est éteint — sans guerre, sans famine, juste sans envie.",
+          setFlags: { verite_revelee: true },
+          loot: { datacubes: 40 },
+          item: 'disque_veilleurs',
+          morale: -3,
+          endChronicle: 'revelation_brutale'
+        }
+      },
+      {
+        label: "Monter en orbite réparer l'installation, en cachette",
+        req: { flag: { key: 'orbiteur_localise', equals: true } },
+        outcome: {
+          log: "Tu pars vers l'orbiteur. La réparation prend trois jours, demande tout ton matériel. Mais Beth-3 redémarre — pour cent ans, peut-être plus. Tu redescends sans rien dire. Eyla te regarde repartir. Elle sait, peut-être. Mais elle ne dit rien. Toi non plus.",
+          setFlags: { orbiteur_repare: true },
+          loot: { datacubes: 15 },
+          endChronicle: 'reparation_silencieuse'
+        }
+      },
+      {
+        label: "Proposer à Karn de te suivre. L'emmener avec toi.",
+        req: { flag: { key: 'karn_lien', min: 2 } },
+        outcome: {
+          log: "Karn monte à bord sans regarder en arrière. Eyla pose la main sur son cœur. Elle dira à la tribu qu'il est mort lors d'une cérémonie nocturne — c'est la coutume pour ceux qui partent. Karn devient un membre de ton équipage. Il connaît les anciens textes que personne d'autre ne connaît.",
+          setFlags: {},
+          addCandidate: 'karn',
+          loot: { datacubes: 10 },
+          endChronicle: 'conversion_karn'
+        }
+      },
+      {
+        label: "Tout emporter — disque, Présents, vivres — et partir",
+        outcome: {
+          log: "Tu pilles le temple à l'aube. Tu remplis ta soute. Tu décolles sans saluer. Eyla est sur le seuil de sa maison, immobile. Tu ne sauras jamais ce qu'elle a pensé. Quelques années plus tard, les capsules cesseront. Personne n'aura compris pourquoi.",
+          setFlags: { presents_pris: true },
+          loot: { biomasse: 50, cristal: 30, datacubes: 30 },
+          item: 'disque_veilleurs',
+          morale: -5,
+          endChronicle: 'sacrilege'
+        }
+      }
+    ]
+  },
+
+  // ============================================================
+  //   SCÈNES — LE MARCHÉ ÉTRANGE
+  // ============================================================
+
+  // ---- Épisode 1 : LE BAZAR (3 scènes) ----
+
+  {
+    id: 'chron_marche_ep1_arrivee',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 0 },
+    text: (flags) => `Le marché s'étend sur plusieurs hectares. Tu vois des structures humaines tordues par des excroissances cristallines, des organismes lisses qui les parcourent en silence, et entre tout cela des figures qui marchandent avec des gestes que tu ne comprends pas. Un homme d'âge indéfini s'approche en premier — son visage porte des reflets nacrés sur les pommettes, mais ses yeux sont humains. « Bienvenue. Tu es nouveau. C'est rare. »`,
+    choices: [
+      {
+        label: "Te présenter ouvertement et demander à voir le marché",
+        outcome: {
+          log: "Khêr-Da te conduit personnellement. Il t'apprend les règles tacites : on ne touche pas sans demander, on ne demande pas le prix avant l'objet, on ne refuse jamais une promesse de la Tisseuse à la légère.",
+          setFlags: { contact: 'curieux', kherda_lien: '+1' },
+          next: 'chron_marche_ep1_decouverte'
+        }
+      },
+      {
+        label: "Rester en retrait, observer avant d'engager",
+        outcome: {
+          log: "Tu marches en silence. Personne ne t'aborde plus, mais tout le monde te regarde. Tu remarques que certains stalls fonctionnent par troc, d'autres par dette, d'autres par services rendus. Aucun argent visible.",
+          setFlags: { contact: 'mefiant' },
+          next: 'chron_marche_ep1_decouverte'
+        }
+      },
+      {
+        label: "Afficher de la puissance : armes visibles, ton ferme",
+        outcome: {
+          log: "Khêr-Da hausse un sourcil, mais te salue poliment. Les autres marchands évitent ton regard. Tu sens immédiatement que tu viens de payer un prix invisible — celui de la confiance.",
+          setFlags: { contact: 'arrogant' },
+          next: 'chron_marche_ep1_decouverte'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_marche_ep1_decouverte',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 0 },
+    text: (flags) => {
+      let base = `Tu parcours le marché. Les marchandises te déconcertent : un coffret qui chante quand on ouvre son couvercle. Une lentille qui montre des souvenirs qui ne sont pas les tiens. Un récipient contenant un liquide qui n'a pas de masse. Près d'un coin sombre, un humain maigre — l'un des rares vraiment humains ici — agite une main vers toi. Il a une cicatrice sur le front et porte des vêtements rapiécés.`;
+      if (flags.contact === 'curieux') {
+        base += ` Khêr-Da, à côté de toi, murmure : « C'est Voln. Évite-le si tu veux, mais il a souvent des informations que personne d'autre n'a. »`;
+      }
+      return base;
+    },
+    choices: [
+      {
+        label: "Aller parler à Voln",
+        outcome: {
+          log: "Voln te raconte qu'il est arrivé ici il y a 5 ans, son vaisseau a brûlé. Personne ne repart du Marché — pas par contrainte, mais parce que la sortie est compliquée. Il survit en informant. Il te demande si tu veux une info — il accepte la nourriture comme paiement.",
+          setFlags: { voln_aide: '+1' },
+          next: 'chron_marche_ep1_premiere_offre'
+        }
+      },
+      {
+        label: "Ignorer Voln et continuer à explorer",
+        outcome: {
+          log: "Tu passes ton chemin. Voln te suit du regard, sans s'offusquer. Tu remarques au passage un stand voilé, sombre, devant lequel personne ne s'arrête. Une silhouette dedans, qu'on devine à peine.",
+          setFlags: {},
+          next: 'chron_marche_ep1_premiere_offre'
+        }
+      },
+      {
+        label: "Donner une ration à Voln sans rien demander en retour",
+        outcome: {
+          log: "Voln pleure. Pas de joie, juste de fatigue. Il te dit : « Si tu trouves la Tisseuse, ne lui promets rien. Si tu rencontres le Patron, ne le défie pas. Ce sont mes seuls cadeaux pour toi. » Il s'éloigne.",
+          setFlags: { voln_aide: '+2' },
+          loot: { biomasse: -5 },
+          next: 'chron_marche_ep1_premiere_offre'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_marche_ep1_premiere_offre',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 0 },
+    text: (flags) => `Khêr-Da te présente une première offre. Il te propose un coffret en métal ouvragé contenant 10 datacubes alien. Le prix : 50 biomasse, ou un service rendu plus tard. Il te regarde patiemment. C'est un test.`,
+    choices: [
+      {
+        label: "Payer en biomasse immédiatement",
+        outcome: {
+          log: "Khêr-Da acquiesce et te remet le coffret. « Tu paies cash. C'est honnête. La plupart préfèrent le service — mais c'est leur problème, pas le mien. »",
+          setFlags: { reputation_marche: '+1', kherda_lien: '+1' },
+          loot: { biomasse: -50, datacubes: 10 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Accepter le pacte du service à venir",
+        outcome: {
+          log: "Khêr-Da sourit. « Tu apprends. » Il te remet le coffret. Tu lui dois maintenant un service non spécifié. Pas inquiétant — Khêr-Da ne réclame jamais l'impossible. Mais une dette est une dette.",
+          setFlags: { reputation_marche: '+2', kherda_lien: '+2' },
+          loot: { datacubes: 10 },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Refuser, dire que tu reviendras plus tard",
+        outcome: {
+          log: "Khêr-Da hoche la tête. « Comme tu veux. Le coffret restera ici. » Tu ne sens aucune offense — mais tu remarques que d'autres marchands deviennent un peu plus distants à ton égard. Tu n'es plus un acheteur potentiel.",
+          setFlags: { reputation_marche: '-1' },
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ---- Épisode 2 : LES TRANSACTIONS (3 scènes) ----
+
+  {
+    id: 'chron_marche_ep2_marchands',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 1 },
+    text: (flags) => `Tu reviens. Le marché s'est étoffé — d'autres caravanes sont arrivées. Khêr-Da te salue. Voln, plus en retrait, observe sans s'approcher. Et pour la première fois, tu vois la Tisseuse à son stand : une silhouette voilée dont les contours semblent fluctuer. Elle ne vend rien de tangible, dit-on. Seulement des promesses.`,
+    choices: [
+      {
+        label: "Visiter le stand de la Tisseuse",
+        outcome: {
+          log: "Tu t'approches. Sa voix multiple te demande ce que tu veux. Tu n'as rien à demander en particulier. Elle t'offre alors un cadeau — une lentille qui montre la position d'une planète riche en cristal. En échange : tu lui devras quelque chose. Pas un objet, pas un service précis. Juste 'quelque chose'.",
+          setFlags: {},
+          next: 'chron_marche_ep2_tisseuse'
+        }
+      },
+      {
+        label: "Aider Voln à recueillir des informations pour Khêr-Da",
+        outcome: {
+          log: "Voln est ému. Vous passez la journée à arpenter le marché, à recouper des rumeurs. Tu apprends beaucoup sur les rapports entre marchands. Voln s'ouvre — il te raconte qu'il rêve de partir, mais qu'il ne peut pas. Pas pour des raisons matérielles. Pour autre chose.",
+          setFlags: { voln_aide: '+2', kherda_lien: '+1' },
+          next: 'chron_marche_ep2_tisseuse'
+        }
+      },
+      {
+        label: "Proposer une marchandise à Khêr-Da : du minerai raffiné",
+        outcome: {
+          log: "Khêr-Da analyse ton minerai avec une lentille hybride. Il te propose un échange équitable : 30 metal raffinés contre 8 datacubes alien et une information sur le marché. Tu acceptes. Tu apprends que d'autres marchés existent ailleurs — il faut un sceau pour y entrer.",
+          setFlags: { reputation_marche: '+1' },
+          loot: { metal: -30, datacubes: 8 },
+          next: 'chron_marche_ep2_tisseuse'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_marche_ep2_tisseuse',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 1 },
+    text: (flags) => `La Tisseuse te fait signe — elle veut te parler. Tu t'approches. Sa voix multiple murmure : « Tu cherches sans savoir quoi. C'est mon spécialité. J'ai une promesse pour toi, si tu en veux. Tu n'as qu'à dire oui. Je te donnerai ce qui te manque. Tu me devras une dette future — non spécifiée, non datée. Mais je viendrai un jour la collecter. »`,
+    choices: [
+      {
+        label: "Accepter la promesse de la Tisseuse",
+        outcome: {
+          log: "Tu dis oui. La Tisseuse te touche le poignet — sa peau est tiède, presque humaine. Tu sens passer quelque chose en toi. Tu reçois immédiatement un objet : un sceau d'opale qui ouvre certaines portes. Mais maintenant, tu portes une dette. Elle te trouvera. Tu ne sais pas quand.",
+          setFlags: { dette_tisseuse: true, sceau_obtenu: true },
+          loot: { datacubes: 20 },
+          item: 'sceau_marche',
+          next: 'chron_marche_ep2_voln_secret'
+        }
+      },
+      {
+        label: "Refuser poliment la promesse",
+        outcome: {
+          log: "Tu refuses. La Tisseuse hoche la tête sans rancune. « Comme tu veux. Reviens si tu changes d'avis. Tout le monde finit par changer d'avis. » Elle se détourne. Khêr-Da, à distance, te regarde avec un respect renouvelé.",
+          setFlags: { kherda_lien: '+1' },
+          next: 'chron_marche_ep2_voln_secret'
+        }
+      },
+      {
+        label: "Tenter de négocier les termes de la dette",
+        outcome: {
+          log: "« Précise au moins ce que tu me demanderas, » dis-tu. La Tisseuse semble amusée. « Je ne peux pas. La dette se révèle d'elle-même. Mais je peux te promettre qu'elle ne te demandera rien que tu ne puisses donner. » C'est ambigu. Tu n'acceptes pas, tu ne refuses pas.",
+          setFlags: {},
+          next: 'chron_marche_ep2_voln_secret'
+        }
+      }
+    ]
+  },
+
+  {
+    id: 'chron_marche_ep2_voln_secret',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 1 },
+    text: (flags) => {
+      let base = `Voln t'attend à l'écart du marché, derrière les tentes. Il a l'air paniqué. « Je dois te dire quelque chose. J'ai vu le Patron. Une fois. C'était par accident. » Il tremble. « Il n'est pas humain, mais ce n'est pas non plus un alien comme on en connaît. C'est quelque chose entre. Comme la Tisseuse, mais en plus grand. Il vit dans une chambre souterraine sous le marché. C'est lui qui décide qui peut commercer ici. »`;
+      if (flags.voln_aide >= 2) {
+        base += ` Voln te touche le bras. « Je te le dis parce que tu m'as aidé. Mais ne dis à personne que c'est moi qui te l'ai appris. »`;
+      }
+      return base;
+    },
+    choices: [
+      {
+        label: "Aller chercher le Patron immédiatement",
+        outcome: {
+          log: "Tu pars chercher la chambre souterraine. Voln te suit à distance, terrifié. Vous trouvez une trappe sous un stand abandonné.",
+          setFlags: { patron_revele: true },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Demander à Voln de te suivre — partir avec lui",
+        outcome: {
+          log: "Voln pleure de gratitude. Tu lui promets de l'emmener à la fin de cette visite. Il dit qu'il préparera ses affaires — c'est-à-dire rien, il n'a rien. Tu repars en méditant ta promesse.",
+          setFlags: { voln_aide: '+1' },
+          endChronicleEpisode: true
+        }
+      },
+      {
+        label: "Garder l'info pour toi et continuer normalement",
+        outcome: {
+          log: "Tu remercies Voln et le laisses repartir. Tu continues à commercer comme si de rien n'était. Tu te demanderas longtemps si c'était une sagesse ou une lâcheté.",
+          setFlags: {},
+          endChronicleEpisode: true
+        }
+      }
+    ]
+  },
+
+  // ---- Épisode 3 : LE PATRON (1 scène finale avec 5 fins) ----
+
+  {
+    id: 'chron_marche_ep3_revelation',
+    chronicleEpisode: { chronicle: 'marche_etrange', episode: 2 },
+    text: (flags) => {
+      let base = `C'est ta troisième visite. Le marché te connaît. Khêr-Da te salue par ton nom. Voln te suit du regard. La Tisseuse, dans son stand, semble parfois te regarder à travers son voile — mais comment savoir ?`;
+      if (flags.patron_revele) {
+        base += ` Tu sais ce qu'il y a sous la trappe. Tu sais qui dirige tout ça. La question n'est plus 'qui' — c'est 'que faire'.`;
+      }
+      base += ` Le moment du choix arrive.`;
+      return base;
+    },
+    choices: [
+      {
+        label: "Établir une route commerciale régulière, devenir un client fidèle",
+        outcome: {
+          log: "Tu négocies avec Khêr-Da les termes d'une route commerciale. Tes vaisseaux passeront ici deux fois par mois. Tu y vendras ton métal raffiné, tu y achèteras des datacubes alien et des biens rares. Le marché te bénit à sa manière.",
+          setFlags: { route_etablie: true },
+          loot: { datacubes: 25 },
+          item: 'sceau_marche',
+          endChronicle: 'marchand_expert'
+        }
+      },
+      {
+        label: "Accepter formellement la dette de la Tisseuse, devenir son client privilégié",
+        req: { flag: { key: 'dette_tisseuse', equals: true } },
+        outcome: {
+          log: "Tu confirmes ton pacte avec la Tisseuse. Elle te remet en cadeau d'adieu un objet impossible — un fragment de temps emprisonné dans du verre, ou ce qui y ressemble. Tu repars avec un trésor et une promesse à honorer un jour.",
+          setFlags: {},
+          loot: { datacubes: 50, cristal: 30 },
+          item: 'sceau_marche',
+          endChronicle: 'dette_eternelle'
+        }
+      },
+      {
+        label: "Embarquer Voln avec toi, le sauver du Marché",
+        req: { flag: { key: 'voln_aide', min: 2 } },
+        outcome: {
+          log: "Voln monte à bord avec un sac vide et des mains tremblantes. Khêr-Da te regarde le faire — son visage est neutre. La Tisseuse, dans son stand voilé, ne réagit pas. Voln pleure tout le décollage. À l'avant-poste, il devient un colon précieux : il connaît tous les codes de marchands. Il ne reviendra jamais ici.",
+          setFlags: {},
+          addCandidate: 'voln',
+          loot: { datacubes: 10 },
+          endChronicle: 'sauvetage_voln'
+        }
+      },
+      {
+        label: "Descendre voir le Patron, négocier directement",
+        req: { flag: { key: 'patron_revele', equals: true } },
+        outcome: {
+          log: "Tu descends seul dans la chambre souterraine. Le Patron est… une chose. Pas humanoïde, pas vraiment. Une présence cohérente. Il parle dans ta tête, courtoisement. Vous concluez un accord direct : tu auras des privilèges, en échange d'un service de transport qui te sera détaillé plus tard. Tu remontes sceau en main. Tu es désormais un partenaire — pas un client.",
+          setFlags: { patron_identite: 'entite_alien' },
+          loot: { datacubes: 40 },
+          item: 'sceau_marche',
+          endChronicle: 'patron_negocie'
+        }
+      },
+      {
+        label: "Tout truquer, voler discrètement et fuir avant que ça se sache",
+        outcome: {
+          log: "Tu changes les étiquettes, tu falsifies des transactions, tu accumules sans payer. Khêr-Da te démasque le troisième jour. Quand tu retournes à ton vaisseau, le marché est en feu — pas littéralement, mais quelque chose s'est rompu. Voln court vers toi en hurlant que les gens fuient. Tu décolles avec un butin énorme. Mais derrière toi, le Marché est en train de disparaître.",
+          setFlags: { effondrement: true },
+          loot: { datacubes: 80, cristal: 60, biomasse: 40, metal: 100 },
+          morale: -8,
+          endChronicle: 'effondrement'
         }
       }
     ]
