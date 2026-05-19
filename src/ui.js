@@ -48,7 +48,8 @@ import {
   launchDiplomaticMission,
   startTraining, cancelTraining,
   currentAge, maxHealthOf, affinityBetween, relationType,
-  significantRelations, ROLES, inventoryCount
+  significantRelations, ROLES, inventoryCount,
+  TRAINING_PROGRAMS, infirmaryBeds, bedsInUse
 } from './app.js';
 
 

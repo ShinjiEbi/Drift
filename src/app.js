@@ -330,7 +330,7 @@ export function staffRoleCount(modKey, role) {
 // Programmes de formation (cf. doc d'archi §8.4.2)
 // Chaque programme cible un skill. Coût final = base × (skillCible).
 // Durée finale = baseHours × √(skillCible) × modificateurs traits.
-const TRAINING_PROGRAMS = {
+export const TRAINING_PROGRAMS = {
   medecine:     { nom:'Médecine',     baseCost:{ biomasse:20 },           baseHours:8,  extra:{ datacubes:5 }, extraFromLevel:3 },
   ingenierie:   { nom:'Ingénierie',   baseCost:{ metal:30, cristal:10 },  baseHours:6,  extra:{ datacubes:5 }, extraFromLevel:3 },
   science:      { nom:'Science',      baseCost:{ cristal:15, datacubes:5 },baseHours:10, extra:{ datacubes:5 }, extraFromLevel:4 },
@@ -1544,12 +1544,12 @@ export function cancelTraining(sessionId) {
 // ============================================================
 
 // Capacité de lits selon niveau d'infirmerie
-function infirmaryBeds() {
+export function infirmaryBeds() {
   return (S.modules.infirmerie?.level || 0) * 2;
 }
 
 // Lits actuellement occupés (= patients en cours de traitement OU en attente sur place)
-function bedsInUse() {
+export function bedsInUse() {
   // un patient en infirmerie occupe un lit dès qu'il y est admis
   return S.crew.filter(m => m.statut === 'infirmerie').length;
 }
