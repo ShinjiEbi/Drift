@@ -134,9 +134,9 @@ function renderResBar() {
   const pop = $('#rbPop');
   if (pop) {
     const usage = crewUsage();
-    pop.textContent = `${usage.alive}/${usage.total}`;
+    pop.textContent = `${usage.used}/${usage.total}`;
     if (pop.parentElement) {
-      pop.parentElement.title = `${usage.alive} vivants · capacité ${usage.total}`;
+      pop.parentElement.title = `${usage.used} vivants · capacité ${usage.total}`;
     }
   }
 }
