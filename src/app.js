@@ -1222,7 +1222,7 @@ function weightedPick(arr, rng) {
 }
 
 // Substitue les variables dans le texte d'une scène
-function fillTemplate(text, ctx) {
+export function fillTemplate(text, ctx) {
   return text
     .replace(/\{vaisseau\}/g, ctx.vesselName || 'le vaisseau')
     .replace(/\{planete\}/g, ctx.bodyName || 'la planète')
@@ -1243,7 +1243,7 @@ function fillTemplate(text, ctx) {
 // untreated   : { afterMin: action } — ce qui se passe si non traité
 // onCured     : { sequelChance, sequels: [...] } — séquelles potentielles
 // moralImpact : impact passif sur moral / jour
-const STATUTS = {
+export const STATUTS = {
   blessure_legere: {
     nom: 'Blessure légère',
     short: "Coupure, contusion, entorse mineure.",
@@ -1420,7 +1420,7 @@ function computeFailChance(member) {
 }
 
 // Vérifie si l'on peut lancer une formation. Renvoie { ok, reason, cost, duration, instructor, failChance }.
-function canTrain(memberId, skill) {
+export function canTrain(memberId, skill) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Colon introuvable" };
   if (member.statut !== 'libre') return { ok:false, reason:`Colon ${member.statut}` };
@@ -1630,7 +1630,7 @@ export function inflictStatus(member, statutKey, source = '') {
 }
 
 // Le membre se présente à l'infirmerie (admission)
-function admitToInfirmary(memberId) {
+export function admitToInfirmary(memberId) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return;
   if (member.statut === 'mort') return;
@@ -1649,7 +1649,7 @@ function admitToInfirmary(memberId) {
   render();
 }
 
-function dischargeMember(memberId) {
+export function dischargeMember(memberId) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return;
   // Annule traitements en cours
@@ -1669,7 +1669,7 @@ function dischargeMember(memberId) {
 }
 
 // Lance un diagnostic actif sur un statut caché
-function startDiagnostic(memberId, statusIdx) {
+export function startDiagnostic(memberId, statusIdx) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return;
   if (member.statut !== 'infirmerie') {
@@ -1710,7 +1710,7 @@ function startDiagnostic(memberId, statusIdx) {
 }
 
 // Vérifie qu'un traitement est lançable
-function canTreat(memberId, statusIdx) {
+export function canTreat(memberId, statusIdx) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Patient introuvable" };
   if (member.statut !== 'infirmerie') return { ok:false, reason:"Patient non admis" };
@@ -1738,7 +1738,7 @@ function canTreat(memberId, statusIdx) {
   return { ok:true, treatment:tdef, doctor, def };
 }
 
-function startTreatment(memberId, statusIdx) {
+export function startTreatment(memberId, statusIdx) {
   const r = canTreat(memberId, statusIdx);
   if (!r.ok) { toast(r.reason); return; }
   const member = S.crew.find(m => m.id === memberId);
