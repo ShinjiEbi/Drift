@@ -22,7 +22,8 @@ import {
   genCandidate, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind,
   trainingTargetLevel, formationBonuses, findInstructor,
   describeBody, bodyThreatLevel, bodyRewardLevel, BODY_TYPES,
-  save, resetGame, exportSave, importSave, buildTime
+  save, resetGame, exportSave, importSave, buildTime,
+  GRAVITES, VIES
 } from './state.js';
 // Imports croisés depuis app.js — résolus au runtime grâce aux live bindings
 import {
@@ -49,7 +50,9 @@ import {
   startTraining, cancelTraining,
   currentAge, maxHealthOf, affinityBetween, relationType,
   significantRelations, ROLES, inventoryCount,
-  TRAINING_PROGRAMS, infirmaryBeds, bedsInUse
+  TRAINING_PROGRAMS, infirmaryBeds, bedsInUse,
+  STATUTS, canTrain, canTreat, admitToInfirmary, dischargeMember, fillTemplate,
+  startDiagnostic, startTreatment
 } from './app.js';
 
 

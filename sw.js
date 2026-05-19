@@ -48,7 +48,7 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activation : nettoyer les vieux caches
+// Activation : nettoyer les vieux caches puis signaler la mise à jour aux clients
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -56,6 +56,10 @@ self.addEventListener('activate', (event) => {
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       )
     ).then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then((clients) => {
+        clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED', version: VERSION }));
+      })
   );
 });
 

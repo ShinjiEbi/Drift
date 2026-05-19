@@ -336,6 +336,10 @@
           if (tabBtn) tabBtn.click();
         }, 300);
       }
+      // Nouvelle version SW installée → rechargement automatique
+      if (event.data?.type === 'SW_UPDATED') {
+        setTimeout(() => window.location.reload(), 800);
+      }
     });
   }
 
