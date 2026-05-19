@@ -259,9 +259,9 @@ nav.tabs button.active {
    0.23 — Mobile : barre d'onglets en bas, icônes au-dessus
    ============================================================ */
 @media (max-width: 640px) {
-  /* Décale main pour laisser de la place à la barre du bas */
+  /* Décale main pour laisser de la place à la barre du bas + safe area iOS */
   main {
-    padding-bottom: 70px;
+    padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
   }
   /* Nav passe en barre fixe en bas */
   nav.tabs {
@@ -269,6 +269,7 @@ nav.tabs button.active {
     bottom: 0;
     left: 0;
     right: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     top: auto;
     border-bottom: none;
     border-top: 1px solid var(--border);
@@ -611,6 +612,8 @@ footer.actions button:hover {
   background: var(--surface);
   border: 1px solid var(--border-bright);
   max-width: 460px;
+  max-height: calc(100dvh - 2 * var(--pad));
+  overflow-y: auto;
   width: 100%;
   padding: 22px;
 }
@@ -638,6 +641,11 @@ footer.actions button:hover {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  padding-top: 14px;
+  margin-top: 8px;
 }
 .modal button {
   background: transparent;
