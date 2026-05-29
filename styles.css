@@ -259,9 +259,9 @@ nav.tabs button.active {
    0.23 — Mobile : barre d'onglets en bas, icônes au-dessus
    ============================================================ */
 @media (max-width: 640px) {
-  /* Décale main pour laisser de la place à la barre du bas */
+  /* Décale main pour laisser de la place à la barre du bas + safe area iOS */
   main {
-    padding-bottom: 70px;
+    padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
   }
   /* Nav passe en barre fixe en bas */
   nav.tabs {
@@ -269,6 +269,7 @@ nav.tabs button.active {
     bottom: 0;
     left: 0;
     right: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     top: auto;
     border-bottom: none;
     border-top: 1px solid var(--border);
@@ -611,6 +612,8 @@ footer.actions button:hover {
   background: var(--surface);
   border: 1px solid var(--border-bright);
   max-width: 460px;
+  max-height: calc(100dvh - 2 * var(--pad));
+  overflow-y: auto;
   width: 100%;
   padding: 22px;
 }
@@ -638,6 +641,11 @@ footer.actions button:hover {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  padding-top: 14px;
+  margin-top: 8px;
 }
 .modal button {
   background: transparent;
@@ -2310,6 +2318,38 @@ nav.subtabs button:disabled {
 .incident-choice .cost.ko { color: var(--rust); }
 .incident-choice .risk { color: var(--text-mute); }
 
+/* 0.30 — Écran de conséquences des événements de colonie */
+.cons-list {
+  list-style: none;
+  margin: 4px 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cons-effect {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.4;
+  padding: 8px 12px;
+  border-left: 2px solid var(--border);
+  background: var(--surface);
+}
+.cons-effect .cons-icon {
+  font-family: var(--mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.cons-effect.good { border-left-color: var(--moss); }
+.cons-effect.good .cons-icon { color: var(--moss); }
+.cons-effect.bad { border-left-color: var(--rust); }
+.cons-effect.bad .cons-icon { color: var(--rust); }
+.cons-effect.neutral { border-left-color: var(--text-mute); color: var(--text-dim); font-style: italic; }
+.cons-effect.neutral .cons-icon { color: var(--text-mute); }
+
 /* ============================================================
    RELATIONS SOCIALES (0.18)
    ============================================================ */
@@ -2508,18 +2548,21 @@ nav.subtabs button:disabled {
 /* ============================================================
    DIPLOMATIE & FACTIONS (0.21)
    ============================================================ */
+/* ============================================================
+   DIPLOMATIE 0.30 — redesign complet
+   ============================================================ */
 .diplo-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-left: 3px solid var(--text-mute);
-  padding: 14px 16px;
-  margin-bottom: 12px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
 }
 .diplo-card .dc-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
   flex-wrap: wrap;
   gap: 8px;
 }
@@ -2541,7 +2584,7 @@ nav.subtabs button:disabled {
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.1em;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .diplo-card .dc-desc {
   font-family: var(--serif);
@@ -2549,21 +2592,32 @@ nav.subtabs button:disabled {
   font-style: italic;
   color: var(--text-dim);
   line-height: 1.5;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
-.diplo-card .dc-rep {
-  margin-bottom: 12px;
+
+/* Barre de réputation avec jalons */
+.diplo-card .dc-rep { margin-bottom: 14px; }
+.diplo-card .dc-rep-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
 }
 .diplo-card .dc-rep-label {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-mute);
-  letter-spacing: 0.04em;
-  margin-bottom: 4px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-.diplo-card .dc-rep-label b {
-  color: var(--text);
-  font-weight: 500;
+.diplo-card .dc-rep-val {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.diplo-card .dc-rep-track {
+  position: relative;
+  padding-bottom: 18px;
 }
 .diplo-card .dc-rep-bar {
   height: 6px;
@@ -2572,68 +2626,112 @@ nav.subtabs button:disabled {
   position: relative;
   overflow: hidden;
 }
-.diplo-card .dc-rep-zero {
-  position: absolute;
-  left: 50%;
-  top: 0; bottom: 0;
-  width: 1px;
-  background: var(--border);
-  z-index: 2;
-}
 .diplo-card .dc-rep-fill {
   position: absolute;
   left: 0; top: 0; bottom: 0;
   transition: width 0.4s, background 0.4s;
 }
+.diplo-card .dc-milestones {
+  position: relative;
+  height: 18px;
+  margin-top: 2px;
+}
+.dc-milestone {
+  position: absolute;
+  transform: translateX(-50%);
+  text-align: center;
+}
+.dc-milestone .dcm-tick {
+  width: 1px;
+  height: 5px;
+  background: var(--border);
+  margin: 0 auto 2px;
+}
+.dc-milestone .dcm-label {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+.dc-milestone.reached .dcm-tick  { background: var(--amber); }
+.dc-milestone.reached .dcm-label { color: var(--amber); }
 
-.diplo-trade {
+/* Sections génériques à l'intérieur de la carte */
+.dc-section {
   background: var(--bg-deep);
   border: 1px solid var(--border);
   padding: 10px 12px;
   margin: 8px 0;
   font-family: var(--mono);
   font-size: 11px;
-}
-.diplo-trade .dt-head {
-  margin-bottom: 8px;
   color: var(--text-dim);
-  letter-spacing: 0.04em;
 }
-.diplo-trade button {
+.dc-section-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  margin-bottom: 6px;
+}
+.dc-section-locked { color: var(--text-mute); font-style: italic; }
+.dc-section-hostile { border-color: var(--rust); color: var(--rust); }
+.dc-alliance {
+  border-color: #6aad8a;
+}
+.dc-alliance .dc-section-label { color: #6aad8a; }
+
+/* Commerce */
+.dt-rates { margin-bottom: 6px; color: var(--text-dim); letter-spacing: 0.04em; }
+.dt-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dt-btn {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
   font-family: var(--mono);
   font-size: 10px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   padding: 5px 12px;
   cursor: pointer;
   transition: all 0.18s;
 }
-.diplo-trade button:hover {
-  border-color: var(--amber);
-  color: var(--amber);
+.dt-btn:hover { border-color: var(--amber); color: var(--amber); }
+.dt-btn.active { background: var(--amber); color: var(--bg-deep); border-color: var(--amber); }
+.dt-eta { font-size: 10px; color: var(--text-mute); letter-spacing: 0.04em; }
+
+/* Cadeaux */
+.gift-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 6px;
 }
-.diplo-trade button.active {
-  background: var(--amber);
-  color: var(--bg-deep);
-  border-color: var(--amber);
-}
-.diplo-trade .dt-eta {
-  margin-top: 6px;
-  color: var(--text-mute);
+.gift-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--mono);
   font-size: 10px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.18s;
 }
-.diplo-trade.locked, .diplo-trade.hostile {
-  color: var(--text-mute);
-  font-style: italic;
-}
-.diplo-trade.hostile {
-  border-color: var(--rust);
-  color: var(--rust);
-}
+.gift-btn:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+.gift-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.gift-btn.cant { opacity: 0.5; }
+
+/* Mission */
+.mission-req { color: var(--text-mute); font-size: 10px; margin-bottom: 4px; }
+.mission-best { color: var(--text-dim); font-size: 11px; margin-bottom: 8px; }
+.mission-chance { font-family: var(--mono); font-size: 10px; font-weight: 600; }
+.mission-chance.good { color: var(--moss); }
+.mission-chance.mid  { color: var(--amber); }
+.mission-chance.bad  { color: var(--rust); }
 
 .diplo-launch-btn {
   display: block;
@@ -2647,24 +2745,18 @@ nav.subtabs button:disabled {
   text-transform: uppercase;
   padding: 8px 12px;
   cursor: pointer;
-  margin-top: 6px;
   transition: all 0.18s;
 }
-.diplo-launch-btn:hover {
-  border-color: var(--amber);
-  color: var(--amber);
-}
+.diplo-launch-btn:hover { border-color: var(--amber); color: var(--amber); }
 .diplo-mission-info {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--amber);
   letter-spacing: 0.06em;
   font-style: italic;
-  padding: 6px 0;
+  padding: 4px 0;
 }
-.diplo-mission-info.locked {
-  color: var(--text-mute);
-}
+.diplo-mission-info.locked { color: var(--text-mute); }
 
 .diplo-mission {
   background: var(--surface);

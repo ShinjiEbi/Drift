@@ -452,6 +452,7 @@ export const ITEM_ORIGINS = {
   alien_a:  { nom: 'Alien-A',    color: '#b09bd0' },
   alien_b:  { nom: 'Alien-B',    color: '#7a9b6e' },
   mixte:    { nom: 'Mixte',      color: '#5a8ba8' },
+  fusion:   { nom: 'Fusion',     color: '#e07a5f' },
   exotique: { nom: 'Exotique',   color: '#e9b76a' },
   anomalie: { nom: 'Anomalie',   color: '#a26fbb' }  // 0.27 — items uniques de chroniques
 };
@@ -578,6 +579,125 @@ export const ITEMS = {
     nom: "Sceau du Marché",
     type: 'tool', origin: 'mixte',
     desc: "Médaillon d'opale gravé de motifs entrelacés — humains, cristallins, organiques. Sert de laissez-passer pour les marchés clandestins de la galaxie. Personne ne sait combien il en existe ni qui les distribue vraiment."
+  },
+
+  // ===== 0.30 — Nouveaux items fabricables =====
+
+  // — Consommables de mission —
+  stimulant_cognitif: {
+    nom: "Stimulant cognitif",
+    type: 'consumable', origin: 'humain',
+    desc: "Injection de nootropiques concentrés. Augmente temporairement l'acuité mentale d'un colon — utile avant un choix technique critique en mission."
+  },
+  sonde_analyse: {
+    nom: "Sonde d'analyse",
+    type: 'consumable', origin: 'humain',
+    desc: "Petit appareil autonome à déployer sur un site. Transmet des données structurelles détaillées. Rapporte des datacubes bruts depuis les ruines."
+  },
+  nanobots_reparation: {
+    nom: "Nanobots de réparation",
+    type: 'consumable', origin: 'humain',
+    desc: "Microbots injectables. Réparent les micro-lésions en quelques heures. Stabilise un colon blessé léger sans médecin sur le terrain."
+  },
+  mine_eclats: {
+    nom: "Mine à éclats",
+    type: 'weapon', origin: 'humain',
+    desc: "Dispositif à pression enterré. Dissuade la faune agressive et couvre les retraites. Usage unique, zone d'effet."
+  },
+  explosif_demolition: {
+    nom: "Explosif de démolition",
+    type: 'weapon', origin: 'humain',
+    desc: "Charge directionnelle à déclenchement distant. Ouvre les accès murés dans les ruines ou disloque les formations rocheuses bloquant l'accès à un site."
+  },
+
+  // — Outils de mission —
+  scanner_geologique: {
+    nom: "Scanner géologique",
+    type: 'tool', origin: 'humain',
+    desc: "Sonde sismique portable. Détecte les poches minérales et les cavités souterraines. Augmente la qualité du loot minéral sur les planètes rocheuses."
+  },
+  tenue_camouflage: {
+    nom: "Tenue de camouflage",
+    type: 'tool', origin: 'humain',
+    desc: "Revêtement adaptatif multicouche. Atténue la signature thermique et visuelle. Réduit significativement le risque d'être repéré par la faune ou les factions hostiles."
+  },
+  grappin_tactique: {
+    nom: "Grappin tactique",
+    type: 'tool', origin: 'humain',
+    desc: "Lance-câble à ancrage magnétique. Traverse ravins, falaises et structures en ruine. Ouvre des passages que rien d'autre ne permettrait d'emprunter."
+  },
+  marteau_sonique: {
+    nom: "Marteau sonique",
+    type: 'weapon', origin: 'humain',
+    desc: "Générateur d'ondes de choc focalisées. Brise les structures lithiques et désarticule les exosquelettes. Particulièrement efficace contre les défenses mécaniques alien."
+  },
+  balise_retour: {
+    nom: "Balise de retour d'urgence",
+    type: 'tool', origin: 'humain',
+    desc: "Signal de détresse à portée galactique. Déclenche une extraction immédiate. Sauve l'équipage si la mission tourne mal — mais laisse le loot derrière."
+  },
+  bouclier_plasma: {
+    nom: "Bouclier plasma personnel",
+    type: 'weapon', origin: 'humain',
+    desc: "Générateur de champ électro-magnétique portatif. Absorbe les premiers impacts d'énergie et de projectiles. Recharge passif entre les engagements."
+  },
+
+  // — Outils pour la colonie —
+  purificateur_air: {
+    nom: "Purificateur atmosphérique",
+    type: 'tool', origin: 'humain',
+    desc: "Filtre moléculaire stationnaire. Installez-le dans l'habitat pour réduire les pathogènes en suspension. Contribue à la santé globale de l'équipage."
+  },
+  noeud_comm: {
+    nom: "Nœud de communication local",
+    type: 'tool', origin: 'humain',
+    desc: "Relais de données à courte portée. Connecte les postes de travail au laboratoire. Accélère les échanges d'informations — utile pour la recherche."
+  },
+  serre_portable: {
+    nom: "Serre portable",
+    type: 'tool', origin: 'humain',
+    desc: "Module de culture hermétique à déploiement rapide. Peut booster temporairement la production biomasse de la colonie, ou servir de provision de secours en mission longue."
+  },
+
+  // — Alien-A (cristallin / énergétique) —
+  resonateur_harmonique: {
+    nom: "Résonateur harmonique",
+    type: 'tool', origin: 'alien_a',
+    desc: "Cristal pulsant à fréquence propre. Neutralise les champs de confinement alien-A et déclenche les mécanismes dormants dans les ruines cristallines. Amplifie aussi les équipements énergétiques de la colonie."
+  },
+  cristal_memoire_alien: {
+    nom: "Cristal de mémoire alien",
+    type: 'tool', origin: 'alien_a',
+    desc: "Réseau cristallin auto-organisé capable d'encoder de l'information. Connecté au laboratoire, il accélère l'analyse de données et augmente la capacité de stockage datacubes."
+  },
+
+  // — Alien-B (organique / biotech) —
+  enzymes_dissolution: {
+    nom: "Enzymes de dissolution",
+    type: 'consumable', origin: 'alien_b',
+    desc: "Concentré enzymatique alien-B. Dissout les parois organiques et les films biologiques qui obstruent les passages. Neutralise aussi certains venins de la faune locale."
+  },
+  catalyseur_bio: {
+    nom: "Catalyseur biologique",
+    type: 'consumable', origin: 'alien_b',
+    desc: "Sérum de régénération accélérée. Restaure 40% de santé immédiatement et efface les effets de status légers. Le meilleur soin de terrain disponible."
+  },
+  filet_capture_xeno: {
+    nom: "Filet de capture xeno",
+    type: 'tool', origin: 'alien_b',
+    desc: "Réseau de filaments bio-actifs qui neutralisent les organismes vivants sans les tuer. Permet de ramener des spécimens vivants — source d'études et de biomasse rare."
+  },
+
+  // — Fusion humain-alien —
+  implant_synaptique: {
+    nom: "Implant synaptique",
+    type: 'tool', origin: 'fusion',
+    desc: "Interface neuronale micro-invasive combinant nanobots et filaments cristallins. Augmente la vitesse de traitement cognitif du porteur. Accélère l'apprentissage et améliore les performances en situation de stress."
+  },
+  armure_composite: {
+    nom: "Armure composite",
+    type: 'tool', origin: 'fusion',
+    desc: "Alliage stratifié de métal terrestre, cristal alien-A et membrane organique alien-B. La meilleure protection individuelle existante. Résiste aux menaces thermiques, énergétiques et biologiques."
   }
 };
 
@@ -679,6 +799,144 @@ export const BLUEPRINTS = {
     origin: 'fusion', rarity: 4, legendary: true,
     unlocks: { kind: 'tech', target: 'tech_relais_unifie', label: 'Relais unifié' },
     desc: "Hérité de l'Effondrement. Architecture qui synchronise toutes les fréquences de la colonie en un seul point. Plans d'une rare élégance."
+  },
+
+  // ===== 0.30 — Nouveaux schémas =====
+
+  // — Humains (mission) —
+  bp_stimulant_cognitif: {
+    nom: "Schéma : Stimulant cognitif",
+    origin: 'humain', rarity: 1,
+    unlocks: { kind: 'fab', target: 'stimulant_cognitif', label: 'Stimulant cognitif' },
+    desc: "Formule pharmaceutique pre-Effondrement. Nootropiques concentrés à injection rapide."
+  },
+  bp_sonde_analyse: {
+    nom: "Schéma : Sonde d'analyse",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'sonde_analyse', label: "Sonde d'analyse" },
+    desc: "Plans d'un appareil de relevé sismique et chimique autonome. Extraction passive de données."
+  },
+  bp_nanobots_reparation: {
+    nom: "Schéma : Nanobots de réparation",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'nanobots_reparation', label: 'Nanobots de réparation' },
+    desc: "Spécifications de micro-robots médicaux auto-guidés. Requiert une nanotech maîtrisée."
+  },
+  bp_mine_eclats: {
+    nom: "Schéma : Mine à éclats",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'mine_eclats', label: 'Mine à éclats' },
+    desc: "Plans d'un engin de défense de périmètre. Usage tactique offensif ou défensif."
+  },
+  bp_explosif_demolition: {
+    nom: "Schéma : Explosif de démolition",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'explosif_demolition', label: 'Explosif de démolition' },
+    desc: "Charge directionnelle pour démolition contrôlée. Ouvre les sites murés."
+  },
+  bp_scanner_geologique: {
+    nom: "Schéma : Scanner géologique",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'scanner_geologique', label: 'Scanner géologique' },
+    desc: "Technologie de sondage sismique miniaturisée. Requiert une géologie avancée maîtrisée."
+  },
+  bp_tenue_camouflage: {
+    nom: "Schéma : Tenue de camouflage",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'tenue_camouflage', label: 'Tenue de camouflage' },
+    desc: "Revêtement adaptatif thermique et visuel. Requiert la recherche en camouflage adaptatif."
+  },
+  bp_grappin_tactique: {
+    nom: "Schéma : Grappin tactique",
+    origin: 'humain', rarity: 1,
+    unlocks: { kind: 'fab', target: 'grappin_tactique', label: 'Grappin tactique' },
+    desc: "Mécanique simple, robuste, éprouvée. Standard de terrain."
+  },
+  bp_marteau_sonique: {
+    nom: "Schéma : Marteau sonique",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'marteau_sonique', label: 'Marteau sonique' },
+    desc: "Arme à percussion ultrasonique. Nécessite une compréhension des principes xeno pour calibrer correctement les fréquences."
+  },
+  bp_balise_retour: {
+    nom: "Schéma : Balise de retour",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'balise_retour', label: "Balise de retour d'urgence" },
+    desc: "Émetteur galactique à usage unique. Assurance-vie pour toute mission lointaine."
+  },
+  bp_bouclier_plasma: {
+    nom: "Schéma : Bouclier plasma",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'bouclier_plasma', label: 'Bouclier plasma personnel' },
+    desc: "Générateur de champ de force personnel. Haute consommation, haute protection."
+  },
+
+  // — Humains (colonie) —
+  bp_purificateur_air: {
+    nom: "Schéma : Purificateur atmosphérique",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'purificateur_air', label: 'Purificateur atmosphérique' },
+    desc: "Filtres moléculaires et protocole de circulation d'air. Pour l'habitat de la colonie."
+  },
+  bp_noeud_comm: {
+    nom: "Schéma : Nœud de communication",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'noeud_comm', label: 'Nœud de communication local' },
+    desc: "Réseau maillé de relais de données. Connecte laboratoire, ateliers et postes de commandement."
+  },
+  bp_serre_portable: {
+    nom: "Schéma : Serre portable",
+    origin: 'humain', rarity: 1,
+    unlocks: { kind: 'fab', target: 'serre_portable', label: 'Serre portable' },
+    desc: "Module de culture hermétique compact. Solution de survie biomasse à courte portée."
+  },
+
+  // — Alien-A —
+  bp_resonateur_harmonique: {
+    nom: "Schéma : Résonateur harmonique",
+    origin: 'alien_a', rarity: 3,
+    unlocks: { kind: 'fab', target: 'resonateur_harmonique', label: 'Résonateur harmonique' },
+    desc: "Séquence cristalline gravée décrivant la fréquence propre du réseau alien-A. Incroyablement précis."
+  },
+  bp_cristal_memoire: {
+    nom: "Schéma : Cristal de mémoire alien",
+    origin: 'alien_a', rarity: 3,
+    unlocks: { kind: 'fab', target: 'cristal_memoire_alien', label: 'Cristal de mémoire alien' },
+    desc: "Protocole de croissance cristalline artificielle pour encoder de l'information à densité extreme."
+  },
+
+  // — Alien-B —
+  bp_enzymes_dissolution: {
+    nom: "Schéma : Enzymes de dissolution",
+    origin: 'alien_b', rarity: 2,
+    unlocks: { kind: 'fab', target: 'enzymes_dissolution', label: 'Enzymes de dissolution' },
+    desc: "Séquence enzymatique alien-B. Synthétisable en laboratoire si la xenobiologie est maîtrisée."
+  },
+  bp_catalyseur_bio: {
+    nom: "Schéma : Catalyseur biologique",
+    origin: 'alien_b', rarity: 3,
+    unlocks: { kind: 'fab', target: 'catalyseur_bio', label: 'Catalyseur biologique' },
+    desc: "Protéines de régénération alien-B. Agit sur le métabolisme humain de manière surprenante."
+  },
+  bp_filet_capture: {
+    nom: "Schéma : Filet de capture xeno",
+    origin: 'alien_b', rarity: 2,
+    unlocks: { kind: 'fab', target: 'filet_capture_xeno', label: 'Filet de capture xeno' },
+    desc: "Tissu de filaments bio-actifs alien-B. Immobilise sans tuer. Requiert la xénobiologie."
+  },
+
+  // — Fusion —
+  bp_implant_synaptique: {
+    nom: "Schéma : Implant synaptique",
+    origin: 'fusion', rarity: 4,
+    unlocks: { kind: 'fab', target: 'implant_synaptique', label: 'Implant synaptique' },
+    desc: "Plans d'une interface neuronale combinant nanotech humaine et filaments cristallins alien. Très rare."
+  },
+  bp_armure_composite: {
+    nom: "Schéma : Armure composite",
+    origin: 'fusion', rarity: 4,
+    unlocks: { kind: 'fab', target: 'armure_composite', label: 'Armure composite' },
+    desc: "Alliage triple : métal, cristal, membrane organique. La protection ultime. Plans presque introuvables."
   }
 };
 
@@ -854,7 +1112,60 @@ export const TECH_TREE = {
     cost:{ datacubes:180, time: 900 },
     prereq:{ tech:['tech_commerce_interstellaire'] },
     effects:{ unlockAlliances: true, diplomaticBonus: 1.30 },
-    desc:"Droit interstellaire, jurisprudence multi-espèces. Permet de nouer des alliances formelles (Ambassade niv 5). +30% gains rep." }
+    desc:"Droit interstellaire, jurisprudence multi-espèces. Permet de nouer des alliances formelles (Ambassade niv 5). +30% gains rep." },
+
+  // ============ 0.30 — NOUVELLES TECHS ============
+
+  // — Ingénierie —
+  tech_recyclage: { branch:'ingenierie', tier:2, nom:"Recyclage intégré",
+    cost:{ datacubes:55, time: 300 },
+    prereq:{ tech:['tech_metallurgie'] },
+    effects:{ resourceMult:{ metal:1.10, energie:1.10 } },
+    desc:"Récupération des déchets industriels et thermiques. Métal +10%, énergie +10%." },
+
+  tech_geologie_avancee: { branch:'ingenierie', tier:2, nom:"Géologie avancée",
+    cost:{ datacubes:60, time: 360 },
+    prereq:{ tech:['tech_metallurgie'] },
+    effects:{ expeditionAlienLootMult: 1.20, resourceMult:{ metal:1.15 } },
+    desc:"Analyse sismique et minéralogique de précision. Loot minéral en expédition +20%, métal +15%." },
+
+  tech_nanotech: { branch:'ingenierie', tier:3, nom:"Nanotechnologie",
+    cost:{ datacubes:130, time: 720 },
+    prereq:{ tech:['tech_automatisation', 'tech_recyclage'] },
+    effects:{ treatmentSpeedMult: 0.75, trainingSpeedMult: 0.90 },
+    desc:"Nanorobots polyvalents : soins et réparations internes. Soins -25%, formations -10%." },
+
+  tech_camouflage_adaptatif: { branch:'ingenierie', tier:3, nom:"Camouflage adaptatif",
+    cost:{ datacubes:140, time: 780 },
+    prereq:{ tech:['tech_blindage'] },
+    effects:{ expeditionThreatBonus: -1, expeditionBiomasseMult: 0.85 },
+    desc:"Revêtements multicouches actifs. Menace expéditions -1, vivres -15% (équipe plus discrète)." },
+
+  // — Bio-sciences —
+  tech_toxicologie: { branch:'bio', tier:2, nom:"Toxicologie avancée",
+    cost:{ datacubes:65, time: 360 },
+    prereq:{ tech:['tech_immunologie'] },
+    effects:{ contagionMult: 0.30, expeditionBiomasseMult: 0.90 },
+    desc:"Contre-mesures aux toxines biologiques et chimiques. Contagion ×0.3, consommation vivres -10% en terrain hostile." },
+
+  tech_xenobiologie: { branch:'bio', tier:2, nom:"Xénobiologie",
+    cost:{ datacubes:70, time: 420 },
+    prereq:{ tech:['tech_immunologie'] },
+    effects:{ expeditionAlienLootMult: 1.20, moduleProdMult:{ hydroponie:1.15 } },
+    desc:"Classification et usage des organismes alien-B. Loot alien +20%, hydroponie +15%." },
+
+  tech_biomecanique: { branch:'bio', tier:3, nom:"Bio-mécanique",
+    cost:{ datacubes:130, time: 720 },
+    prereq:{ tech:['tech_chirurgie_avancee', 'tech_xenobiologie'] },
+    effects:{ treatmentSpeedMult: 0.80, sequelChanceMult: 0.65 },
+    desc:"Augmentations biologiques légères. Soins -20%, risque de séquelles -35%." },
+
+  // — Exotique —
+  tech_armure_composite: { branch:'exotique', tier:3, nom:"Armure composite",
+    cost:{ datacubes:180, datacubes_alien:18, time: 900 },
+    prereq:{ tech:['tech_resonance_armee', 'tech_membrane_adaptive'] },
+    effects:{ expeditionThreatBonus: -2, vesselFuelMult: 0.85 },
+    desc:"Alliage triple : métal humain, cristal alien-A, membrane alien-B. Menace expéditions -2, carburant -15%." }
 };
 
 
@@ -960,6 +1271,186 @@ export const FABRICATIONS = {
     time: 480,
     prereq: { workshopLevel: 4, blueprint: 'bp_membrane_adaptive', tech: ['tech_principes_xeno'] },
     desc: "Membrane vivante. Immunise contre atmosphères toxiques."
+  },
+
+  // ===== 0.30 — Nouvelles fabrications =====
+
+  // — Consommables de mission (atelier 1-2) —
+  fab_stimulant_cognitif: {
+    nom: "Stimulant cognitif",
+    produces: 'stimulant_cognitif',
+    cost: { biomasse: 10, datacubes: 4, cristal: 5 },
+    time: 90,
+    prereq: { workshopLevel: 2, blueprint: 'bp_stimulant_cognitif' },
+    desc: "Nootropiques injectables pour missions à décision critique."
+  },
+  fab_sonde_analyse: {
+    nom: "Sonde d'analyse",
+    produces: 'sonde_analyse',
+    cost: { metal: 15, cristal: 20, energie: 8 },
+    time: 180,
+    prereq: { workshopLevel: 2, blueprint: 'bp_sonde_analyse' },
+    desc: "Capteur autonome à déployer sur les ruines pour extraire des datacubes."
+  },
+  fab_mine_eclats: {
+    nom: "Mine à éclats",
+    produces: 'mine_eclats',
+    cost: { metal: 20, cristal: 10, energie: 5 },
+    time: 120,
+    prereq: { workshopLevel: 2, blueprint: 'bp_mine_eclats' },
+    desc: "Engin de défense de périmètre à pression."
+  },
+  fab_explosif_demolition: {
+    nom: "Explosif de démolition",
+    produces: 'explosif_demolition',
+    cost: { metal: 25, cristal: 15, energie: 10 },
+    time: 150,
+    prereq: { workshopLevel: 2, blueprint: 'bp_explosif_demolition' },
+    desc: "Charge directionnelle pour ouvrir les structures murées."
+  },
+  fab_grappin_tactique: {
+    nom: "Grappin tactique",
+    produces: 'grappin_tactique',
+    cost: { metal: 18, cristal: 12, energie: 6 },
+    time: 150,
+    prereq: { workshopLevel: 1, blueprint: 'bp_grappin_tactique' },
+    desc: "Lance-câble magnétique standard. Indispensable en terrain accidenté."
+  },
+  fab_serre_portable: {
+    nom: "Serre portable",
+    produces: 'serre_portable',
+    cost: { metal: 12, biomasse: 8, cristal: 6 },
+    time: 120,
+    prereq: { workshopLevel: 1, blueprint: 'bp_serre_portable' },
+    desc: "Module de culture hermétique déployable rapidement."
+  },
+  fab_balise_retour: {
+    nom: "Balise de retour d'urgence",
+    produces: 'balise_retour',
+    cost: { metal: 12, cristal: 18, energie: 10 },
+    time: 180,
+    prereq: { workshopLevel: 2, blueprint: 'bp_balise_retour' },
+    desc: "Extraction d'urgence galactique. Usage unique."
+  },
+
+  // — Outils avancés (atelier 3, tech requise) —
+  fab_nanobots_reparation: {
+    nom: "Nanobots de réparation",
+    produces: 'nanobots_reparation',
+    cost: { metal: 20, cristal: 25, datacubes: 8, energie: 10 },
+    time: 300,
+    prereq: { workshopLevel: 3, blueprint: 'bp_nanobots_reparation', tech: ['tech_nanotech'] },
+    desc: "Microbots médicaux injectables. Soins de terrain sans médecin."
+  },
+  fab_scanner_geologique: {
+    nom: "Scanner géologique",
+    produces: 'scanner_geologique',
+    cost: { metal: 30, cristal: 40, energie: 15, datacubes: 6 },
+    time: 360,
+    prereq: { workshopLevel: 3, blueprint: 'bp_scanner_geologique', tech: ['tech_geologie_avancee'] },
+    desc: "Sonde sismique portable. Révèle les ressources enfouies."
+  },
+  fab_purificateur_air: {
+    nom: "Purificateur atmosphérique",
+    produces: 'purificateur_air',
+    cost: { metal: 20, cristal: 15, biomasse: 10, energie: 8 },
+    time: 240,
+    prereq: { workshopLevel: 2, blueprint: 'bp_purificateur_air' },
+    desc: "Filtre moléculaire. Réduit les pathogènes dans l'habitat."
+  },
+  fab_tenue_camouflage: {
+    nom: "Tenue de camouflage",
+    produces: 'tenue_camouflage',
+    cost: { metal: 25, biomasse: 15, cristal: 20 },
+    time: 360,
+    prereq: { workshopLevel: 3, blueprint: 'bp_tenue_camouflage', tech: ['tech_camouflage_adaptatif'] },
+    desc: "Revêtement adaptatif thermique et visuel."
+  },
+  fab_noeud_comm: {
+    nom: "Nœud de communication local",
+    produces: 'noeud_comm',
+    cost: { metal: 25, cristal: 45, energie: 20, datacubes: 12 },
+    time: 420,
+    prereq: { workshopLevel: 3, blueprint: 'bp_noeud_comm', tech: ['tech_circuiterie'] },
+    desc: "Relais de données interne. Accélère la recherche au laboratoire."
+  },
+  fab_marteau_sonique: {
+    nom: "Marteau sonique",
+    produces: 'marteau_sonique',
+    cost: { metal: 35, cristal: 30, energie: 20, datacubes: 8 },
+    time: 480,
+    prereq: { workshopLevel: 3, blueprint: 'bp_marteau_sonique', tech: ['tech_principes_xeno'] },
+    desc: "Onde de choc focalisée. Efficace contre les structures et exosquelettes alien."
+  },
+  fab_bouclier_plasma: {
+    nom: "Bouclier plasma personnel",
+    produces: 'bouclier_plasma',
+    cost: { metal: 40, cristal: 35, energie: 25, datacubes: 10 },
+    time: 540,
+    prereq: { workshopLevel: 4, blueprint: 'bp_bouclier_plasma', tech: ['tech_batteries_avancees'] },
+    desc: "Champ de force personnel. Protection contre énergie et projectiles."
+  },
+
+  // — Alien-B (atelier 2-3, xenobiologie) —
+  fab_enzymes_dissolution: {
+    nom: "Enzymes de dissolution",
+    produces: 'enzymes_dissolution',
+    cost: { biomasse: 30, datacubes: 6 },
+    time: 180,
+    prereq: { workshopLevel: 2, blueprint: 'bp_enzymes_dissolution' },
+    desc: "Concentré enzymatique pour obstacles organiques ou venins alien."
+  },
+  fab_filet_capture: {
+    nom: "Filet de capture xeno",
+    produces: 'filet_capture_xeno',
+    cost: { metal: 10, biomasse: 20, cristal: 8 },
+    time: 180,
+    prereq: { workshopLevel: 2, blueprint: 'bp_filet_capture', tech: ['tech_xenobiologie'] },
+    desc: "Filaments bio-actifs pour capturer des spécimens vivants."
+  },
+  fab_catalyseur_bio: {
+    nom: "Catalyseur biologique",
+    produces: 'catalyseur_bio',
+    cost: { biomasse: 40, datacubes: 10, cristal: 15 },
+    time: 300,
+    prereq: { workshopLevel: 3, blueprint: 'bp_catalyseur_bio', tech: ['tech_xenobiologie'] },
+    desc: "Sérum de régénération accélérée. Meilleur soin de terrain disponible."
+  },
+
+  // — Alien-A (atelier 4, xeno avancé) —
+  fab_resonateur_harmonique: {
+    nom: "Résonateur harmonique",
+    produces: 'resonateur_harmonique',
+    cost: { cristal: 50, datacubes: 12, energie: 15 },
+    time: 480,
+    prereq: { workshopLevel: 4, blueprint: 'bp_resonateur_harmonique', tech: ['tech_principes_xeno'] },
+    desc: "Cristal synthétique pulsant. Neutralise défenses alien-A, amplifie équipements énergie."
+  },
+  fab_cristal_memoire: {
+    nom: "Cristal de mémoire alien",
+    produces: 'cristal_memoire_alien',
+    cost: { cristal: 45, datacubes: 15, energie: 12 },
+    time: 420,
+    prereq: { workshopLevel: 4, blueprint: 'bp_cristal_memoire', tech: ['tech_memoire_cristalline'] },
+    desc: "Réseau cristallin pour stockage de données haute densité."
+  },
+
+  // — Fusion (atelier 5, techs multiples) —
+  fab_implant_synaptique: {
+    nom: "Implant synaptique",
+    produces: 'implant_synaptique',
+    cost: { metal: 30, cristal: 50, biomasse: 25, datacubes: 20, energie: 20 },
+    time: 720,
+    prereq: { workshopLevel: 5, blueprint: 'bp_implant_synaptique', tech: ['tech_principes_xeno', 'tech_genetique'] },
+    desc: "Interface neuronale fusion. Accélère apprentissage et réactions sous stress."
+  },
+  fab_armure_composite: {
+    nom: "Armure composite",
+    produces: 'armure_composite',
+    cost: { metal: 60, cristal: 55, biomasse: 20, datacubes: 18, energie: 25 },
+    time: 840,
+    prereq: { workshopLevel: 5, blueprint: 'bp_armure_composite', tech: ['tech_armure_composite'] },
+    desc: "Protection ultime. Résiste à toutes les menaces connues."
   }
 };
 

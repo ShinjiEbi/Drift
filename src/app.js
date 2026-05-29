@@ -3172,15 +3172,47 @@ function hookColonyEventModal() {
       const { eventId, actors } = _activeColonyEvent;
       const ev = COLONY_EVENTS[eventId];
       const choice = ev.choices[idx];
-      const ok = applyColonyEventChoice(eventId, choice, actors);
-      if (ok !== false) {
-        S.lastColonyEventId = eventId;
-        $('#modalBg').classList.remove('show');
-        m.classList.remove('incident-modal');
-        _activeColonyEvent = null;
-        render();
-      }
+      const result = applyColonyEventChoice(eventId, choice, actors);
+      if (result === false) return;   // échec (ex : stock insuffisant) — on laisse choisir
+      S.lastColonyEventId = eventId;
+      // 0.30 — Affiche l'écran de conséquences avant de fermer.
+      m.innerHTML = renderColonyConsequence(result, choice);
+      hookColonyConsequence();
+      // Met à jour l'arrière-plan (ressources, etc.) tout de suite
+      render();
     });
+  });
+}
+
+// 0.30 — Écran de conséquences : ce que le choix a réellement provoqué.
+function renderColonyConsequence(result, choice) {
+  const label = (choice.label || '').replace(/\{primary\}/g, _activeColonyEvent?.actors?.primary?.name || '');
+  const effectsHTML = (result.effects || []).map(e => {
+    const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
+    const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
+    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${e.text}</span></li>`;
+  }).join('');
+  const narrativeHTML = result.narrative
+    ? `<p class="incident-body">${result.narrative}</p>`
+    : '';
+  return `
+    <div class="incident-eyebrow ${result.positive ? 'positive' : ''}">Conséquences</div>
+    <h3 class="incident-title">« ${label} »</h3>
+    ${narrativeHTML}
+    <ul class="cons-list">${effectsHTML}</ul>
+    <div class="incident-choices">
+      <button class="incident-choice" id="consContinue" style="text-align:center">Continuer</button>
+    </div>
+  `;
+}
+
+function hookColonyConsequence() {
+  const m = $('#modal');
+  $('#consContinue')?.addEventListener('click', () => {
+    $('#modalBg').classList.remove('show');
+    m.classList.remove('incident-modal');
+    _activeColonyEvent = null;
+    render();
   });
 }
 
@@ -3202,29 +3234,106 @@ export function applyColonyEventChoice(eventId, choice, actors) {
   }
 
   const o = choice.outcome || {};
-  
+
   // 0.28 : multiplicateur d'impact
   const OUTCOME_MULT = 3;
 
+  // 0.30 — Conséquences concrètes recensées et renvoyées à l'UI.
+  // Elles varient selon l'équipage et les ententes (réactions des proches, climat moral).
+  const effects = [];   // { kind:'good'|'bad'|'neutral', text }
+  const team = aliveCrew();
+
+  // Climat moral de la colonie : module l'intensité des conséquences négatives.
+  // Une colonie déjà à cran encaisse plus mal les mauvaises décisions.
+  const avgMoral = team.length ? team.reduce((s, m) => s + (m.moral || 0), 0) / team.length : 50;
+  let moodMult = 1;
+  let moodNote = null;
+  if ((o.moralAll || 0) < 0) {
+    if (avgMoral < 35) { moodMult = 1.5; moodNote = "L'équipage est déjà à bout : le coup porte plus fort."; }
+    else if (avgMoral > 75) { moodMult = 0.6; moodNote = "L'équipage est soudé : il encaisse sans broncher."; }
+  } else if ((o.moralAll || 0) > 0) {
+    if (avgMoral < 35) { moodMult = 1.4; moodNote = "Après les jours difficiles, ce répit fait d'autant plus de bien."; }
+  }
+
   // Pertes / gains de ressources
   if (o.loss) {
-    for (const k in o.loss) S.res[k] = Math.max(0, (S.res[k] || 0) - o.loss[k] * OUTCOME_MULT);
+    for (const k in o.loss) {
+      const amt = o.loss[k] * OUTCOME_MULT;
+      S.res[k] = Math.max(0, (S.res[k] || 0) - amt);
+      effects.push({ kind: 'bad', text: `−${Math.round(amt)} ${RES_LABELS[k] || k}` });
+    }
   }
   if (o.gain) {
-    for (const k in o.gain) S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + o.gain[k] * OUTCOME_MULT);
-  }
-  // Moral collectif — 0.28 : impact durable (×3)
-  if (o.moralAll) {
-    for (const m of aliveCrew()) {
-      m.moral = Math.max(0, Math.min(100, m.moral + o.moralAll * 3));
+    for (const k in o.gain) {
+      const amt = o.gain[k] * OUTCOME_MULT;
+      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + amt);
+      effects.push({ kind: 'good', text: `+${Math.round(amt)} ${RES_LABELS[k] || k}` });
     }
+  }
+  // Moral collectif — 0.28 : impact durable (×3), 0.30 : modulé par le climat
+  if (o.moralAll) {
+    const delta = Math.round(o.moralAll * 3 * moodMult);
+    for (const m of team) {
+      m.moral = Math.max(0, Math.min(100, m.moral + delta));
+    }
+    effects.push({
+      kind: delta >= 0 ? 'good' : 'bad',
+      text: `Moral de l'équipage ${delta >= 0 ? '+' : ''}${delta} (${team.length} colon${team.length > 1 ? 's' : ''})`
+    });
+    if (moodNote) effects.push({ kind: 'neutral', text: moodNote });
   }
   // Ajustement d'affinité ciblé
   if (o.adjustAffinity) {
     const a = o.adjustAffinity.a === 'primary' ? primary?.id : (o.adjustAffinity.a === 'secondary' ? secondary?.id : null);
     const b = o.adjustAffinity.b === 'primary' ? primary?.id : (o.adjustAffinity.b === 'secondary' ? secondary?.id : null);
-    if (a && b) adjustAffinity(a, b, o.adjustAffinity.delta);
+    if (a && b) {
+      adjustAffinity(a, b, o.adjustAffinity.delta);
+      const an = S.crew.find(m => m.id === a)?.name || '?';
+      const bn = S.crew.find(m => m.id === b)?.name || '?';
+      const rel = relationType(affinityBetween(a, b));
+      effects.push({
+        kind: o.adjustAffinity.delta >= 0 ? 'good' : 'bad',
+        text: `Entente ${an} ↔ ${bn} ${o.adjustAffinity.delta >= 0 ? '+' : ''}${o.adjustAffinity.delta} → ${rel.label}`
+      });
+    }
   }
+
+  // 0.30 — RÉACTIONS DES PROCHES : le cœur de "ça dépend des ententes".
+  // Ce qui arrive au protagoniste touche émotionnellement ses proches (et réjouit ses rivaux).
+  // La tonalité vient du signe de moralAll, sinon du caractère positif/négatif de l'événement.
+  if (primary) {
+    let tone = 0;
+    if (typeof o.moralAll === 'number' && o.moralAll !== 0) tone = o.moralAll > 0 ? 1 : -1;
+    else if (o.gain || o.spawnVisitor || o.randomBlueprint) tone = 1;
+    else if (o.loss || o.debuff || o.generateRivalry) tone = -1;
+    else tone = ev.positive ? 1 : -1;
+
+    const { friends, rivals } = significantRelations(primary.id);
+    // Les proches (hors secondary déjà traité) ressentent le contrecoup
+    const reactingFriends = friends.filter(f => f.memberId !== secondary?.id);
+    if (reactingFriends.length > 0 && tone !== 0) {
+      const fDelta = tone > 0 ? 4 : -5;
+      for (const f of reactingFriends) {
+        f.member.moral = Math.max(0, Math.min(100, f.member.moral + fDelta));
+      }
+      const names = reactingFriends.map(f => f.member.name).join(', ');
+      effects.push({
+        kind: tone > 0 ? 'good' : 'bad',
+        text: tone > 0
+          ? `Ses proches (${names}) partagent le moment — moral +${fDelta}`
+          : `Ses proches (${names}) encaissent avec lui — moral ${fDelta}`
+      });
+    }
+    // Les rivaux savourent (ou compatissent à peine) — effet inverse, plus discret
+    if (tone < 0 && rivals.length > 0) {
+      const rNames = rivals.map(r => r.member.name).join(', ');
+      for (const r of rivals) {
+        r.member.moral = Math.max(0, Math.min(100, r.member.moral + 2));
+      }
+      effects.push({ kind: 'neutral', text: `${rNames} ne cache${rivals.length > 1 ? 'nt' : ''} pas une certaine satisfaction.` });
+    }
+  }
+
   // Marqueurs (pour cooldown spécifique)
   if (o.markBirthday && primary) primary.lastBirthdayCelebrated = S.meta.gameMin;
   if (o.markHommage) S.lastHommageMin = S.meta.gameMin;
@@ -3255,12 +3364,18 @@ export function applyColonyEventChoice(eventId, choice, actors) {
       };
       S.crew.push(member);
       autoAssignMember(member.id);
+      effects.push({ kind: 'good', text: `${member.name} rejoint la colonie (${cap.used + 1}/${cap.total})` });
+    } else {
+      effects.push({ kind: 'bad', text: `Habitat plein : impossible d'accueillir le visiteur.` });
     }
   }
   // Schéma aléatoire
   if (o.randomBlueprint) {
     const bpId = rollBlueprint([o.randomBlueprint]);
-    if (bpId) addBlueprintToInventory(bpId, 'événement');
+    if (bpId) {
+      addBlueprintToInventory(bpId, 'événement');
+      effects.push({ kind: 'good', text: `Schéma acquis : ${BLUEPRINTS[bpId]?.nom || bpId}` });
+    }
   }
 
   // 0.28 : NOUVEAUX EFFETS DURABLES (mêmes que pour les incidents)
@@ -3274,6 +3389,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
       expiresAt: (S.meta.gameMin || 0) + (o.debuff.duration || 720)
     });
     log('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
+    effects.push({ kind: 'bad', text: `Effet en cours : ${o.debuff.label || 'modulation temporaire'}` });
   }
   // — generateRivalry entre primary et secondary
   if (o.generateRivalry && primary && secondary) {
@@ -3281,6 +3397,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     if (!S.relations) S.relations = {};
     S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
     log('warn', `<em>${primary.name}</em> et <em>${secondary.name}</em> se brouillent durablement.`);
+    effects.push({ kind: 'bad', text: `${primary.name} et ${secondary.name} se brouillent durablement.` });
   }
   // — historicalMark : entrée dans le journal historique de la colonie
   if (o.historicalMark) {
@@ -3292,14 +3409,18 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     });
   }
 
-  // Log final
+  // Log final + narratif renvoyé à l'UI
+  let narrative = '';
   if (o.log) {
-    const cleanLog = o.log
+    narrative = o.log
       .replace(/\{primary\}/g, primary ? `<em>${primary.name}</em>` : 'un colon')
       .replace(/\{secondary\}/g, secondary ? `<em>${secondary.name}</em>` : '');
-    log(ev.positive ? 'success' : 'warn', cleanLog);
+    log(ev.positive ? 'success' : 'warn', narrative);
   }
-  return true;
+  if (effects.length === 0) {
+    effects.push({ kind: 'neutral', text: 'Aucune conséquence notable.' });
+  }
+  return { ok: true, narrative, effects, positive: ev.positive };
 }
 
 // ============================================================
@@ -3416,13 +3537,39 @@ export function permanentBonusesAccumulated() {
 // automatique. À faible réputation, embuscades.
 
 
-// Statut diplomatique selon réputation
+// Statut diplomatique selon réputation (0.30 — 6 paliers)
 export function factionStatus(rep) {
-  if (rep >= 60) return { key: 'allie',    label: 'Allié',    color: 'var(--moss)' };
-  if (rep >= 25) return { key: 'cordial',  label: 'Cordial',  color: 'var(--amber)' };
-  if (rep > -25) return { key: 'neutre',   label: 'Neutre',   color: 'var(--text-mute)' };
-  if (rep > -60) return { key: 'mefiant',  label: 'Méfiant',  color: 'var(--rust)' };
-  return { key: 'hostile', label: 'Hostile', color: 'var(--rust)' };
+  if (rep >= 75) return { key: 'allie',   label: 'Allié',    color: '#6aad8a' };
+  if (rep >= 50) return { key: 'ami',     label: 'Ami',      color: 'var(--moss)' };
+  if (rep >= 20) return { key: 'cordial', label: 'Cordial',  color: 'var(--amber)' };
+  if (rep > -20) return { key: 'neutre',  label: 'Neutre',   color: 'var(--text-mute)' };
+  if (rep > -60) return { key: 'mefiant', label: 'Méfiant',  color: 'var(--rust)' };
+  return             { key: 'hostile',  label: 'Hostile',  color: '#c53030' };
+}
+
+// 0.30 — Offrir un cadeau à une faction
+export function offerGift(factionId, giftIdx) {
+  const f = S.factions?.[factionId];
+  if (!f) return;
+  const ft = FACTION_TYPES[f.type];
+  const gift = ft.giftOptions?.[giftIdx];
+  if (!gift) return;
+  // Cooldown
+  const cooldown = ft.giftCooldown || 3 * 24 * 60;
+  if (f.lastGift && (S.meta.gameMin - f.lastGift) < cooldown) {
+    const wait = cooldown - (S.meta.gameMin - f.lastGift);
+    toast(`Cadeau récent. Réessaie dans ${fmtMin(wait)}.`);
+    return;
+  }
+  if ((S.res[gift.resource] || 0) < gift.amount) {
+    toast(`Ressources insuffisantes (${RES_LABELS[gift.resource]}).`);
+    return;
+  }
+  S.res[gift.resource] -= gift.amount;
+  f.lastGift = S.meta.gameMin;
+  adjustReputation(factionId, gift.repGain);
+  log('success', `Cadeau offert à <em>${f.name}</em> — ${gift.label} (−${gift.amount} ${RES_LABELS[gift.resource]}) : réputation +${gift.repGain}.`);
+  render();
 }
 
 // Génère un nom de faction selon le type
@@ -3496,13 +3643,24 @@ export function tickFactions() {
   if (!S.factions) return;
   for (const id in S.factions) {
     const f = S.factions[id];
-    if (f.reputation < 40) continue;       // Pas de commerce sous 40
-    if (!f.tradeActive) continue;          // Le joueur a activé le commerce
-    const cycle = 15 * 24 * 60;            // 15 jours jeu
-    if (!f.lastCaravan) f.lastCaravan = f.metAt;
-    if (S.meta.gameMin - f.lastCaravan < cycle) continue;
-    // Caravane !
-    triggerCaravan(f);
+    const ft = FACTION_TYPES[f.type];
+    // Commerce auto (rep ≥ 40 et activé par le joueur)
+    if (f.reputation >= 40 && f.tradeActive) {
+      const cycle = 15 * 24 * 60;
+      if (!f.lastCaravan) f.lastCaravan = f.metAt;
+      if (S.meta.gameMin - f.lastCaravan >= cycle) triggerCaravan(f);
+    }
+    // 0.30 — Don d'alliance (rep ≥ 75, automatique)
+    if (f.reputation >= 75 && ft?.allianceGift) {
+      const ag = ft.allianceGift;
+      if (!f.lastAllianceGift) f.lastAllianceGift = f.metAt || S.meta.gameMin;
+      if (S.meta.gameMin - f.lastAllianceGift >= ag.interval) {
+        S.res[ag.resource] = Math.min(capOf(ag.resource), (S.res[ag.resource] || 0) + ag.amount);
+        f.lastAllianceGift = S.meta.gameMin;
+        log('success', `<em>${f.name}</em> (Allié) envoie un don : +${ag.amount} ${RES_LABELS[ag.resource]}.`);
+        notif.colonyEvent(f.name + ' — don allié');
+      }
+    }
   }
 }
 
@@ -3557,39 +3715,41 @@ export function launchDiplomaticMission(factionId, memberId) {
   if (!f) return;
   const m = S.crew.find(c => c.id === memberId);
   if (!m) return;
-  if ((m.skills.linguistique || 0) < 3) {
-    toast("Linguistique 3+ requise.");
+  const ft = FACTION_TYPES[f.type];
+
+  // 0.30 — prérequis selon le type de faction
+  const reqSkill  = ft.missionReqSkill  || 'linguistique';
+  const reqMin    = ft.missionReqMin    || 3;
+  const reqAlt    = ft.missionReqAlt;
+  const meetsReq  = (m.skills[reqSkill] || 0) >= reqMin ||
+                    (reqAlt && (m.skills[reqAlt.skill] || 0) >= reqAlt.min);
+  if (!meetsReq) {
+    const altLabel = reqAlt ? ` ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+` : '';
+    toast(`${SKILL_LABELS[reqSkill]} ${reqMin}+${altLabel} requis pour cette faction.`);
     return;
   }
   if (m.statut !== 'libre') {
     toast(`${m.name} n'est pas disponible.`);
     return;
   }
-  // 0.29 — Limite de missions parallèles selon niveau d'Ambassade
-  // niv 0 : 1 mission (legacy fallback) ; niv N : N missions //
   const ambassadeLvl = S.modules?.ambassade?.level || 0;
   const maxParallel = Math.max(1, ambassadeLvl);
   const active = (S.diplomaticMissions || []).length;
   if (active >= maxParallel) {
-    if (ambassadeLvl === 0) {
-      toast("Mission en cours. Construis l'Ambassade pour en gérer plusieurs en parallèle.");
-    } else {
-      toast(`Limite atteinte : ${maxParallel} mission(s) // (Ambassade niv ${ambassadeLvl}).`);
-    }
+    toast(ambassadeLvl === 0
+      ? "Mission en cours. Construis l'Ambassade pour en gérer plusieurs en parallèle."
+      : `Limite atteinte : ${maxParallel} mission(s) (Ambassade niv ${ambassadeLvl}).`);
     return;
   }
-  // Coût provisions
-  const cost = 25;
+  const cost = ft.missionCost ?? 25;
   if ((S.res.biomasse || 0) < cost) {
     toast(`Provisions insuffisantes (${cost} biomasse).`);
     return;
   }
   S.res.biomasse -= cost;
-  // 0.22 — Le poste reste réservé pendant la mission, le colon le reprendra au retour.
   m.statut = 'diplomatie';
-  // Crée la mission
   if (!S.diplomaticMissions) S.diplomaticMissions = [];
-  const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);  // 24-48h jeu
+  const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);
   S.diplomaticMissions.push({
     id: 'dipl_' + Date.now().toString(36),
     factionId,
@@ -3616,44 +3776,67 @@ export function tickDiplomaticMissions() {
 function completeDiplomaticMission(mis) {
   const member = S.crew.find(c => c.id === mis.memberId);
   const faction = S.factions?.[mis.factionId];
-  // Retire la mission
   S.diplomaticMissions = S.diplomaticMissions.filter(m => m.id !== mis.id);
   if (!member) return;
-  // Libère le colon (0.22 — reprend son poste s'il en a un)
   if (member.statut === 'diplomatie') returnToBase(member);
   if (!faction) return;
-  // Jet : succès basé sur Linguistique + Charisme
-  const skill = (member.skills.linguistique || 0);
-  const stat = (member.stats.charisme || 5);
+
+  const ft = FACTION_TYPES[faction.type];
+
+  // 0.30 — Jet sur compétence primaire de la faction + linguistique en soutien
+  const primarySkill = ft.missionSkill || 'linguistique';
+  const primaryScore = member.skills[primarySkill] || 0;
+  const lingScore = primarySkill !== 'linguistique' ? (member.skills.linguistique || 0) : 0;
+  const charisme = member.stats?.charisme || 5;
   const roll = 1 + Math.floor(Math.random() * 10);
-  const total = roll + skill + Math.floor((stat - 5) / 2);
-  const dc = 8;
-  
-  // 0.29 — calcul du bonus diplomatique cumulé
+  const total = roll + primaryScore * 2 + Math.floor(lingScore * 0.6) + Math.floor((charisme - 5) / 2);
+  const dc = 10;
+  const critDc = dc + 5;
+
+  // Multiplicateurs cumulés
   let diploMult = 1.0;
-  // Bonus Ambassade : +10% par niveau au-dessus du 1er
   const ambassadeLvl = S.modules?.ambassade?.level || 0;
   if (ambassadeLvl >= 2) diploMult += (ambassadeLvl - 1) * 0.10;
-  // Bonus techs diplomatiques
   const tech = techEffectsAccumulated();
   if (tech.diplomaticBonus) diploMult *= tech.diplomaticBonus;
-  // Bonus Émissaire : ×1.5 si la mission a été lancée avec ce vaisseau
   if (mis.vesselType === 'emissaire') diploMult *= 1.5;
-  
+
   if (total >= dc) {
-    // Succès : +20 à +30 réputation, modulé par diploMult
-    const baseGain = 20 + Math.floor(Math.random() * 11);
+    const isCrit = total >= critDc;
+    const baseGain = isCrit ? (25 + Math.floor(Math.random() * 11)) : (15 + Math.floor(Math.random() * 11));
     const gain = Math.round(baseGain * diploMult);
     adjustReputation(faction.id, gain);
-    const bonusLabel = diploMult > 1.05 ? ` (×${diploMult.toFixed(2)})` : '';
-    log('success', `<em>${member.name}</em> revient de mission diplomatique. <em>${faction.name}</em> : réputation +${gain}${bonusLabel}.`);
-    // Bonus : petit moral pour le colon
-    member.moral = Math.min(100, member.moral + 5);
+    const multLabel = diploMult > 1.05 ? ` (×${diploMult.toFixed(2)})` : '';
+    let extraLog = '';
+    // Succès critique : bonus selon le type de faction
+    if (isCrit) {
+      if (faction.type === 'alien_a' || faction.type === 'fusion') {
+        const bpId = rollBlueprint([faction.type === 'fusion' ? 'fusion' : 'alien_a']);
+        if (bpId) {
+          addBlueprintToInventory(bpId, 'diplomatie');
+          extraLog = ` Schéma partagé : <em>${BLUEPRINTS[bpId]?.nom || bpId}</em>.`;
+        }
+      } else if (faction.type === 'alien_b') {
+        const bonusAmt = Math.round(60 * diploMult);
+        S.res.biomasse = Math.min(capOf('biomasse'), (S.res.biomasse || 0) + bonusAmt);
+        extraLog = ` Don biologique : +${bonusAmt} biomasse.`;
+      } else {
+        const bonusAmt = Math.round(40 * diploMult);
+        S.res.metal = Math.min(capOf('metal'), (S.res.metal || 0) + bonusAmt);
+        extraLog = ` Don culturel : +${bonusAmt} métal.`;
+      }
+    }
+    const critLabel = isCrit ? ' ★ Succès exceptionnel.' : '';
+    log('success', `<em>${member.name}</em> revient de mission diplomatique.${critLabel} <em>${faction.name}</em> : réputation +${gain}${multLabel}.${extraLog}`);
+    member.moral = Math.min(100, member.moral + (isCrit ? 10 : 5));
+    // Progression compétence : légère montée si critique
+    if (isCrit && primaryScore < 5) {
+      member.skills[primarySkill] = Math.min(5, primaryScore + 0.1);
+    }
   } else {
-    // Échec mineur : pas de gain, parfois -5 réputation
-    const malus = roll <= 3 ? -10 : 0;
+    const malus = roll <= 2 ? -10 : (roll <= 4 ? -5 : 0);
     if (malus !== 0) adjustReputation(faction.id, malus);
-    log('warn', `<em>${member.name}</em> revient de mission diplomatique. ${malus !== 0 ? `Malentendu culturel : ${malus} de réputation.` : 'Aucun progrès notable.'}`);
+    log('warn', `<em>${member.name}</em> revient de mission diplomatique. ${malus < 0 ? `Malentendu culturel : ${malus} réputation.` : 'Aucun progrès notable.'}`);
     member.moral = Math.max(0, member.moral - 3);
   }
 }
