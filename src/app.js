@@ -3172,15 +3172,47 @@ function hookColonyEventModal() {
       const { eventId, actors } = _activeColonyEvent;
       const ev = COLONY_EVENTS[eventId];
       const choice = ev.choices[idx];
-      const ok = applyColonyEventChoice(eventId, choice, actors);
-      if (ok !== false) {
-        S.lastColonyEventId = eventId;
-        $('#modalBg').classList.remove('show');
-        m.classList.remove('incident-modal');
-        _activeColonyEvent = null;
-        render();
-      }
+      const result = applyColonyEventChoice(eventId, choice, actors);
+      if (result === false) return;   // échec (ex : stock insuffisant) — on laisse choisir
+      S.lastColonyEventId = eventId;
+      // 0.30 — Affiche l'écran de conséquences avant de fermer.
+      m.innerHTML = renderColonyConsequence(result, choice);
+      hookColonyConsequence();
+      // Met à jour l'arrière-plan (ressources, etc.) tout de suite
+      render();
     });
+  });
+}
+
+// 0.30 — Écran de conséquences : ce que le choix a réellement provoqué.
+function renderColonyConsequence(result, choice) {
+  const label = (choice.label || '').replace(/\{primary\}/g, _activeColonyEvent?.actors?.primary?.name || '');
+  const effectsHTML = (result.effects || []).map(e => {
+    const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
+    const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
+    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${e.text}</span></li>`;
+  }).join('');
+  const narrativeHTML = result.narrative
+    ? `<p class="incident-body">${result.narrative}</p>`
+    : '';
+  return `
+    <div class="incident-eyebrow ${result.positive ? 'positive' : ''}">Conséquences</div>
+    <h3 class="incident-title">« ${label} »</h3>
+    ${narrativeHTML}
+    <ul class="cons-list">${effectsHTML}</ul>
+    <div class="incident-choices">
+      <button class="incident-choice" id="consContinue" style="text-align:center">Continuer</button>
+    </div>
+  `;
+}
+
+function hookColonyConsequence() {
+  const m = $('#modal');
+  $('#consContinue')?.addEventListener('click', () => {
+    $('#modalBg').classList.remove('show');
+    m.classList.remove('incident-modal');
+    _activeColonyEvent = null;
+    render();
   });
 }
 
@@ -3202,29 +3234,106 @@ export function applyColonyEventChoice(eventId, choice, actors) {
   }
 
   const o = choice.outcome || {};
-  
+
   // 0.28 : multiplicateur d'impact
   const OUTCOME_MULT = 3;
 
+  // 0.30 — Conséquences concrètes recensées et renvoyées à l'UI.
+  // Elles varient selon l'équipage et les ententes (réactions des proches, climat moral).
+  const effects = [];   // { kind:'good'|'bad'|'neutral', text }
+  const team = aliveCrew();
+
+  // Climat moral de la colonie : module l'intensité des conséquences négatives.
+  // Une colonie déjà à cran encaisse plus mal les mauvaises décisions.
+  const avgMoral = team.length ? team.reduce((s, m) => s + (m.moral || 0), 0) / team.length : 50;
+  let moodMult = 1;
+  let moodNote = null;
+  if ((o.moralAll || 0) < 0) {
+    if (avgMoral < 35) { moodMult = 1.5; moodNote = "L'équipage est déjà à bout : le coup porte plus fort."; }
+    else if (avgMoral > 75) { moodMult = 0.6; moodNote = "L'équipage est soudé : il encaisse sans broncher."; }
+  } else if ((o.moralAll || 0) > 0) {
+    if (avgMoral < 35) { moodMult = 1.4; moodNote = "Après les jours difficiles, ce répit fait d'autant plus de bien."; }
+  }
+
   // Pertes / gains de ressources
   if (o.loss) {
-    for (const k in o.loss) S.res[k] = Math.max(0, (S.res[k] || 0) - o.loss[k] * OUTCOME_MULT);
+    for (const k in o.loss) {
+      const amt = o.loss[k] * OUTCOME_MULT;
+      S.res[k] = Math.max(0, (S.res[k] || 0) - amt);
+      effects.push({ kind: 'bad', text: `−${Math.round(amt)} ${RES_LABELS[k] || k}` });
+    }
   }
   if (o.gain) {
-    for (const k in o.gain) S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + o.gain[k] * OUTCOME_MULT);
-  }
-  // Moral collectif — 0.28 : impact durable (×3)
-  if (o.moralAll) {
-    for (const m of aliveCrew()) {
-      m.moral = Math.max(0, Math.min(100, m.moral + o.moralAll * 3));
+    for (const k in o.gain) {
+      const amt = o.gain[k] * OUTCOME_MULT;
+      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + amt);
+      effects.push({ kind: 'good', text: `+${Math.round(amt)} ${RES_LABELS[k] || k}` });
     }
+  }
+  // Moral collectif — 0.28 : impact durable (×3), 0.30 : modulé par le climat
+  if (o.moralAll) {
+    const delta = Math.round(o.moralAll * 3 * moodMult);
+    for (const m of team) {
+      m.moral = Math.max(0, Math.min(100, m.moral + delta));
+    }
+    effects.push({
+      kind: delta >= 0 ? 'good' : 'bad',
+      text: `Moral de l'équipage ${delta >= 0 ? '+' : ''}${delta} (${team.length} colon${team.length > 1 ? 's' : ''})`
+    });
+    if (moodNote) effects.push({ kind: 'neutral', text: moodNote });
   }
   // Ajustement d'affinité ciblé
   if (o.adjustAffinity) {
     const a = o.adjustAffinity.a === 'primary' ? primary?.id : (o.adjustAffinity.a === 'secondary' ? secondary?.id : null);
     const b = o.adjustAffinity.b === 'primary' ? primary?.id : (o.adjustAffinity.b === 'secondary' ? secondary?.id : null);
-    if (a && b) adjustAffinity(a, b, o.adjustAffinity.delta);
+    if (a && b) {
+      adjustAffinity(a, b, o.adjustAffinity.delta);
+      const an = S.crew.find(m => m.id === a)?.name || '?';
+      const bn = S.crew.find(m => m.id === b)?.name || '?';
+      const rel = relationType(affinityBetween(a, b));
+      effects.push({
+        kind: o.adjustAffinity.delta >= 0 ? 'good' : 'bad',
+        text: `Entente ${an} ↔ ${bn} ${o.adjustAffinity.delta >= 0 ? '+' : ''}${o.adjustAffinity.delta} → ${rel.label}`
+      });
+    }
   }
+
+  // 0.30 — RÉACTIONS DES PROCHES : le cœur de "ça dépend des ententes".
+  // Ce qui arrive au protagoniste touche émotionnellement ses proches (et réjouit ses rivaux).
+  // La tonalité vient du signe de moralAll, sinon du caractère positif/négatif de l'événement.
+  if (primary) {
+    let tone = 0;
+    if (typeof o.moralAll === 'number' && o.moralAll !== 0) tone = o.moralAll > 0 ? 1 : -1;
+    else if (o.gain || o.spawnVisitor || o.randomBlueprint) tone = 1;
+    else if (o.loss || o.debuff || o.generateRivalry) tone = -1;
+    else tone = ev.positive ? 1 : -1;
+
+    const { friends, rivals } = significantRelations(primary.id);
+    // Les proches (hors secondary déjà traité) ressentent le contrecoup
+    const reactingFriends = friends.filter(f => f.memberId !== secondary?.id);
+    if (reactingFriends.length > 0 && tone !== 0) {
+      const fDelta = tone > 0 ? 4 : -5;
+      for (const f of reactingFriends) {
+        f.member.moral = Math.max(0, Math.min(100, f.member.moral + fDelta));
+      }
+      const names = reactingFriends.map(f => f.member.name).join(', ');
+      effects.push({
+        kind: tone > 0 ? 'good' : 'bad',
+        text: tone > 0
+          ? `Ses proches (${names}) partagent le moment — moral +${fDelta}`
+          : `Ses proches (${names}) encaissent avec lui — moral ${fDelta}`
+      });
+    }
+    // Les rivaux savourent (ou compatissent à peine) — effet inverse, plus discret
+    if (tone < 0 && rivals.length > 0) {
+      const rNames = rivals.map(r => r.member.name).join(', ');
+      for (const r of rivals) {
+        r.member.moral = Math.max(0, Math.min(100, r.member.moral + 2));
+      }
+      effects.push({ kind: 'neutral', text: `${rNames} ne cache${rivals.length > 1 ? 'nt' : ''} pas une certaine satisfaction.` });
+    }
+  }
+
   // Marqueurs (pour cooldown spécifique)
   if (o.markBirthday && primary) primary.lastBirthdayCelebrated = S.meta.gameMin;
   if (o.markHommage) S.lastHommageMin = S.meta.gameMin;
@@ -3255,12 +3364,18 @@ export function applyColonyEventChoice(eventId, choice, actors) {
       };
       S.crew.push(member);
       autoAssignMember(member.id);
+      effects.push({ kind: 'good', text: `${member.name} rejoint la colonie (${cap.used + 1}/${cap.total})` });
+    } else {
+      effects.push({ kind: 'bad', text: `Habitat plein : impossible d'accueillir le visiteur.` });
     }
   }
   // Schéma aléatoire
   if (o.randomBlueprint) {
     const bpId = rollBlueprint([o.randomBlueprint]);
-    if (bpId) addBlueprintToInventory(bpId, 'événement');
+    if (bpId) {
+      addBlueprintToInventory(bpId, 'événement');
+      effects.push({ kind: 'good', text: `Schéma acquis : ${BLUEPRINTS[bpId]?.nom || bpId}` });
+    }
   }
 
   // 0.28 : NOUVEAUX EFFETS DURABLES (mêmes que pour les incidents)
@@ -3274,6 +3389,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
       expiresAt: (S.meta.gameMin || 0) + (o.debuff.duration || 720)
     });
     log('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
+    effects.push({ kind: 'bad', text: `Effet en cours : ${o.debuff.label || 'modulation temporaire'}` });
   }
   // — generateRivalry entre primary et secondary
   if (o.generateRivalry && primary && secondary) {
@@ -3281,6 +3397,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     if (!S.relations) S.relations = {};
     S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
     log('warn', `<em>${primary.name}</em> et <em>${secondary.name}</em> se brouillent durablement.`);
+    effects.push({ kind: 'bad', text: `${primary.name} et ${secondary.name} se brouillent durablement.` });
   }
   // — historicalMark : entrée dans le journal historique de la colonie
   if (o.historicalMark) {
@@ -3292,14 +3409,18 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     });
   }
 
-  // Log final
+  // Log final + narratif renvoyé à l'UI
+  let narrative = '';
   if (o.log) {
-    const cleanLog = o.log
+    narrative = o.log
       .replace(/\{primary\}/g, primary ? `<em>${primary.name}</em>` : 'un colon')
       .replace(/\{secondary\}/g, secondary ? `<em>${secondary.name}</em>` : '');
-    log(ev.positive ? 'success' : 'warn', cleanLog);
+    log(ev.positive ? 'success' : 'warn', narrative);
   }
-  return true;
+  if (effects.length === 0) {
+    effects.push({ kind: 'neutral', text: 'Aucune conséquence notable.' });
+  }
+  return { ok: true, narrative, effects, positive: ev.positive };
 }
 
 // ============================================================

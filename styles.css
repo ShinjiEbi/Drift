@@ -2318,6 +2318,38 @@ nav.subtabs button:disabled {
 .incident-choice .cost.ko { color: var(--rust); }
 .incident-choice .risk { color: var(--text-mute); }
 
+/* 0.30 — Écran de conséquences des événements de colonie */
+.cons-list {
+  list-style: none;
+  margin: 4px 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cons-effect {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.4;
+  padding: 8px 12px;
+  border-left: 2px solid var(--border);
+  background: var(--surface);
+}
+.cons-effect .cons-icon {
+  font-family: var(--mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.cons-effect.good { border-left-color: var(--moss); }
+.cons-effect.good .cons-icon { color: var(--moss); }
+.cons-effect.bad { border-left-color: var(--rust); }
+.cons-effect.bad .cons-icon { color: var(--rust); }
+.cons-effect.neutral { border-left-color: var(--text-mute); color: var(--text-dim); font-style: italic; }
+.cons-effect.neutral .cons-icon { color: var(--text-mute); }
+
 /* ============================================================
    RELATIONS SOCIALES (0.18)
    ============================================================ */
