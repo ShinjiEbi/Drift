@@ -3537,13 +3537,39 @@ export function permanentBonusesAccumulated() {
 // automatique. À faible réputation, embuscades.
 
 
-// Statut diplomatique selon réputation
+// Statut diplomatique selon réputation (0.30 — 6 paliers)
 export function factionStatus(rep) {
-  if (rep >= 60) return { key: 'allie',    label: 'Allié',    color: 'var(--moss)' };
-  if (rep >= 25) return { key: 'cordial',  label: 'Cordial',  color: 'var(--amber)' };
-  if (rep > -25) return { key: 'neutre',   label: 'Neutre',   color: 'var(--text-mute)' };
-  if (rep > -60) return { key: 'mefiant',  label: 'Méfiant',  color: 'var(--rust)' };
-  return { key: 'hostile', label: 'Hostile', color: 'var(--rust)' };
+  if (rep >= 75) return { key: 'allie',   label: 'Allié',    color: '#6aad8a' };
+  if (rep >= 50) return { key: 'ami',     label: 'Ami',      color: 'var(--moss)' };
+  if (rep >= 20) return { key: 'cordial', label: 'Cordial',  color: 'var(--amber)' };
+  if (rep > -20) return { key: 'neutre',  label: 'Neutre',   color: 'var(--text-mute)' };
+  if (rep > -60) return { key: 'mefiant', label: 'Méfiant',  color: 'var(--rust)' };
+  return             { key: 'hostile',  label: 'Hostile',  color: '#c53030' };
+}
+
+// 0.30 — Offrir un cadeau à une faction
+export function offerGift(factionId, giftIdx) {
+  const f = S.factions?.[factionId];
+  if (!f) return;
+  const ft = FACTION_TYPES[f.type];
+  const gift = ft.giftOptions?.[giftIdx];
+  if (!gift) return;
+  // Cooldown
+  const cooldown = ft.giftCooldown || 3 * 24 * 60;
+  if (f.lastGift && (S.meta.gameMin - f.lastGift) < cooldown) {
+    const wait = cooldown - (S.meta.gameMin - f.lastGift);
+    toast(`Cadeau récent. Réessaie dans ${fmtMin(wait)}.`);
+    return;
+  }
+  if ((S.res[gift.resource] || 0) < gift.amount) {
+    toast(`Ressources insuffisantes (${RES_LABELS[gift.resource]}).`);
+    return;
+  }
+  S.res[gift.resource] -= gift.amount;
+  f.lastGift = S.meta.gameMin;
+  adjustReputation(factionId, gift.repGain);
+  log('success', `Cadeau offert à <em>${f.name}</em> — ${gift.label} (−${gift.amount} ${RES_LABELS[gift.resource]}) : réputation +${gift.repGain}.`);
+  render();
 }
 
 // Génère un nom de faction selon le type
@@ -3617,13 +3643,24 @@ export function tickFactions() {
   if (!S.factions) return;
   for (const id in S.factions) {
     const f = S.factions[id];
-    if (f.reputation < 40) continue;       // Pas de commerce sous 40
-    if (!f.tradeActive) continue;          // Le joueur a activé le commerce
-    const cycle = 15 * 24 * 60;            // 15 jours jeu
-    if (!f.lastCaravan) f.lastCaravan = f.metAt;
-    if (S.meta.gameMin - f.lastCaravan < cycle) continue;
-    // Caravane !
-    triggerCaravan(f);
+    const ft = FACTION_TYPES[f.type];
+    // Commerce auto (rep ≥ 40 et activé par le joueur)
+    if (f.reputation >= 40 && f.tradeActive) {
+      const cycle = 15 * 24 * 60;
+      if (!f.lastCaravan) f.lastCaravan = f.metAt;
+      if (S.meta.gameMin - f.lastCaravan >= cycle) triggerCaravan(f);
+    }
+    // 0.30 — Don d'alliance (rep ≥ 75, automatique)
+    if (f.reputation >= 75 && ft?.allianceGift) {
+      const ag = ft.allianceGift;
+      if (!f.lastAllianceGift) f.lastAllianceGift = f.metAt || S.meta.gameMin;
+      if (S.meta.gameMin - f.lastAllianceGift >= ag.interval) {
+        S.res[ag.resource] = Math.min(capOf(ag.resource), (S.res[ag.resource] || 0) + ag.amount);
+        f.lastAllianceGift = S.meta.gameMin;
+        log('success', `<em>${f.name}</em> (Allié) envoie un don : +${ag.amount} ${RES_LABELS[ag.resource]}.`);
+        notif.colonyEvent(f.name + ' — don allié');
+      }
+    }
   }
 }
 
@@ -3678,39 +3715,41 @@ export function launchDiplomaticMission(factionId, memberId) {
   if (!f) return;
   const m = S.crew.find(c => c.id === memberId);
   if (!m) return;
-  if ((m.skills.linguistique || 0) < 3) {
-    toast("Linguistique 3+ requise.");
+  const ft = FACTION_TYPES[f.type];
+
+  // 0.30 — prérequis selon le type de faction
+  const reqSkill  = ft.missionReqSkill  || 'linguistique';
+  const reqMin    = ft.missionReqMin    || 3;
+  const reqAlt    = ft.missionReqAlt;
+  const meetsReq  = (m.skills[reqSkill] || 0) >= reqMin ||
+                    (reqAlt && (m.skills[reqAlt.skill] || 0) >= reqAlt.min);
+  if (!meetsReq) {
+    const altLabel = reqAlt ? ` ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+` : '';
+    toast(`${SKILL_LABELS[reqSkill]} ${reqMin}+${altLabel} requis pour cette faction.`);
     return;
   }
   if (m.statut !== 'libre') {
     toast(`${m.name} n'est pas disponible.`);
     return;
   }
-  // 0.29 — Limite de missions parallèles selon niveau d'Ambassade
-  // niv 0 : 1 mission (legacy fallback) ; niv N : N missions //
   const ambassadeLvl = S.modules?.ambassade?.level || 0;
   const maxParallel = Math.max(1, ambassadeLvl);
   const active = (S.diplomaticMissions || []).length;
   if (active >= maxParallel) {
-    if (ambassadeLvl === 0) {
-      toast("Mission en cours. Construis l'Ambassade pour en gérer plusieurs en parallèle.");
-    } else {
-      toast(`Limite atteinte : ${maxParallel} mission(s) // (Ambassade niv ${ambassadeLvl}).`);
-    }
+    toast(ambassadeLvl === 0
+      ? "Mission en cours. Construis l'Ambassade pour en gérer plusieurs en parallèle."
+      : `Limite atteinte : ${maxParallel} mission(s) (Ambassade niv ${ambassadeLvl}).`);
     return;
   }
-  // Coût provisions
-  const cost = 25;
+  const cost = ft.missionCost ?? 25;
   if ((S.res.biomasse || 0) < cost) {
     toast(`Provisions insuffisantes (${cost} biomasse).`);
     return;
   }
   S.res.biomasse -= cost;
-  // 0.22 — Le poste reste réservé pendant la mission, le colon le reprendra au retour.
   m.statut = 'diplomatie';
-  // Crée la mission
   if (!S.diplomaticMissions) S.diplomaticMissions = [];
-  const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);  // 24-48h jeu
+  const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);
   S.diplomaticMissions.push({
     id: 'dipl_' + Date.now().toString(36),
     factionId,
@@ -3737,44 +3776,67 @@ export function tickDiplomaticMissions() {
 function completeDiplomaticMission(mis) {
   const member = S.crew.find(c => c.id === mis.memberId);
   const faction = S.factions?.[mis.factionId];
-  // Retire la mission
   S.diplomaticMissions = S.diplomaticMissions.filter(m => m.id !== mis.id);
   if (!member) return;
-  // Libère le colon (0.22 — reprend son poste s'il en a un)
   if (member.statut === 'diplomatie') returnToBase(member);
   if (!faction) return;
-  // Jet : succès basé sur Linguistique + Charisme
-  const skill = (member.skills.linguistique || 0);
-  const stat = (member.stats.charisme || 5);
+
+  const ft = FACTION_TYPES[faction.type];
+
+  // 0.30 — Jet sur compétence primaire de la faction + linguistique en soutien
+  const primarySkill = ft.missionSkill || 'linguistique';
+  const primaryScore = member.skills[primarySkill] || 0;
+  const lingScore = primarySkill !== 'linguistique' ? (member.skills.linguistique || 0) : 0;
+  const charisme = member.stats?.charisme || 5;
   const roll = 1 + Math.floor(Math.random() * 10);
-  const total = roll + skill + Math.floor((stat - 5) / 2);
-  const dc = 8;
-  
-  // 0.29 — calcul du bonus diplomatique cumulé
+  const total = roll + primaryScore * 2 + Math.floor(lingScore * 0.6) + Math.floor((charisme - 5) / 2);
+  const dc = 10;
+  const critDc = dc + 5;
+
+  // Multiplicateurs cumulés
   let diploMult = 1.0;
-  // Bonus Ambassade : +10% par niveau au-dessus du 1er
   const ambassadeLvl = S.modules?.ambassade?.level || 0;
   if (ambassadeLvl >= 2) diploMult += (ambassadeLvl - 1) * 0.10;
-  // Bonus techs diplomatiques
   const tech = techEffectsAccumulated();
   if (tech.diplomaticBonus) diploMult *= tech.diplomaticBonus;
-  // Bonus Émissaire : ×1.5 si la mission a été lancée avec ce vaisseau
   if (mis.vesselType === 'emissaire') diploMult *= 1.5;
-  
+
   if (total >= dc) {
-    // Succès : +20 à +30 réputation, modulé par diploMult
-    const baseGain = 20 + Math.floor(Math.random() * 11);
+    const isCrit = total >= critDc;
+    const baseGain = isCrit ? (25 + Math.floor(Math.random() * 11)) : (15 + Math.floor(Math.random() * 11));
     const gain = Math.round(baseGain * diploMult);
     adjustReputation(faction.id, gain);
-    const bonusLabel = diploMult > 1.05 ? ` (×${diploMult.toFixed(2)})` : '';
-    log('success', `<em>${member.name}</em> revient de mission diplomatique. <em>${faction.name}</em> : réputation +${gain}${bonusLabel}.`);
-    // Bonus : petit moral pour le colon
-    member.moral = Math.min(100, member.moral + 5);
+    const multLabel = diploMult > 1.05 ? ` (×${diploMult.toFixed(2)})` : '';
+    let extraLog = '';
+    // Succès critique : bonus selon le type de faction
+    if (isCrit) {
+      if (faction.type === 'alien_a' || faction.type === 'fusion') {
+        const bpId = rollBlueprint([faction.type === 'fusion' ? 'fusion' : 'alien_a']);
+        if (bpId) {
+          addBlueprintToInventory(bpId, 'diplomatie');
+          extraLog = ` Schéma partagé : <em>${BLUEPRINTS[bpId]?.nom || bpId}</em>.`;
+        }
+      } else if (faction.type === 'alien_b') {
+        const bonusAmt = Math.round(60 * diploMult);
+        S.res.biomasse = Math.min(capOf('biomasse'), (S.res.biomasse || 0) + bonusAmt);
+        extraLog = ` Don biologique : +${bonusAmt} biomasse.`;
+      } else {
+        const bonusAmt = Math.round(40 * diploMult);
+        S.res.metal = Math.min(capOf('metal'), (S.res.metal || 0) + bonusAmt);
+        extraLog = ` Don culturel : +${bonusAmt} métal.`;
+      }
+    }
+    const critLabel = isCrit ? ' ★ Succès exceptionnel.' : '';
+    log('success', `<em>${member.name}</em> revient de mission diplomatique.${critLabel} <em>${faction.name}</em> : réputation +${gain}${multLabel}.${extraLog}`);
+    member.moral = Math.min(100, member.moral + (isCrit ? 10 : 5));
+    // Progression compétence : légère montée si critique
+    if (isCrit && primaryScore < 5) {
+      member.skills[primarySkill] = Math.min(5, primaryScore + 0.1);
+    }
   } else {
-    // Échec mineur : pas de gain, parfois -5 réputation
-    const malus = roll <= 3 ? -10 : 0;
+    const malus = roll <= 2 ? -10 : (roll <= 4 ? -5 : 0);
     if (malus !== 0) adjustReputation(faction.id, malus);
-    log('warn', `<em>${member.name}</em> revient de mission diplomatique. ${malus !== 0 ? `Malentendu culturel : ${malus} de réputation.` : 'Aucun progrès notable.'}`);
+    log('warn', `<em>${member.name}</em> revient de mission diplomatique. ${malus < 0 ? `Malentendu culturel : ${malus} réputation.` : 'Aucun progrès notable.'}`);
     member.moral = Math.max(0, member.moral - 3);
   }
 }

@@ -219,9 +219,22 @@ export const FACTION_TYPES = {
     desc: "Descendants de l'Effondrement. Méfiance partagée, intérêts proches.",
     namePrefixes: ['Enclave', 'Vestige', 'Concorde', 'Refuge', 'Faction', 'Communauté'],
     nameSuffixes: ['de Pénombre', 'de la Cendre', 'd\'Hécate', 'des Veilleurs', 'de Méandre', 'de Linceul', 'des Naufragés', 'de Velden'],
-    initialReputation: 10,        // Légèrement positif (humanité partagée)
+    initialReputation: 10,
+    missionSkill: 'linguistique',   // compétence primaire pour le jet de mission
+    missionAltSkill: 'charisme',    // secondaire (stat → skill proxy)
+    missionCost: 25,                // biomasse
+    missionReqSkill: 'linguistique', missionReqMin: 3,
     tradeOffer: { metal: 30, cristal: 15 },
-    tradeAsk:   { biomasse: 40 }
+    tradeAsk:   { biomasse: 40 },
+    // Cadeaux appréciés : ressources pratiques
+    giftOptions: [
+      { resource: 'biomasse', amount: 30,  repGain: 6,  label: 'Rations' },
+      { resource: 'metal',    amount: 50,  repGain: 8,  label: 'Matériaux' },
+      { resource: 'biomasse', amount: 80,  repGain: 14, label: 'Provisions' }
+    ],
+    giftCooldown: 3 * 24 * 60,   // 3 jours jeu entre cadeaux
+    // Don d'alliance (réputation ≥ 75)
+    allianceGift: { resource: 'metal', amount: 40, interval: 20 * 24 * 60 }
   },
   alien_a: {
     label: "Alien-A · Cristalline",
@@ -229,9 +242,21 @@ export const FACTION_TYPES = {
     desc: "Civilisation cristalline. Logique impénétrable, gestes précis.",
     namePrefixes: ['Conclave', 'Choeur', 'Géométrie', 'Chant', 'Spire', 'Prisme'],
     nameSuffixes: ['de Resh', 'd\'Astralune', 'de Cithare', 'des Strates', 'de Verre-Long', 'd\'Inversion'],
-    initialReputation: -5,        // Méfiance initiale
+    initialReputation: -5,
+    missionSkill: 'science',        // ils valorisent la rigueur intellectuelle
+    missionAltSkill: 'linguistique',
+    missionCost: 20,
+    missionReqSkill: 'science', missionReqMin: 2,   // science 2+ OU linguistique 3+
+    missionReqAlt: { skill: 'linguistique', min: 3 },
     tradeOffer: { datacubes: 15, cristal: 25 },
-    tradeAsk:   { metal: 50 }
+    tradeAsk:   { metal: 50 },
+    giftOptions: [
+      { resource: 'datacubes', amount: 15,  repGain: 8,  label: 'Données' },
+      { resource: 'cristal',   amount: 40,  repGain: 9,  label: 'Cristaux' },
+      { resource: 'datacubes', amount: 35,  repGain: 15, label: 'Archives' }
+    ],
+    giftCooldown: 3 * 24 * 60,
+    allianceGift: { resource: 'datacubes', amount: 20, interval: 18 * 24 * 60 }
   },
   alien_b: {
     label: "Alien-B · Organique",
@@ -239,9 +264,21 @@ export const FACTION_TYPES = {
     desc: "Biologie consciente, lente, patiente. Pense en cycles.",
     namePrefixes: ['Couvée', 'Symbiose', 'Filament', 'Chrysalide', 'Murmure', 'Reliquat'],
     nameSuffixes: ['Ondulée', 'des Profondeurs', 'd\'Anthrax', 'de Limbe', 'de Tendre', 'd\'Estran'],
-    initialReputation: 0,         // Neutre, observatrice
+    initialReputation: 0,
+    missionSkill: 'medecine',       // empathie biologique
+    missionAltSkill: 'linguistique',
+    missionCost: 20,
+    missionReqSkill: 'medecine', missionReqMin: 2,
+    missionReqAlt: { skill: 'linguistique', min: 3 },
     tradeOffer: { biomasse: 50, datacubes: 10 },
-    tradeAsk:   { cristal: 30 }
+    tradeAsk:   { cristal: 30 },
+    giftOptions: [
+      { resource: 'biomasse', amount: 40,  repGain: 8,  label: 'Cultures' },
+      { resource: 'biomasse', amount: 90,  repGain: 15, label: 'Provisions' },
+      { resource: 'datacubes',amount: 20,  repGain: 6,  label: 'Données biologiques' }
+    ],
+    giftCooldown: 3 * 24 * 60,
+    allianceGift: { resource: 'biomasse', amount: 60, interval: 18 * 24 * 60 }
   },
   fusion: {
     label: "Hybride",
@@ -250,8 +287,19 @@ export const FACTION_TYPES = {
     namePrefixes: ['Pacte', 'Croisée', 'Hybride', 'Union'],
     nameSuffixes: ['de Boréalys', 'des Deux-Sangs', 'de Méridien', 'de Crépuscule'],
     initialReputation: 5,
+    missionSkill: 'linguistique',
+    missionAltSkill: 'science',
+    missionCost: 25,
+    missionReqSkill: 'linguistique', missionReqMin: 3,
     tradeOffer: { datacubes: 20, biomasse: 30 },
-    tradeAsk:   { metal: 40, cristal: 15 }
+    tradeAsk:   { metal: 40, cristal: 15 },
+    giftOptions: [
+      { resource: 'datacubes', amount: 20,  repGain: 7,  label: 'Archives' },
+      { resource: 'biomasse',  amount: 50,  repGain: 9,  label: 'Provisions' },
+      { resource: 'metal',     amount: 40,  repGain: 6,  label: 'Matériaux' }
+    ],
+    giftCooldown: 3 * 24 * 60,
+    allianceGift: { resource: 'cristal', amount: 30, interval: 22 * 24 * 60 }
   }
 };
 

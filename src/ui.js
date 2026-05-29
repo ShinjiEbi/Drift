@@ -46,7 +46,7 @@ import {
   triggerIncident, applyIncidentChoice, applyColonyEventChoice,
   getArcState, isArcComplete, isStepComplete,
   factionStatus, adjustReputation, toggleFactionTrade,
-  launchDiplomaticMission,
+  launchDiplomaticMission, offerGift,
   startTraining, cancelTraining,
   currentAge, maxHealthOf, affinityBetween, relationType,
   significantRelations, ROLES, inventoryCount,
@@ -959,49 +959,146 @@ function renderDiplomacy() {
 
   // Hooks
   content.querySelectorAll('button[data-trade]').forEach(btn => {
-    btn.addEventListener('click', () => toggleFactionTrade(btn.dataset.trade));
+    btn.addEventListener('click', () => { toggleFactionTrade(btn.dataset.trade); render(); });
   });
   content.querySelectorAll('button[data-diplo-launch]').forEach(btn => {
     btn.addEventListener('click', () => openDiploLaunchModal(btn.dataset.diploLaunch));
   });
+  content.querySelectorAll('button[data-gift-faction]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      offerGift(btn.dataset.giftFaction, parseInt(btn.dataset.giftIdx, 10));
+    });
+  });
+}
+
+// 0.30 — Probabilité de succès d'une mission pour un colon donné et un type de faction
+function missionSuccessChance(member, factionType) {
+  const ft = FACTION_TYPES[factionType];
+  const pSkill = ft.missionSkill || 'linguistique';
+  const pScore = member.skills[pSkill] || 0;
+  const lScore = pSkill !== 'linguistique' ? (member.skills.linguistique || 0) : 0;
+  const charisme = member.stats?.charisme || 5;
+  const dc = 10;
+  // modifier attendu
+  const mod = pScore * 2 + Math.floor(lScore * 0.6) + Math.floor((charisme - 5) / 2);
+  // nb de faces (1d10) qui font total >= dc → total = roll + mod >= dc → roll >= dc - mod
+  const minRoll = dc - mod;
+  const successes = Math.max(0, Math.min(10, 11 - minRoll));
+  return successes * 10;
 }
 
 function renderFactionCard(f) {
   const ft = FACTION_TYPES[f.type];
   const status = factionStatus(f.reputation);
-  const repBar = Math.max(0, Math.min(100, (f.reputation + 100) / 2));
+  // Barre de réputation : -100 → 0% à gauche, 0 → 50%, +100 → 100%
+  const repPct = Math.max(0, Math.min(100, (f.reputation + 100) / 2));
   const onMission = (S.diplomaticMissions || []).some(m => m.factionId === f.id);
 
-  // Trade info
+  // ── Jalons de réputation ──
+  const milestones = [
+    { rep: -60, label: 'Hostile',  pct: 20,  key: 'hostile' },
+    { rep:  20, label: 'Cordial',  pct: 60,  key: 'cordial' },
+    { rep:  40, label: 'Commerce', pct: 70,  key: 'commerce' },
+    { rep:  50, label: 'Ami',      pct: 75,  key: 'ami' },
+    { rep:  75, label: 'Allié',    pct: 87.5,key: 'allie' }
+  ];
+  const milestonesHTML = milestones.map(m => {
+    const reached = f.reputation >= m.rep;
+    return `<div class="dc-milestone ${reached ? 'reached' : ''}" style="left:${m.pct}%">
+      <div class="dcm-tick"></div>
+      <div class="dcm-label">${m.label}</div>
+    </div>`;
+  }).join('');
+
+  // ── Commerce ──
   let tradeHTML = '';
   if (f.reputation >= 40) {
     const offerStr = Object.entries(ft.tradeOffer).map(([k,v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
-    const askStr = Object.entries(ft.tradeAsk).map(([k,v]) => `-${v} ${RES_LABELS[k]}`).join(', ');
-    const cycle = 15 * 24 * 60;
+    const askStr   = Object.entries(ft.tradeAsk).map(([k,v])   => `-${v} ${RES_LABELS[k]}`).join(', ');
+    const cycle    = 15 * 24 * 60;
     const nextCaravan = f.tradeActive && f.lastCaravan ? Math.max(0, cycle - (S.meta.gameMin - f.lastCaravan)) : null;
-    tradeHTML = `<div class="diplo-trade">
-      <div class="dt-head">Échange auto : ${offerStr} contre ${askStr} (tous les 15j jeu)</div>
-      <button data-trade="${f.id}" class="${f.tradeActive ? 'active' : ''}">${f.tradeActive ? 'Désactiver' : 'Activer'} le commerce</button>
-      ${f.tradeActive && nextCaravan !== null ? `<div class="dt-eta">Prochaine caravane dans ${fmtMin(nextCaravan)}</div>` : ''}
+    tradeHTML = `<div class="dc-section">
+      <div class="dc-section-label">Commerce</div>
+      <div class="dt-rates">${offerStr} contre ${askStr} · toutes les 15j</div>
+      <div class="dt-row">
+        <button class="dt-btn ${f.tradeActive ? 'active' : ''}" data-trade="${f.id}">${f.tradeActive ? '◼ Désactiver' : '◻ Activer'} la route</button>
+        ${f.tradeActive && nextCaravan !== null ? `<span class="dt-eta">Prochaine dans ${fmtMin(nextCaravan)}</span>` : ''}
+      </div>
     </div>`;
-  } else if (f.reputation > -60) {
-    tradeHTML = `<div class="diplo-trade locked">Commerce indisponible (réputation 40+ requise)</div>`;
   } else {
-    tradeHTML = `<div class="diplo-trade hostile">Cette faction est hostile. Toute expédition sur ${f.bodyName} risque l'embuscade.</div>`;
+    tradeHTML = `<div class="dc-section dc-section-locked">Commerce disponible à réputation 40+</div>`;
+  }
+  if (f.reputation <= -60) {
+    tradeHTML = `<div class="dc-section dc-section-hostile">⚠ Faction hostile — expéditions sur ${f.bodyName} risquent l'embuscade.</div>`;
   }
 
-  // Bouton mission diplomatique
-  let missionHTML = '';
-  if (onMission) {
-    missionHTML = `<div class="diplo-mission-info">Mission diplomatique en cours...</div>`;
-  } else {
-    const linguistes = aliveCrew().filter(m => m.statut === 'libre' && (m.skills.linguistique || 0) >= 3);
-    if (linguistes.length > 0) {
-      missionHTML = `<button class="diplo-launch-btn" data-diplo-launch="${f.id}">
-        Mission diplomatique (Linguiste 3+, 25 biomasse)
+  // ── Alliance ──
+  let allianceHTML = '';
+  if (f.reputation >= 75 && ft.allianceGift) {
+    const ag = ft.allianceGift;
+    const nextAg = f.lastAllianceGift ? Math.max(0, ag.interval - (S.meta.gameMin - f.lastAllianceGift)) : 0;
+    allianceHTML = `<div class="dc-section dc-alliance">
+      <div class="dc-section-label">★ Alliance</div>
+      <div>Don automatique : +${ag.amount} ${RES_LABELS[ag.resource]} tous les ${fmtMin(ag.interval)}</div>
+      ${nextAg > 0 ? `<div class="dt-eta">Prochain dans ${fmtMin(nextAg)}</div>` : ''}
+    </div>`;
+  } else if (f.reputation >= 50) {
+    const ag = ft.allianceGift;
+    allianceHTML = `<div class="dc-section dc-section-locked">Alliance à 75 : dons auto (+${ag?.amount || '?'} ${RES_LABELS[ag?.resource] || ''} / ${fmtMin(ag?.interval || 0)})</div>`;
+  }
+
+  // ── Cadeaux ──
+  let giftsHTML = '';
+  if (ft.giftOptions?.length) {
+    const cooldown = ft.giftCooldown || 3 * 24 * 60;
+    const waitLeft = f.lastGift ? Math.max(0, cooldown - (S.meta.gameMin - f.lastGift)) : 0;
+    const giftBtns = ft.giftOptions.map((g, i) => {
+      const canAfford = (S.res[g.resource] || 0) >= g.amount;
+      const dis = (waitLeft > 0 || !canAfford) ? 'disabled' : '';
+      return `<button class="gift-btn ${canAfford ? '' : 'cant'}" ${dis} data-gift-faction="${f.id}" data-gift-idx="${i}">
+        ${g.label} (−${g.amount} ${RES_LABELS[g.resource]}) → +${g.repGain} rép.
       </button>`;
+    }).join('');
+    const cooldownNote = waitLeft > 0 ? `<span class="dt-eta">Prochain cadeau dans ${fmtMin(waitLeft)}</span>` : '';
+    giftsHTML = `<div class="dc-section">
+      <div class="dc-section-label">Offrir un cadeau</div>
+      <div class="gift-list">${giftBtns}</div>
+      ${cooldownNote}
+    </div>`;
+  }
+
+  // ── Mission diplomatique ──
+  let missionHTML = '';
+  const reqSkill = ft.missionReqSkill || 'linguistique';
+  const reqMin   = ft.missionReqMin   || 3;
+  const reqAlt   = ft.missionReqAlt;
+  const cost     = ft.missionCost ?? 25;
+  if (onMission) {
+    missionHTML = `<div class="dc-section"><div class="diplo-mission-info">Mission en cours...</div></div>`;
+  } else {
+    const candidates = aliveCrew().filter(m => m.statut === 'libre' && (
+      (m.skills[reqSkill] || 0) >= reqMin ||
+      (reqAlt && (m.skills[reqAlt.skill] || 0) >= reqAlt.min)
+    ));
+    if (candidates.length > 0) {
+      // Meilleur candidat
+      const best = candidates.slice().sort((a, b) => missionSuccessChance(b, f.type) - missionSuccessChance(a, f.type))[0];
+      const chance = missionSuccessChance(best, f.type);
+      const reqLabel = reqAlt
+        ? `${SKILL_LABELS[reqSkill]} ${reqMin}+ ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+`
+        : `${SKILL_LABELS[reqSkill]} ${reqMin}+`;
+      const pSkillLabel = SKILL_LABELS[ft.missionSkill] || ft.missionSkill;
+      missionHTML = `<div class="dc-section">
+        <div class="dc-section-label">Mission diplomatique · ${cost} biomasse</div>
+        <div class="mission-req">Valorisée : <em>${pSkillLabel}</em> · Requis : ${reqLabel}</div>
+        <div class="mission-best">Meilleur candidat : <b>${best.name}</b>
+          · <span class="mission-chance ${chance >= 70 ? 'good' : chance >= 40 ? 'mid' : 'bad'}">${chance}% de succès</span>
+        </div>
+        <button class="diplo-launch-btn" data-diplo-launch="${f.id}">Envoyer une mission</button>
+      </div>`;
     } else {
-      missionHTML = `<div class="diplo-mission-info locked">Aucun linguiste 3+ disponible pour mission diplomatique.</div>`;
+      const altLabel = reqAlt ? ` ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+` : '';
+      missionHTML = `<div class="dc-section dc-section-locked">Mission : ${SKILL_LABELS[reqSkill]} ${reqMin}+${altLabel} requis</div>`;
     }
   }
 
@@ -1013,13 +1110,20 @@ function renderFactionCard(f) {
     <div class="dc-meta" style="color:${ft.color}">${ft.label} · ${f.bodyName}</div>
     <div class="dc-desc">${ft.desc}</div>
     <div class="dc-rep">
-      <div class="dc-rep-label">Réputation : <b>${Math.round(f.reputation)}</b></div>
-      <div class="dc-rep-bar">
-        <div class="dc-rep-zero"></div>
-        <div class="dc-rep-fill" style="width:${repBar}%; background:${status.color}"></div>
+      <div class="dc-rep-header">
+        <span class="dc-rep-label">Réputation</span>
+        <span class="dc-rep-val" style="color:${status.color}">${f.reputation > 0 ? '+' : ''}${Math.round(f.reputation)}</span>
+      </div>
+      <div class="dc-rep-track">
+        <div class="dc-rep-bar">
+          <div class="dc-rep-fill" style="width:${repPct}%; background:${status.color}"></div>
+        </div>
+        <div class="dc-milestones">${milestonesHTML}</div>
       </div>
     </div>
+    ${allianceHTML}
     ${tradeHTML}
+    ${giftsHTML}
     ${missionHTML}
   </div>`;
 }
@@ -1029,26 +1133,50 @@ function openDiploLaunchModal(factionId) {
   _diploLaunchPick = { factionId, memberId: null };
   const f = S.factions?.[factionId];
   if (!f) return;
-  const linguistes = aliveCrew().filter(m => m.statut === 'libre' && (m.skills.linguistique || 0) >= 3);
-  if (linguistes.length === 0) {
-    toast("Aucun linguiste 3+ disponible.");
+  const ft = FACTION_TYPES[f.type];
+  const reqSkill = ft.missionReqSkill || 'linguistique';
+  const reqMin   = ft.missionReqMin   || 3;
+  const reqAlt   = ft.missionReqAlt;
+  const cost     = ft.missionCost ?? 25;
+  const candidates = aliveCrew().filter(m => m.statut === 'libre' && (
+    (m.skills[reqSkill] || 0) >= reqMin ||
+    (reqAlt && (m.skills[reqAlt.skill] || 0) >= reqAlt.min)
+  ));
+  if (candidates.length === 0) {
+    const altLabel = reqAlt ? ` ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+` : '';
+    toast(`Aucun candidat disponible (${SKILL_LABELS[reqSkill]} ${reqMin}+${altLabel}).`);
     return;
   }
   const bg = $('#modalBg');
   const m = $('#modal');
   m.classList.add('incident-modal');
-  const linguistesHTML = linguistes.map(c => {
+  // Trier par chance de succès décroissante
+  const sorted = candidates.slice().sort((a, b) =>
+    missionSuccessChance(b, f.type) - missionSuccessChance(a, f.type));
+  const pSkillLabel = SKILL_LABELS[ft.missionSkill] || ft.missionSkill;
+  const candidatesHTML = sorted.map(c => {
+    const chance = missionSuccessChance(c, f.type);
+    const cls = chance >= 70 ? 'good' : chance >= 40 ? 'mid' : 'bad';
+    const pScore = c.skills[ft.missionSkill] || 0;
     const sel = _diploLaunchPick.memberId === c.id ? 'selected' : '';
     return `<div class="diplo-pick ${sel}" data-pick-diplo="${c.id}">
       <div class="dp-name">${c.name}</div>
-      <div class="dp-meta">Linguistique ${c.skills.linguistique} · Charisme ${c.stats.charisme}</div>
+      <div class="dp-meta">${pSkillLabel} ${pScore} · Charisme ${c.stats?.charisme || 5}
+        · <span class="mission-chance ${cls}">${chance}%</span>
+      </div>
     </div>`;
   }).join('');
+  const pSkills = reqAlt
+    ? `${SKILL_LABELS[reqSkill]} ${reqMin}+ ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+`
+    : `${SKILL_LABELS[reqSkill]} ${reqMin}+`;
   m.innerHTML = `
     <div class="incident-eyebrow">Mission diplomatique</div>
-    <h3 class="incident-title">Envoyer un colon vers ${f.name}</h3>
-    <p class="incident-body">Le colon partira pour 24-48h jeu. Coût : 25 biomasse. Au retour, gain de réputation selon le succès du jet de Charisme.</p>
-    <div class="diplo-pick-list">${linguistesHTML}</div>
+    <h3 class="incident-title">→ ${f.name}</h3>
+    <p class="incident-body" style="font-size:13px;padding:8px 0 12px">
+      Durée : 24–48h jeu · Coût : ${cost} biomasse · Compétence valorisée : <em>${pSkillLabel}</em><br>
+      Requis : ${pSkills}
+    </p>
+    <div class="diplo-pick-list">${candidatesHTML}</div>
     <div class="btn-row">
       <button id="diploCancel">Annuler</button>
       <button id="diploGo" class="primary" disabled>Envoyer</button>
