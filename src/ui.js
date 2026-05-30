@@ -2561,16 +2561,22 @@ function renderCombatOverlay(exp) {
     ).join('');
     const sel = a.id === cbt.selectedAllyId ? 'selected' : '';
     const coverActive = a.effects.some(e => e.type === 'cover');
+    const guardingActive = a.effects.some(e => e.type === 'guarding');
     const shieldBar = a.maxShieldHp > 0
       ? `<div class="cbt-shield-bar"><div class="cbt-shield-fill" style="width:${Math.max(0, a.shieldHp / a.maxShieldHp * 100)}%"></div></div>
          <div class="cbt-hp-txt" style="color:#7ab8e8">⚡${a.shieldHp}/${a.maxShieldHp} Bouclier</div>`
       : '';
     const wType = a.weaponType ? `<span class="cbt-wtype">${weaponLabel[a.weaponType] || a.weaponType}</span>` : '';
-    return `<div class="cbt-ally ${dead ? 'dead' : ''} ${sel}" data-cbt-ally="${a.id}">
-      <div class="cbt-a-name">${a.name}${wType}${coverActive ? ' <span class="cbt-cover-icon">🛡</span>' : ''}</div>
+    const statusBadge = a.au_sol
+      ? ' <span class="cbt-au-sol">AU SOL</span>'
+      : coverActive ? ' <span class="cbt-cover-icon">🛡</span>'
+      : guardingActive ? ' <span class="cbt-guarding-icon">⚔🛡</span>'
+      : '';
+    return `<div class="cbt-ally ${dead ? 'dead' : ''} ${a.au_sol ? 'au-sol' : ''} ${sel}" data-cbt-ally="${a.id}">
+      <div class="cbt-a-name">${a.name}${wType}${statusBadge}</div>
       ${shieldBar}
       <div class="cbt-hp-bar"><div class="cbt-hp-fill ${hpCls}" style="width:${hpPct}%"></div></div>
-      <div class="cbt-hp-txt">${a.hp}/${a.maxHp} PV</div>
+      <div class="cbt-hp-txt">${a.au_sol ? '⚠ À terre' : `${a.hp}/${a.maxHp} PV`}</div>
       <div class="cbt-pa-row">${paDots}<span class="cbt-pa-lbl">${a.pa} PA</span></div>
     </div>`;
   }).join('');
@@ -2580,10 +2586,14 @@ function renderCombatOverlay(exp) {
     const dead = e.hp <= 0;
     const hpPct = Math.max(0, e.hp / e.maxHp * 100);
     const sel = _pendingCombatAction ? 'targetable' : '';
+    const isCharging = e.effects?.some(ef => ef.type === 'en_charge');
+    const isEnraged = (e.behavior === 'enrage' || e.behavior === 'charge_enrage') && e.hp <= e.maxHp * 0.3 && !dead;
+    const chargeBadge = isCharging ? '<span class="cbt-charge-badge">⚡ CHARGE</span>' : '';
+    const enrageBadge = isEnraged ? '<span class="cbt-enrage-badge">💢 ENRAGÉ</span>' : '';
     return `<div class="cbt-enemy ${dead ? 'dead' : ''} ${sel}" data-cbt-enemy="${i}">
-      <div class="cbt-e-name">${e.nom}</div>
+      <div class="cbt-e-name">${e.nom}${chargeBadge}${enrageBadge}</div>
       <div class="cbt-hp-bar"><div class="cbt-hp-fill enemy" style="width:${hpPct}%"></div></div>
-      <div class="cbt-hp-txt">${e.hp}/${e.maxHp} PV · armure ${e.armor}</div>
+      <div class="cbt-hp-txt">${e.hp}/${e.maxHp} PV · armure ${e.armor}${e.counterChance > 0 ? ' · ↩' : ''}</div>
     </div>`;
   }).join('');
 
@@ -2595,23 +2605,25 @@ function renderCombatOverlay(exp) {
   // Actions pour l'allié sélectionné
   const ally = cbt.allies.find(a => a.id === cbt.selectedAllyId);
   const hasKit = ((exp.equipment?.nanobots_reparation || 0) + (exp.equipment?.kit_medical || 0)) > 0;
-  // Cherche n'importe quel explosif AoE disponible
   const aoeItem = ['mine_eclats', 'grenade_concussion', 'grenade_iem'].find(id => (exp.equipment?.[id] || 0) > 0);
   const aoeLabel = aoeItem ? (ITEMS[aoeItem]?.nom || aoeItem) : null;
   const canHeal = ally && (ally.medecine > 0 || hasKit);
+  const hasDowned = cbt.allies.some(a => a.au_sol);
+  const hasOtherAlly = ally && cbt.allies.some(a => a.id !== ally?.id && a.hp > 0 && !a.au_sol);
 
   let actionsHTML = '';
   if (cbt.phase === 'ended') {
     const icon = cbt.outcome === 'victory' ? '🏆' : cbt.outcome === 'retreat' ? '↩' : '💀';
     const label = cbt.outcome === 'victory' ? 'Victoire !' : cbt.outcome === 'retreat' ? 'Retraite' : 'Défaite';
     actionsHTML = `<div class="cbt-ended">${icon} ${label}</div>`;
-  } else if (!ally || ally.hp <= 0) {
+  } else if (!ally || ally.hp <= 0 || ally.au_sol) {
     actionsHTML = `<div class="cbt-hint">Sélectionne un colon actif pour agir.</div>`;
   } else {
+    const attackLabel = ally.weaponType === 'ranged' || ally.weaponType === 'precision' ? 'Tirer' : 'Attaquer CAC';
     actionsHTML = `
       <div class="cbt-action-group">
-        <button class="cbt-action" data-cbt-act="attack" ${ally.pa < 1 ? 'disabled' : ''} title="Attaque standard · 1 PA">
-          Attaquer <span class="cbt-act-cost">1 PA</span>
+        <button class="cbt-action" data-cbt-act="attack" ${ally.pa < 1 ? 'disabled' : ''} title="Attaque standard · 1 PA${ally.weaponType === 'melee' ? ' (peut déclencher contre-attaque)' : ''}">
+          ${attackLabel} <span class="cbt-act-cost">1 PA</span>
         </button>
         <button class="cbt-action" data-cbt-act="precise" ${ally.pa < 2 ? 'disabled' : ''} title="+20% précision, +2 dégâts · 2 PA">
           Tir ciblé <span class="cbt-act-cost">2 PA</span>
@@ -2619,8 +2631,14 @@ function renderCombatOverlay(exp) {
         <button class="cbt-action" data-cbt-act="cover" ${ally.pa < 1 ? 'disabled' : ''} title="+3 armure ce round · 1 PA">
           Couverture <span class="cbt-act-cost">1 PA</span>
         </button>
+        ${hasOtherAlly ? `<button class="cbt-action cbt-garde" data-cbt-act="garde" ${ally.pa < 1 ? 'disabled' : ''} title="Protège l'allié le plus vulnérable ce round · 1 PA">
+          Protéger <span class="cbt-act-cost">1 PA</span>
+        </button>` : ''}
         ${canHeal ? `<button class="cbt-action" data-cbt-act="heal" ${ally.pa < 2 ? 'disabled' : ''} title="Soigne le plus blessé · 2 PA">
           Soigner <span class="cbt-act-cost">2 PA</span>
+        </button>` : ''}
+        ${hasDowned ? `<button class="cbt-action cbt-stabilise" data-cbt-act="stabilise" ${ally.pa < 1 ? 'disabled' : ''} title="Stabilise un colon à terre · 1 PA">
+          Stabiliser <span class="cbt-act-cost">1 PA</span>
         </button>` : ''}
         ${aoeLabel ? `<button class="cbt-action cbt-aoe" data-cbt-act="grenade" ${ally.pa < 1 ? 'disabled' : ''} title="${aoeLabel} · 1 PA (consomme l'item)">
           ${aoeLabel} <span class="cbt-act-cost">1 PA</span>

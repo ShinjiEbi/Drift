@@ -4873,6 +4873,7 @@ export function memberCombatStats(member, expEquipment) {
   }
 
   accuracy = Math.min(95, Math.max(20, accuracy));
+  const critChance = Math.min(30, 5 + Math.max(0, dexterite - 5));
 
   return {
     maxHp, maxPa,
@@ -4883,6 +4884,7 @@ export function memberCombatStats(member, expEquipment) {
     armorPen,
     shieldHp,
     medecine,
+    critChance,
     weaponType: wType || 'melee'
   };
 }
@@ -4904,6 +4906,8 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
       damage: cs.damage, accuracy: cs.accuracy,
       weaponType: cs.weaponType,
       medecine: cs.medecine,
+      critChance: cs.critChance,
+      au_sol: false,
       effects: []
     };
   });
@@ -4917,6 +4921,9 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
       armor: def.armor || 0,
       damage: def.damage || [1, 3],
       accuracy: def.accuracy || 65,
+      pa: def.pa || 2, maxPa: def.pa || 2,
+      counterChance: def.counterChance || 0,
+      behavior: def.behavior || null,
       loot: def.loot || {},
       effects: []
     };
@@ -4961,13 +4968,43 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
 
     if (hit) {
       const [dmin, dmax] = ally.damage;
-      const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1)) + dmgBonus;
-      // armorPen réduit l'armure effective
+      const isCrit = rng() * 100 < (ally.critChance || 5);
+      const baseRaw = dmin + Math.floor(rng() * (dmax - dmin + 1)) + dmgBonus;
+      const rawDmg = isCrit ? Math.round(baseRaw * 1.5) : baseRaw;
       const effectiveArmor = Math.max(0, target.armor - (ally.armorPen || 0));
       const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
       target.hp = Math.max(0, target.hp - effectiveDmg);
       const penNote = (ally.armorPen || 0) > 0 ? ` (pénètre ${ally.armorPen})` : '';
-      cbt.log.push(`${ally.name} → ${target.nom} : ${effectiveDmg} dégâts${penNote}${target.hp <= 0 ? ' — neutralisé !' : '.'}`);
+      const critNote = isCrit ? ' 💥 CRITIQUE' : '';
+      cbt.log.push(`${ally.name} → ${target.nom} : ${effectiveDmg} dégâts${penNote}${critNote}${target.hp <= 0 ? ' — neutralisé !' : '.'}`);
+
+      // Contre-attaque : seulement si arme de mêlée, ennemi toujours vivant, et chance > 0
+      const isMeleeWeapon = !ally.weaponType || ally.weaponType === 'melee';
+      if (isMeleeWeapon && target.hp > 0 && (target.counterChance || 0) > 0) {
+        if (rng() < target.counterChance) {
+          const ctrRoll = Math.floor(rng() * 100);
+          const ctrHit = ctrRoll < (target.accuracy || 65);
+          if (ctrHit) {
+            const [cdmin, cdmax] = target.damage;
+            const ctrRaw = Math.round((cdmin + Math.floor(rng() * (cdmax - cdmin + 1))) * 0.6);
+            const cvrArmor = ally.effects.find(e => e.type === 'cover')?.armor || 0;
+            const effCtrArmor = ally.armor + cvrArmor;
+            const effCtrDmg = Math.max(1, ctrRaw - effCtrArmor);
+            if ((ally.shieldHp || 0) > 0) {
+              const sa = Math.min(ally.shieldHp, effCtrDmg);
+              ally.shieldHp -= sa;
+              const ov = effCtrDmg - sa;
+              if (ov > 0) ally.hp = Math.max(0, ally.hp - ov);
+            } else {
+              ally.hp = Math.max(0, ally.hp - effCtrDmg);
+            }
+            if (ally.hp <= 0) ally.au_sol = true;
+            cbt.log.push(`↩ Contre-attaque de ${target.nom} : ${effCtrDmg} dégâts sur ${ally.name}${ally.hp <= 0 ? ' — à terre !' : '!'}`);
+          } else {
+            cbt.log.push(`↩ ${target.nom} tente une contre-attaque : manqué !`);
+          }
+        }
+      }
     } else {
       cbt.log.push(`${ally.name} vise ${target.nom} : raté !`);
     }
@@ -5017,6 +5054,26 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
     const itemNom = ITEMS[aoeItem]?.nom || aoeItem;
     cbt.log.push(`${ally.name} lance ${itemNom} : ${baseDmg} dégâts à tous les ennemis !`);
   }
+  else if (action === 'stabilise') {
+    if (ally.pa < 1) return;
+    const downed = cbt.allies.find(a => a.au_sol);
+    if (!downed) return;
+    ally.pa -= 1;
+    downed.au_sol = false;
+    downed.hp = 2;
+    cbt.log.push(`${ally.name} stabilise ${downed.name} — de retour au combat (2 PV) !`);
+  }
+  else if (action === 'garde') {
+    if (ally.pa < 1) return;
+    const others = cbt.allies.filter(a => a.id !== ally.id && a.hp > 0 && !a.au_sol);
+    const guardTarget = others.length > 0
+      ? others.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b)
+      : ally;
+    ally.pa -= 1;
+    ally.effects = ally.effects.filter(e => e.type !== 'guarding');
+    ally.effects.push({ type: 'guarding', targetId: guardTarget.id, turnsLeft: 1 });
+    cbt.log.push(`${ally.name} protège ${guardTarget.name} ce round.`);
+  }
   else if (action === 'end_turn') {
     ally.pa = 0;
     cbt.log.push(`${ally.name} passe son tour.`);
@@ -5063,47 +5120,121 @@ function _processEnemyPhase(exp) {
   cbt.log.push(`— Phase ennemie (Round ${cbt.round}) —`);
 
   const rng = rngFor(`${exp.seed}|enemy${cbt.round}|${S.meta.gameMin}`);
-  const living = () => cbt.allies.filter(a => a.hp > 0);
+  // Living allies: excludes downed (au_sol / hp=0)
+  const living = () => cbt.allies.filter(a => a.hp > 0 && !a.au_sol);
 
-  for (const enemy of cbt.enemies.filter(e => e.hp > 0)) {
-    // Ennemi étourdi → passe son tour
-    const stunned = enemy.effects?.some(e => e.type === 'stunned');
-    if (stunned) {
-      cbt.log.push(`${enemy.nom} est étourdi — passe son attaque.`);
-      continue;
+  // Mark any ally at 0 HP from the player phase as au_sol
+  for (const a of cbt.allies) {
+    if (a.hp <= 0 && !a.au_sol) a.au_sol = true;
+  }
+
+  // Detect pack-type enemy deaths for pack behavior bonus
+  const packDeathsThisRound = {};
+
+  function _doEnemyAttack(enemy, dmgMult, accBonus, dmgBonus) {
+    const aliveNow = living();
+    if (aliveNow.length === 0) return;
+
+    // Weakest target first
+    let target = aliveNow.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b);
+
+    // Guard interception
+    const guard = cbt.allies.find(a =>
+      a.hp > 0 && !a.au_sol && a.id !== target.id &&
+      a.effects.some(e => e.type === 'guarding' && e.targetId === target.id)
+    );
+    if (guard) {
+      cbt.log.push(`🛡 ${guard.name} s'interpose pour protéger ${target.name} !`);
+      target = guard;
     }
-    const aliveAllies = living();
-    if (aliveAllies.length === 0) break;
-    // Cible l'allié avec le ratio HP/maxHP le plus bas
-    const target = aliveAllies.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b);
+
     const coverArmor = target.effects.find(e => e.type === 'cover')?.armor || 0;
     const effectiveArmor = target.armor + coverArmor;
     const dodgeChance = target.dodge || 0;
     const roll = Math.floor(rng() * 100);
-    const hit = roll >= dodgeChance && roll < enemy.accuracy;
+    const hit = roll >= dodgeChance && roll < Math.min(95, (enemy.accuracy || 65) + accBonus);
 
     if (hit) {
       const [dmin, dmax] = enemy.damage;
-      const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1));
+      const rawDmg = Math.round((dmin + dmgBonus + Math.floor(rng() * (dmax - dmin + 1))) * dmgMult);
       const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
-      // Les dégâts frappent le bouclier d'abord, puis les PV
+      const chargeNote = dmgMult > 1 ? ' [CHARGE]' : '';
       if ((target.shieldHp || 0) > 0) {
-        const shieldAbsorb = Math.min(target.shieldHp, effectiveDmg);
-        target.shieldHp -= shieldAbsorb;
-        const overflow = effectiveDmg - shieldAbsorb;
-        if (overflow > 0) target.hp = Math.max(0, target.hp - overflow);
-        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
+        const sa = Math.min(target.shieldHp, effectiveDmg);
+        target.shieldHp -= sa;
+        const ov = effectiveDmg - sa;
+        if (ov > 0) target.hp = Math.max(0, target.hp - ov);
+        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${chargeNote} (bouclier ${sa > 0 ? `absorbe ${sa}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
       } else {
         target.hp = Math.max(0, target.hp - effectiveDmg);
-        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${target.hp <= 0 ? ' — à terre !' : '.'}`);
+        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${chargeNote}${target.hp <= 0 ? ' — à terre !' : '.'}`);
       }
+      if (target.hp <= 0) target.au_sol = true;
     } else {
       cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 ? 'esquivé !' : 'raté !'}`);
     }
   }
 
-  // Défaite ?
-  if (cbt.allies.every(a => a.hp <= 0)) {
+  for (const enemy of cbt.enemies.filter(e => e.hp > 0)) {
+    // Stunned: skip and tick effect
+    const stunned = enemy.effects?.some(e => e.type === 'stunned');
+    if (stunned) {
+      cbt.log.push(`${enemy.nom} est étourdi — passe son attaque.`);
+      enemy.effects = enemy.effects.map(e => ({ ...e, turnsLeft: e.turnsLeft - 1 })).filter(e => e.turnsLeft > 0);
+      continue;
+    }
+
+    if (living().length === 0) break;
+
+    // Charge behavior: 25% chance to telegraph instead of attacking
+    const alreadyCharging = enemy.effects?.some(e => e.type === 'en_charge');
+    const hasChargeBehavior = enemy.behavior === 'charge' || enemy.behavior === 'charge_enrage';
+    if (!alreadyCharging && hasChargeBehavior && rng() < 0.25) {
+      enemy.effects = (enemy.effects || []);
+      enemy.effects.push({ type: 'en_charge', turnsLeft: 1 });
+      cbt.log.push(`⚡ ${enemy.nom} prépare une charge dévastatrice !`);
+      continue;
+    }
+
+    // Charge release: double damage this attack
+    const dmgMult = alreadyCharging ? 2.0 : 1.0;
+    if (alreadyCharging) {
+      enemy.effects = enemy.effects.filter(e => e.type !== 'en_charge');
+    }
+
+    // Pack behavior: bonus per dead ally of same type
+    let packAccBonus = 0, packDmgBonus = 0;
+    if (enemy.behavior === 'pack') {
+      const packDead = cbt.enemies.filter(e => e.type === enemy.type && e.hp <= 0).length;
+      packAccBonus = packDead * 10;
+      packDmgBonus = packDead;
+      if (packDead > 0 && !enemy.packBoosted) {
+        enemy.packBoosted = true;
+        cbt.log.push(`🐾 La meute se resserre — ${enemy.nom} gagne en fureur !`);
+      }
+    }
+
+    // Enrage behavior: below 30% HP → attack twice
+    const isEnraged = (enemy.behavior === 'enrage' || enemy.behavior === 'charge_enrage') && enemy.hp <= enemy.maxHp * 0.3;
+    if (isEnraged && !enemy.enragedLogged) {
+      enemy.enragedLogged = true;
+      cbt.log.push(`💢 ${enemy.nom} entre en rage !`);
+    }
+    const attackCount = isEnraged ? 2 : 1;
+
+    for (let atk = 0; atk < attackCount; atk++) {
+      if (living().length === 0) break;
+      _doEnemyAttack(enemy, atk === 0 ? dmgMult : 1.0, packAccBonus, packDmgBonus);
+    }
+
+    // Tick enemy effects
+    if (enemy.effects?.length > 0) {
+      enemy.effects = enemy.effects.map(e => ({ ...e, turnsLeft: e.turnsLeft - 1 })).filter(e => e.turnsLeft > 0);
+    }
+  }
+
+  // Défaite : tous les alliés sont à terre
+  if (cbt.allies.every(a => a.hp <= 0 || a.au_sol)) {
     cbt.phase = 'ended';
     cbt.outcome = 'defeat';
     cbt.log.push("💀 Défaite — toute l'équipe est à terre.");
@@ -5115,7 +5246,7 @@ function _processEnemyPhase(exp) {
   cbt.round++;
   cbt.phase = 'player';
   for (const a of cbt.allies) {
-    if (a.hp <= 0) continue;
+    if (a.hp <= 0 || a.au_sol) continue;
     a.pa = a.maxPa;
     a.effects = a.effects.map(e => ({ ...e, turnsLeft: e.turnsLeft - 1 })).filter(e => e.turnsLeft > 0);
   }
@@ -5148,7 +5279,14 @@ function resolveCombatEnd(exp) {
     }
     for (const id of exp.crewIds) {
       const m = S.crew.find(c => c.id === id);
-      if (m) m.moral = Math.min(100, m.moral + 5);
+      if (!m) continue;
+      m.moral = Math.min(100, m.moral + 5);
+      // Au sol pendant la victoire → blessure grave
+      const allyState = cbt.allies.find(a => a.id === id);
+      if (allyState?.au_sol) {
+        inflictStatus(m, 'blessure_grave', 'combat');
+        m.sante = Math.max(10, m.sante - 20);
+      }
     }
     const lootDesc = Object.entries(cbt.lootOnWin).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
     exp.accumulatedLog.push(`Combat gagné${lootDesc ? ' : ' + lootDesc : ' — zone sécurisée'}.`);
@@ -5158,7 +5296,7 @@ function resolveCombatEnd(exp) {
     for (const allyState of cbt.allies) {
       const m = S.crew.find(c => c.id === allyState.id);
       if (!m) continue;
-      if (allyState.hp <= 0) {
+      if (allyState.hp <= 0 || allyState.au_sol) {
         inflictStatus(m, 'blessure_grave', 'combat');
         m.sante = Math.max(5, m.sante - 30);
       } else if (allyState.hp < allyState.maxHp * 0.4) {

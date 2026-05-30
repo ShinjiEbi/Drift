@@ -2980,34 +2980,98 @@ export const TRAITS = {
 // pa: points d'action par tour (usage interne) | loot: récompense si victoire
 
 export const ENEMY_TYPES = {
-  // — Faune —
-  predateur_lunaire:  { nom: "Prédateur lunaire",    category: 'faune',   hp: 14, armor: 1, damage: [2, 5], accuracy: 65, pa: 2, loot: { biomasse: 8 } },
-  meute_rapaces:      { nom: "Meute de rapaces",      category: 'faune',   hp:  8, armor: 0, damage: [1, 3], accuracy: 70, pa: 3, loot: { biomasse: 4 } },
-  predateur_alpha:    { nom: "Prédateur alpha",        category: 'faune',   hp: 22, armor: 2, damage: [3, 7], accuracy: 60, pa: 2, loot: { biomasse: 18 } },
-  drone_bio:          { nom: "Drone biologique",       category: 'faune',   hp: 12, armor: 1, damage: [2, 5], accuracy: 72, pa: 3, loot: { biomasse: 10 } },
+  // — Faune — rapides, contre-attaquent en mêlée, meutes réagissent à la mort
+  predateur_lunaire: {
+    nom: "Prédateur lunaire", category: 'faune', hp: 14, armor: 1,
+    damage: [2, 5], accuracy: 65, pa: 2,
+    counterChance: 0.35, behavior: 'charge',
+    loot: { biomasse: 8 }
+  },
+  meute_rapaces: {
+    nom: "Meute de rapaces", category: 'faune', hp: 8, armor: 0,
+    damage: [1, 3], accuracy: 70, pa: 3,
+    behavior: 'pack',
+    loot: { biomasse: 4 }
+  },
+  predateur_alpha: {
+    nom: "Prédateur alpha", category: 'faune', hp: 22, armor: 2,
+    damage: [3, 7], accuracy: 60, pa: 2,
+    counterChance: 0.45, behavior: 'charge_enrage',
+    loot: { biomasse: 18 }
+  },
+  drone_bio: {
+    nom: "Drone biologique", category: 'faune', hp: 12, armor: 1,
+    damage: [2, 5], accuracy: 72, pa: 3,
+    behavior: 'pack',
+    loot: { biomasse: 10 }
+  },
 
-  // — Machines / Gardiens —
-  drone_gardien:      { nom: "Drone gardien",          category: 'machine', hp: 16, armor: 4, damage: [2, 6], accuracy: 75, pa: 2,
-    loot: { metal: 12, composants: 5 }, itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }] },
-  gardien_antique:    { nom: "Gardien antique",         category: 'machine', hp: 26, armor: 6, damage: [3, 8], accuracy: 65, pa: 2,
-    loot: { metal: 25, cristal: 10 }, itemLoot: [{ item: 'grenade_iem', chance: 0.30 }, { item: 'bouclier_cinetique', chance: 0.15 }] },
-  sentinelle_alien:   { nom: "Sentinelle alien",        category: 'machine', hp: 18, armor: 3, damage: [3, 7], accuracy: 70, pa: 2,
-    loot: { cristal: 8, datacubes: 4 }, itemLoot: [{ item: 'canon_ionique', chance: 0.10 }] },
+  // — Machines — blindées, enragent quand endommagées, résistantes au CAC
+  drone_gardien: {
+    nom: "Drone gardien", category: 'machine', hp: 16, armor: 4,
+    damage: [2, 6], accuracy: 75, pa: 2,
+    behavior: 'enrage',
+    loot: { metal: 12, composants: 5 },
+    itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }]
+  },
+  gardien_antique: {
+    nom: "Gardien antique", category: 'machine', hp: 26, armor: 6,
+    damage: [3, 8], accuracy: 65, pa: 2,
+    behavior: 'charge_enrage',
+    loot: { metal: 25, cristal: 10 },
+    itemLoot: [{ item: 'grenade_iem', chance: 0.30 }, { item: 'bouclier_cinetique', chance: 0.15 }]
+  },
+  sentinelle_alien: {
+    nom: "Sentinelle alien", category: 'machine', hp: 18, armor: 3,
+    damage: [3, 7], accuracy: 70, pa: 2,
+    behavior: 'charge',
+    loot: { cristal: 8, datacubes: 4 },
+    itemLoot: [{ item: 'canon_ionique', chance: 0.10 }]
+  },
 
-  // — Xénoformes —
-  xenoforme_alpha:    { nom: "Xénoforme α",            category: 'alien',   hp: 18, armor: 2, damage: [2, 6], accuracy: 65, pa: 2,
-    loot: { cristal: 10, datacubes: 4 }, itemLoot: [{ item: 'bouclier_refractant', chance: 0.08 }] },
-  xenoforme_reine:    { nom: "Reine xénoforme",         category: 'alien',   hp: 32, armor: 3, damage: [4,10], accuracy: 60, pa: 2,
-    loot: { cristal: 20, datacubes: 10 }, itemLoot: [{ item: 'bouclier_refractant', chance: 0.25 }, { item: 'canon_ionique', chance: 0.12 }] },
-  spore_toxique:      { nom: "Spore toxique",           category: 'alien',   hp:  6, armor: 0, damage: [1, 2], accuracy: 80, pa: 3, loot: { biomasse: 6 } },
+  // — Xénoformes — contre-attaquent et enragent sous pression
+  xenoforme_alpha: {
+    nom: "Xénoforme α", category: 'alien', hp: 18, armor: 2,
+    damage: [2, 6], accuracy: 65, pa: 2,
+    counterChance: 0.30, behavior: 'enrage',
+    loot: { cristal: 10, datacubes: 4 },
+    itemLoot: [{ item: 'bouclier_refractant', chance: 0.08 }]
+  },
+  xenoforme_reine: {
+    nom: "Reine xénoforme", category: 'alien', hp: 32, armor: 3,
+    damage: [4, 10], accuracy: 60, pa: 2,
+    counterChance: 0.40, behavior: 'charge_enrage',
+    loot: { cristal: 20, datacubes: 10 },
+    itemLoot: [{ item: 'bouclier_refractant', chance: 0.25 }, { item: 'canon_ionique', chance: 0.12 }]
+  },
+  spore_toxique: {
+    nom: "Spore toxique", category: 'alien', hp: 6, armor: 0,
+    damage: [1, 2], accuracy: 80, pa: 3,
+    loot: { biomasse: 6 }
+  },
 
-  // — Humains hostiles —
-  pillard:            { nom: "Pillard",                 category: 'humain',  hp: 10, armor: 2, damage: [2, 5], accuracy: 70, pa: 2,
-    loot: { metal: 8, biomasse: 5 }, itemLoot: [{ item: 'matraque_securite', chance: 0.25 }, { item: 'pistolet_plasma', chance: 0.15 }] },
-  mercenaire:         { nom: "Mercenaire",              category: 'humain',  hp: 14, armor: 3, damage: [3, 6], accuracy: 75, pa: 2,
-    loot: { metal: 15, biomasse: 3 }, itemLoot: [{ item: 'fusil_assault', chance: 0.20 }, { item: 'bouclier_cinetique', chance: 0.18 }] },
-  garde_elite:        { nom: "Garde d'élite",           category: 'humain',  hp: 18, armor: 4, damage: [3, 7], accuracy: 80, pa: 2,
-    loot: { metal: 20 }, itemLoot: [{ item: 'fusil_precision', chance: 0.15 }, { item: 'armure_exo', chance: 0.12 }, { item: 'bouclier_energetique', chance: 0.12 }] },
+  // — Humains hostiles — contre-attaquent, mercenaires et gardes chargent
+  pillard: {
+    nom: "Pillard", category: 'humain', hp: 10, armor: 2,
+    damage: [2, 5], accuracy: 70, pa: 2,
+    counterChance: 0.30,
+    loot: { metal: 8, biomasse: 5 },
+    itemLoot: [{ item: 'matraque_securite', chance: 0.25 }, { item: 'pistolet_plasma', chance: 0.15 }]
+  },
+  mercenaire: {
+    nom: "Mercenaire", category: 'humain', hp: 14, armor: 3,
+    damage: [3, 6], accuracy: 75, pa: 2,
+    counterChance: 0.35, behavior: 'charge',
+    loot: { metal: 15, biomasse: 3 },
+    itemLoot: [{ item: 'fusil_assault', chance: 0.20 }, { item: 'bouclier_cinetique', chance: 0.18 }]
+  },
+  garde_elite: {
+    nom: "Garde d'élite", category: 'humain', hp: 18, armor: 4,
+    damage: [3, 7], accuracy: 80, pa: 2,
+    counterChance: 0.50, behavior: 'enrage',
+    loot: { metal: 20 },
+    itemLoot: [{ item: 'fusil_precision', chance: 0.15 }, { item: 'armure_exo', chance: 0.12 }, { item: 'bouclier_energetique', chance: 0.12 }]
+  },
 };
 
 // ============================================================
