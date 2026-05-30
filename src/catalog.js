@@ -549,12 +549,14 @@ export const ITEMS = {
   lance_flammes: {
     nom: "Lance-flammes portable",
     type: 'weapon', origin: 'humain',
-    desc: "Arme thermique. Efficace contre la flore agressive et la faune."
+    desc: "Arme thermique. Efficace contre la flore agressive et la faune.",
+    combat: { damage: 4, label: "+4 dégâts" }
   },
   arme_resonance: {
     nom: "Arme à résonance",
     type: 'weapon', origin: 'alien_a',
-    desc: "Arme énergétique cristalline. Brise les structures alien à distance."
+    desc: "Arme énergétique cristalline. Brise les structures alien à distance.",
+    combat: { damage: 3, accuracy: 15, label: "+3 dégâts, +15% précision" }
   },
 
   // ===== Items uniques de chroniques (0.27) =====
@@ -597,12 +599,14 @@ export const ITEMS = {
   nanobots_reparation: {
     nom: "Nanobots de réparation",
     type: 'consumable', origin: 'humain',
-    desc: "Microbots injectables. Réparent les micro-lésions en quelques heures. Stabilise un colon blessé léger sans médecin sur le terrain."
+    desc: "Microbots injectables. Réparent les micro-lésions en quelques heures. Stabilise un colon blessé léger sans médecin sur le terrain.",
+    combat: { heal: 6, label: "+6 PV (soins combat)" }
   },
   mine_eclats: {
     nom: "Mine à éclats",
     type: 'weapon', origin: 'humain',
-    desc: "Dispositif à pression enterré. Dissuade la faune agressive et couvre les retraites. Usage unique, zone d'effet."
+    desc: "Dispositif à pression enterré. Dissuade la faune agressive et couvre les retraites. Usage unique, zone d'effet.",
+    combat: { aoe: true, damage: 5, label: "+5 dégâts (tous ennemis)" }
   },
   explosif_demolition: {
     nom: "Explosif de démolition",
@@ -619,7 +623,8 @@ export const ITEMS = {
   tenue_camouflage: {
     nom: "Tenue de camouflage",
     type: 'tool', origin: 'humain',
-    desc: "Revêtement adaptatif multicouche. Atténue la signature thermique et visuelle. Réduit significativement le risque d'être repéré par la faune ou les factions hostiles."
+    desc: "Revêtement adaptatif multicouche. Atténue la signature thermique et visuelle. Réduit significativement le risque d'être repéré par la faune ou les factions hostiles.",
+    combat: { dodge: 20, label: "+20% esquive" }
   },
   grappin_tactique: {
     nom: "Grappin tactique",
@@ -629,7 +634,8 @@ export const ITEMS = {
   marteau_sonique: {
     nom: "Marteau sonique",
     type: 'weapon', origin: 'humain',
-    desc: "Générateur d'ondes de choc focalisées. Brise les structures lithiques et désarticule les exosquelettes. Particulièrement efficace contre les défenses mécaniques alien."
+    desc: "Générateur d'ondes de choc focalisées. Brise les structures lithiques et désarticule les exosquelettes. Particulièrement efficace contre les défenses mécaniques alien.",
+    combat: { damage: 5, label: "+5 dégâts" }
   },
   balise_retour: {
     nom: "Balise de retour d'urgence",
@@ -639,7 +645,8 @@ export const ITEMS = {
   bouclier_plasma: {
     nom: "Bouclier plasma personnel",
     type: 'weapon', origin: 'humain',
-    desc: "Générateur de champ électro-magnétique portatif. Absorbe les premiers impacts d'énergie et de projectiles. Recharge passif entre les engagements."
+    desc: "Générateur de champ électro-magnétique portatif. Absorbe les premiers impacts d'énergie et de projectiles. Recharge passif entre les engagements.",
+    combat: { armor: 3, label: "+3 armure" }
   },
 
   // — Outils pour la colonie —
@@ -1628,13 +1635,11 @@ export const SCENES = [
     weight: 5,
     text: "Une masse de muscle et de griffes émerge des herbes. Six yeux, quatre pattes, une mâchoire qui s'ouvre dans le mauvais sens.",
     choices: [
+      { label: "Engager le combat", outcome: { combat: { enemies: ['predateur_lunaire'], lootOnWin: { biomasse: 45 }, onDefeat: 'retreat' } } },
       { label: "Repousser au lance-flammes", req: { item: 'lance_flammes' },
         outcome: { loot: { biomasse: 50 }, log: "La créature recule devant les flammes, puis s'effondre." } },
       { label: "Tirer à l'arme à résonance", req: { item: 'arme_resonance' },
         outcome: { loot: { biomasse: 50, datacubes: 3 }, log: "Un seul tir. La créature se désintègre par fréquence." } },
-      { label: "Combattre", risky: { stat: 'vigueur', dc: 6,
-          success: { loot: { biomasse: 40 }, log: "La créature s'effondre. Récolte de matière organique." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 1 } } },
       { label: "Reculer en formation défensive", req: { skill: { key: 'combat', min: 2 } },
         outcome: { log: "L'équipe se replie sans pertes. La créature renonce." } },
       { label: "Laisser un appât et fuir", consume: { biomasse: 20 },
@@ -2642,4 +2647,97 @@ export const TRAITS = {
   distant:           { nom:'Distant',            kind:'ambigu',  desc:"Immunisé au deuil · isole peu à peu l'équipage.",             weight:3 },
   hyperempathe:      { nom:'Hyper-empathique',   kind:'ambigu',  desc:"+2 Charisme · subit les traumas des autres.",                 weight:2 }
 };
+
+// ============================================================
+//   TYPES D'ENNEMIS — COMBAT AU TOUR PAR TOUR (0.31)
+// ============================================================
+// hp: points de vie | armor: réduction dégâts | damage: [min, max] | accuracy: % touché
+// pa: points d'action par tour (usage interne) | loot: récompense si victoire
+
+export const ENEMY_TYPES = {
+  // — Faune —
+  predateur_lunaire:  { nom: "Prédateur lunaire",    category: 'faune',   hp: 14, armor: 1, damage: [2, 5], accuracy: 65, pa: 2, loot: { biomasse: 8 } },
+  meute_rapaces:      { nom: "Meute de rapaces",      category: 'faune',   hp:  8, armor: 0, damage: [1, 3], accuracy: 70, pa: 3, loot: { biomasse: 4 } },
+  predateur_alpha:    { nom: "Prédateur alpha",        category: 'faune',   hp: 22, armor: 2, damage: [3, 7], accuracy: 60, pa: 2, loot: { biomasse: 18 } },
+  drone_bio:          { nom: "Drone biologique",       category: 'faune',   hp: 12, armor: 1, damage: [2, 5], accuracy: 72, pa: 3, loot: { biomasse: 10 } },
+
+  // — Machines / Gardiens —
+  drone_gardien:      { nom: "Drone gardien",          category: 'machine', hp: 16, armor: 4, damage: [2, 6], accuracy: 75, pa: 2, loot: { metal: 12, composants: 5 } },
+  gardien_antique:    { nom: "Gardien antique",         category: 'machine', hp: 26, armor: 6, damage: [3, 8], accuracy: 65, pa: 2, loot: { metal: 25, cristal: 10 } },
+  sentinelle_alien:   { nom: "Sentinelle alien",        category: 'machine', hp: 18, armor: 3, damage: [3, 7], accuracy: 70, pa: 2, loot: { cristal: 8, datacubes: 4 } },
+
+  // — Xénoformes —
+  xenoforme_alpha:    { nom: "Xénoforme α",            category: 'alien',   hp: 18, armor: 2, damage: [2, 6], accuracy: 65, pa: 2, loot: { cristal: 10, datacubes: 4 } },
+  xenoforme_reine:    { nom: "Reine xénoforme",         category: 'alien',   hp: 32, armor: 3, damage: [4,10], accuracy: 60, pa: 2, loot: { cristal: 20, datacubes: 10 } },
+  spore_toxique:      { nom: "Spore toxique",           category: 'alien',   hp:  6, armor: 0, damage: [1, 2], accuracy: 80, pa: 3, loot: { biomasse: 6 } },
+
+  // — Humains hostiles —
+  pillard:            { nom: "Pillard",                 category: 'humain',  hp: 10, armor: 2, damage: [2, 5], accuracy: 70, pa: 2, loot: { metal: 8, biomasse: 5 } },
+  mercenaire:         { nom: "Mercenaire",              category: 'humain',  hp: 14, armor: 3, damage: [3, 6], accuracy: 75, pa: 2, loot: { metal: 15, biomasse: 3 } },
+  garde_elite:        { nom: "Garde d'élite",           category: 'humain',  hp: 18, armor: 4, damage: [3, 7], accuracy: 80, pa: 2, loot: { metal: 20 } },
+};
+
+// ============================================================
+//   SCÈNES DE COMBAT (0.31)
+// ============================================================
+// Ajoutées dynamiquement dans SCENES via spread — triggers via outcome.combat
+
+const COMBAT_SCENES = [
+  {
+    id: 'combat_embuscade_pillards',
+    tags: ['civ_dechue', 'hostile'],
+    weight: 3,
+    text: "Des silhouettes en combinaison rapiécée surgissent des décombres. Des pillards — armés, affamés, et très peu enclins à négocier.",
+    choices: [
+      { label: "Engager le combat", outcome: { combat: { enemies: ['pillard', 'pillard'], lootOnWin: { metal: 20, biomasse: 10 }, onDefeat: 'retreat' } } },
+      { label: "Tenter de négocier", risky: { stat: 'charisme', dc: 7,
+          success: { loot: { metal: 10 }, log: "Accord conclu. Ils laissent passer en échange de quelques matériaux." },
+          fail:    { combat: { enemies: ['pillard', 'mercenaire'], lootOnWin: { metal: 25 }, onDefeat: 'retreat' } } } },
+      { label: "Battre en retraite", outcome: { log: "Demi-tour. La zone est trop dangereuse.", retreat: true } }
+    ]
+  },
+  {
+    id: 'combat_drone_gardien',
+    tags: ['ruines_humaines', 'danger_meca'],
+    weight: 3,
+    text: "Une sphère métallique descend du plafond en ronronnant. Son œil rouge balaie la salle. Protocole de sécurité encore actif après des siècles.",
+    choices: [
+      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 15, composants: 8 }, onDefeat: 'retreat' } } },
+      { label: "Pirater le protocole", req: { skill: { key: 'ingenierie', min: 3 } },
+        outcome: { loot: { metal: 20, composants: 10 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
+      { label: "Contourner en silence", risky: { stat: 'dexterite', dc: 6,
+          success: { log: "Le drone ne détecte rien. Passage libre." },
+          fail:    { combat: { enemies: ['drone_gardien', 'drone_gardien'], lootOnWin: { metal: 20 }, onDefeat: 'retreat' } } } }
+    ]
+  },
+  {
+    id: 'combat_xenoforme',
+    tags: ['alien', 'faune'],
+    weight: 2,
+    text: "Quelque chose surgit des parois cristallines — pas une créature familière. Des appendices translucides, une bioluminescence pulsante, et une agressivité immédiate.",
+    choices: [
+      { label: "Combattre la créature", outcome: { combat: { enemies: ['xenoforme_alpha'], lootOnWin: { cristal: 12, datacubes: 5 }, onDefeat: 'retreat' } } },
+      { label: "Utiliser le résonateur harmonique", req: { item: 'resonateur_harmonique' },
+        outcome: { loot: { cristal: 15, datacubes: 8 }, log: "Le résonateur neutralise la créature en moins d'une seconde." } },
+      { label: "Décrocher immédiatement", outcome: { log: "Retraite tactique. La créature ne poursuit pas loin.", threat: -1 } }
+    ]
+  },
+  {
+    id: 'combat_meute',
+    tags: ['faune', 'predateurs'],
+    weight: 4,
+    text: "Pas un prédateur — une meute. Cinq, peut-être six silhouettes rapides qui convergent de plusieurs directions à la fois.",
+    choices: [
+      { label: "Tenir position et combattre", outcome: { combat: { enemies: ['meute_rapaces', 'meute_rapaces', 'meute_rapaces'], lootOnWin: { biomasse: 25 }, onDefeat: 'retreat' } } },
+      { label: "Brûler un périmètre défensif", req: { item: 'lance_flammes' },
+        outcome: { loot: { biomasse: 30 }, log: "Les flammes forment un mur. La meute recule et se disperse." } },
+      { label: "Se replier en courant", risky: { stat: 'dexterite', dc: 5,
+          success: { log: "L'équipe distance la meute. Course serrée." },
+          fail:    { status: 'blessure_legere', morale: -2, log: "Un membre est rattrapé et mordu avant de s'échapper." } } }
+    ]
+  }
+];
+
+// Injection des scènes de combat dans le tableau SCENES principal
+SCENES.push(...COMBAT_SCENES);
 
