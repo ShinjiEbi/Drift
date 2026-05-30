@@ -4328,3 +4328,28 @@ nav.subtabs button:disabled {
   letter-spacing: 0.08em;
 }
 .cbt-hint { font-size: 0.8em; color: var(--text-mute); text-align: center; padding: 10px; font-style: italic; }
+
+/* Bouclier énergétique en combat */
+.cbt-shield-bar {
+  height: 5px;
+  background: #0a1a2a;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 2px;
+  border: 1px solid #2a4a6a;
+}
+.cbt-shield-fill { height: 100%; background: #4a8ae0; border-radius: 2px; transition: width 0.2s; }
+
+/* Type d'arme badge */
+.cbt-wtype {
+  font-size: 0.6em;
+  font-family: var(--mono);
+  background: #1a2a3a;
+  color: #7ab8e8;
+  border-radius: 2px;
+  padding: 1px 5px;
+  margin-left: 5px;
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+}
+.cbt-cover-icon { font-size: 0.8em; margin-left: 3px; }

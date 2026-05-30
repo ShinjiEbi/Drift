@@ -2536,6 +2536,9 @@ function renderCombatOverlay(exp) {
   const cbt = exp.combat;
   _pendingCombatAction = null;
 
+  // Étiquette du type d'arme
+  const weaponLabel = { melee: 'CAC', ranged: 'Dist.', precision: 'Sniper', shield_cinetique: 'Boucl.', shield_energetique: 'Énergie', exo: 'Exo', shield_refractant: 'Réfract.' };
+
   // Carte d'un allié
   const alliesHTML = cbt.allies.map(a => {
     const dead = a.hp <= 0;
@@ -2546,8 +2549,14 @@ function renderCombatOverlay(exp) {
     ).join('');
     const sel = a.id === cbt.selectedAllyId ? 'selected' : '';
     const coverActive = a.effects.some(e => e.type === 'cover');
+    const shieldBar = a.maxShieldHp > 0
+      ? `<div class="cbt-shield-bar"><div class="cbt-shield-fill" style="width:${Math.max(0, a.shieldHp / a.maxShieldHp * 100)}%"></div></div>
+         <div class="cbt-hp-txt" style="color:#7ab8e8">⚡${a.shieldHp}/${a.maxShieldHp} Bouclier</div>`
+      : '';
+    const wType = a.weaponType ? `<span class="cbt-wtype">${weaponLabel[a.weaponType] || a.weaponType}</span>` : '';
     return `<div class="cbt-ally ${dead ? 'dead' : ''} ${sel}" data-cbt-ally="${a.id}">
-      <div class="cbt-a-name">${a.name}${coverActive ? ' 🛡' : ''}</div>
+      <div class="cbt-a-name">${a.name}${wType}${coverActive ? ' <span class="cbt-cover-icon">🛡</span>' : ''}</div>
+      ${shieldBar}
       <div class="cbt-hp-bar"><div class="cbt-hp-fill ${hpCls}" style="width:${hpPct}%"></div></div>
       <div class="cbt-hp-txt">${a.hp}/${a.maxHp} PV</div>
       <div class="cbt-pa-row">${paDots}<span class="cbt-pa-lbl">${a.pa} PA</span></div>
@@ -2574,7 +2583,9 @@ function renderCombatOverlay(exp) {
   // Actions pour l'allié sélectionné
   const ally = cbt.allies.find(a => a.id === cbt.selectedAllyId);
   const hasKit = ((exp.equipment?.nanobots_reparation || 0) + (exp.equipment?.kit_medical || 0)) > 0;
-  const hasMine = (exp.equipment?.mine_eclats || 0) > 0;
+  // Cherche n'importe quel explosif AoE disponible
+  const aoeItem = ['mine_eclats', 'grenade_concussion', 'grenade_iem'].find(id => (exp.equipment?.[id] || 0) > 0);
+  const aoeLabel = aoeItem ? (ITEMS[aoeItem]?.nom || aoeItem) : null;
   const canHeal = ally && (ally.medecine > 0 || hasKit);
 
   let actionsHTML = '';
@@ -2599,8 +2610,8 @@ function renderCombatOverlay(exp) {
         ${canHeal ? `<button class="cbt-action" data-cbt-act="heal" ${ally.pa < 2 ? 'disabled' : ''} title="Soigne le plus blessé · 2 PA">
           Soigner <span class="cbt-act-cost">2 PA</span>
         </button>` : ''}
-        ${hasMine ? `<button class="cbt-action cbt-aoe" data-cbt-act="grenade" ${ally.pa < 1 ? 'disabled' : ''} title="Mine AoE · 1 PA (consomme mine)">
-          Mine AoE <span class="cbt-act-cost">1 PA</span>
+        ${aoeLabel ? `<button class="cbt-action cbt-aoe" data-cbt-act="grenade" ${ally.pa < 1 ? 'disabled' : ''} title="${aoeLabel} · 1 PA (consomme l'item)">
+          ${aoeLabel} <span class="cbt-act-cost">1 PA</span>
         </button>` : ''}
         <button class="cbt-action cbt-pass" data-cbt-act="end_turn" title="Passe le reste du tour">
           Passer
