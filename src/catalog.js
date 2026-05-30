@@ -73,14 +73,14 @@ export const MODULES = {
   },
   habitat: {
     nom: 'Habitat',
-    desc: "Couchettes empilées, cloisons fines, vapeurs de café synthétique.",
-    maxLevel: 5,
+    desc: "Couchettes empilées, cloisons fines, vapeurs de café synthétique. S'agrandit et se densifie à mesure que la colonie prospère.",
+    maxLevel: 8,
     cost: l => ({ metal: Math.round(90*triCost(l)), cristal: Math.round(40*triCost(l)), biomasse: 5*l }),
     time: l => 9*l,
     prereq: () => ({ commandement: 1 }),
-    capCrew: l => 4*l,
+    capCrew: l => [0, 8, 20, 36, 56, 80, 108, 140, 176][l] || 0,
     upkeep: l => ({ energie: 1*l, biomasse: 2*l }),
-    effect: l => `+${4*l} places d'équipage · −${1*l} énergie · −${2*l} biomasse`
+    effect: l => `+${[0,8,20,36,56,80,108,140,176][l]||0} places · −${1*l} énergie · −${2*l} biomasse`
   },
   laboratoire: {
     nom: 'Laboratoire',
@@ -132,13 +132,24 @@ export const MODULES = {
   balise_recrutement: {
     nom: 'Balise de recrutement',
     desc: "Émetteur longue portée diffusant les conditions d'engagement. Les candidats se signalent par message-relais.",
-    maxLevel: 4,
+    maxLevel: 6,
     cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(30*triCost(l)), energie: Math.round(10*l) }),
     time: l => 8*l,
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 1*l }),
     flag: 'recrutement',
     effect: l => `~1 candidat / ${Math.round(24/l)}h jeu · file max ${2*l}`
+  },
+  quartiers_residentiels: {
+    nom: 'Quartiers résidentiels',
+    desc: "Blocs de logements modulaires, espaces communs, jardins sous dôme pressurisé. Quand une base devient une vraie colonie.",
+    maxLevel: 5,
+    cost: l => ({ metal: Math.round(300*triCost(l)), cristal: Math.round(120*triCost(l)), biomasse: Math.round(20*l) }),
+    time: l => 20*l,
+    prereq: () => ({ commandement: 2, habitat: 3 }),
+    capCrew: l => [0, 30, 65, 105, 150, 200][l] || 0,
+    upkeep: l => ({ energie: 3*l, biomasse: 5*l }),
+    effect: l => `+${[0,30,65,105,150,200][l]||0} places · −${3*l} énergie · −${5*l} biomasse`
   },
   formation: {
     nom: 'Centre de formation',
@@ -325,7 +336,12 @@ export const MODULE_JOBS = {
   habitat: [
     { role: 'support',     req: {}, label: 'Régisseur' },
     { role: 'logistique',  req: { skill: { key: 'survie', min: 1 } }, label: 'Intendant' },
-    { role: 'support',     req: { trait: 'charisma' }, label: 'Médiateur' }
+    { role: 'support',     req: { trait: 'charisma' }, label: 'Médiateur' },
+    { role: 'securite',    req: { skill: { key: 'combat', min: 1 } }, label: 'Agent de sécurité' },
+    { role: 'logistique',  req: { skill: { key: 'ingenierie', min: 2 } }, label: 'Responsable technique' },
+    { role: 'production',  req: { skill: { key: 'science', min: 1 } }, label: 'Coordinateur de vie' },
+    { role: 'support',     req: { skill: { key: 'medecine', min: 1 } }, label: 'Conseiller bien-être' },
+    { role: 'commandement',req: { skill: { key: 'linguistique', min: 2 } }, label: 'Directeur résidentiel' }
   ],
   laboratoire: [
     { role: 'production',  req: { skill: { key: 'science', min: 2 } }, label: 'Chercheur' },
@@ -350,7 +366,18 @@ export const MODULE_JOBS = {
   ],
   balise_recrutement: [
     { role: 'production',  req: { skill: { key: 'linguistique', min: 1 } }, label: 'Recruteur' },
-    { role: 'qualite',     req: { trait: 'charisma' }, label: 'Émissaire' }
+    { role: 'qualite',     req: { trait: 'charisma' }, label: 'Émissaire' },
+    { role: 'production',  req: { skill: { key: 'linguistique', min: 2 } }, label: 'Agent réseau' },
+    { role: 'logistique',  req: { skill: { key: 'ingenierie', min: 1 } }, label: 'Technicien balise' },
+    { role: 'support',     req: { skill: { key: 'medecine', min: 1 } }, label: 'Conseiller intégration' },
+    { role: 'commandement',req: { skill: { key: 'pilotage', min: 1 } }, label: 'Directeur recrutement' }
+  ],
+  quartiers_residentiels: [
+    { role: 'support',     req: {}, label: 'Concierge' },
+    { role: 'logistique',  req: { skill: { key: 'survie', min: 1 } }, label: 'Gestionnaire ressources' },
+    { role: 'support',     req: { skill: { key: 'medecine', min: 1 } }, label: 'Travailleur social' },
+    { role: 'production',  req: { skill: { key: 'science', min: 2 } }, label: 'Urbaniste' },
+    { role: 'commandement',req: { skill: { key: 'linguistique', min: 2 } }, label: 'Directeur des quartiers' }
   ],
   formation: [
     { role: 'production',  req: { skill: { key: 'science', min: 2 } }, label: 'Instructeur' },
@@ -366,9 +393,11 @@ export const MODULE_JOBS = {
   ],
   // 0.29 — postes diplomatiques
   ambassade: [
-    { role: 'production',  req: { skill: { key: 'leadership', min: 2 } }, label: 'Ambassadeur' },
-    { role: 'qualite',     req: { skill: { key: 'leadership', min: 4 } }, label: 'Plénipotentiaire' },
-    { role: 'support',     req: { skill: { key: 'science', min: 1 } }, label: 'Attaché culturel' }
+    { role: 'production',  req: { skill: { key: 'linguistique', min: 2 } }, label: 'Ambassadeur' },
+    { role: 'qualite',     req: { skill: { key: 'linguistique', min: 4 } }, label: 'Plénipotentiaire' },
+    { role: 'support',     req: { skill: { key: 'science', min: 1 } }, label: 'Attaché culturel' },
+    { role: 'logistique',  req: { skill: { key: 'linguistique', min: 1 } }, label: 'Interprète' },
+    { role: 'securite',    req: { skill: { key: 'combat', min: 2 } }, label: 'Garde du corps' }
   ]
 };
 
