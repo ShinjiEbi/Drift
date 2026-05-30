@@ -2,7 +2,7 @@
 // Stratégie : cache-first pour les assets statiques, network-first pour le reste.
 // La version doit être bumpée à chaque release pour invalider le cache.
 
-const VERSION = 'drift-v0.32.0';
+const VERSION = 'drift-v0.33.0';
 const CACHE_NAME = VERSION + '-cache';
 
 // Liste des assets à mettre en cache au démarrage

@@ -2388,6 +2388,91 @@ nav.subtabs button:disabled {
 }
 
 /* ============================================================
+   NAISSANCES & GÉNÉRATIONS (0.33)
+   ============================================================ */
+.family-line {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #e88fa8;
+  margin-bottom: 5px;
+  letter-spacing: 0.03em;
+}
+.partner-name {
+  font-weight: 600;
+  color: #f0a8c0;
+}
+.pregnancy-wrap {
+  margin-bottom: 6px;
+}
+.pregnancy-bar {
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+.pregnancy-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #e88fa8, #f0c0d0);
+  border-radius: 2px;
+  transition: width 1s linear;
+}
+.pregnancy-lbl {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #e88fa8;
+  letter-spacing: 0.04em;
+}
+/* Carte enfant */
+.person.child-card {
+  border-left: 3px solid #82c0a8;
+  background: rgba(100, 180, 140, 0.04);
+}
+.child-tag {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(100, 180, 140, 0.2);
+  color: #82c0a8;
+  border: 1px solid rgba(100, 180, 140, 0.35);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.child-growth {
+  margin: 8px 0 6px;
+}
+.child-growth-bar {
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+.child-growth-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9a7a, #82c0a8);
+  border-radius: 2px;
+  transition: width 2s linear;
+}
+.child-growth-lbl {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #82c0a8;
+  letter-spacing: 0.04em;
+}
+.child-skills {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-mute);
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+}
+
+/* ============================================================
    ARCS NARRATIFS / CHRONIQUES (0.20)
    ============================================================ */
 .arc-card {

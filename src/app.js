@@ -2,7 +2,7 @@
 // Extrait de drift.html lors de la phase de modularisation
 
 import { MODULES, MODULE_JOBS, VESSELS, ITEMS, ITEM_TYPES, ITEM_ORIGINS, ITEM_NAME_TO_ID, BLUEPRINTS, TECH_TREE, TECH_BRANCHES, FABRICATIONS, SCENES, TREATMENTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, ENEMY_TYPES } from './catalog.js';
-import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BASE_FRACTION, JOB_BIOMASSE_MULT, SKILL_LIST, SKILL_LABELS, STAT_LABELS, YEAR_IN_GAME_MIN, REL_LOVE, REL_FRIEND, REL_RIVAL, REL_RANCUNE } from './constants.js';
+import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BASE_FRACTION, JOB_BIOMASSE_MULT, SKILL_LIST, SKILL_LABELS, STAT_LABELS, YEAR_IN_GAME_MIN, REL_LOVE, REL_FRIEND, REL_RIVAL, REL_RANCUNE, ADULT_AGE, PREGNANCY_DURATION_MIN } from './constants.js';
 import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import { CHRONICLES, CHRONICLE_SCENES } from './chronicles.js';
 import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$ } from './util.js';
@@ -1862,6 +1862,8 @@ function memberDies(member, cause = 'cause inconnue') {
   if (member.statut === 'mort') return;
   // Libère le poste s'il en avait un
   unassignMember(member.id);
+  // Dissolution du couple
+  if (member.partnerId) dissolveCouple(member.id, member.partnerId, true);
   member.statut = 'mort';
   member.diedAt = S.meta.gameMin;
   // Retire les traitements en cours
@@ -2453,7 +2455,7 @@ export function tickRelationMoraleEffects() {
 export function tickAging() {
   if (!S.crew) return;
   for (const m of S.crew) {
-    if (m.statut === 'mort') continue;
+    if (m.statut === 'mort' || m.statut === 'enfant') continue;
     const age = currentAge(m);
     // Cap santé selon âge
     const cap = maxHealthOf(m);
@@ -2470,6 +2472,178 @@ export function tickAging() {
         triggerGriefOnFriends(m);
       }
     }
+  }
+}
+
+// ============================================================
+//   NAISSANCES & GÉNÉRATIONS (0.33)
+// ============================================================
+
+export function formCouple(id1, id2) {
+  const m1 = S.crew.find(m => m.id === id1);
+  const m2 = S.crew.find(m => m.id === id2);
+  if (!m1 || !m2) return;
+  m1.partnerId = id2;
+  m2.partnerId = id1;
+  adjustAffinity(id1, id2, 5);
+  log('success', `♥ <em>${m1.name}</em> et <em>${m2.name}</em> forment un couple.`);
+  // Tentative de grossesse immédiate (40 %)
+  if (Math.random() < 0.40) _tryPregnancy(m1, m2);
+}
+
+// silentBreak = true quand appelé depuis memberDies (pas de log "séparation")
+export function dissolveCouple(id1, id2, silentBreak = false) {
+  const m1 = S.crew.find(m => m.id === id1);
+  const m2 = S.crew.find(m => m.id === id2);
+  if (m1) delete m1.partnerId;
+  if (m2) delete m2.partnerId;
+  if (!silentBreak) {
+    if (m1 && m1.statut !== 'mort') m1.moral = Math.max(0, m1.moral - 12);
+    if (m2 && m2.statut !== 'mort') m2.moral = Math.max(0, m2.moral - 12);
+    const names = [m1?.name, m2?.name].filter(Boolean).join(' et ');
+    if (names) log('warn', `<em>${names}</em> se séparent.`);
+  }
+}
+
+function _tryPregnancy(carrier, partner) {
+  // Ne pas déclencher si : déjà enceinte, pas de place, trop jeune/vieux, absent
+  if (carrier.grossesse) return;
+  const usage = crewUsage();
+  if (usage.used >= usage.total) return;
+  const cAge = currentAge(carrier), pAge = currentAge(partner);
+  if (cAge < 18 || cAge > 52 || pAge < 18) return;
+  if (carrier.statut === 'expedition' || carrier.statut === 'infirmerie') return;
+  // Limiter à 2 enfants par couple
+  const existingKids = S.crew.filter(c =>
+    c.parentIds && (c.parentIds.includes(carrier.id) || c.parentIds.includes(partner.id))
+  );
+  if (existingKids.length >= 2) return;
+  carrier.grossesse = { debut: S.meta?.gameMin || 0, partnerId: partner.id };
+  log('success', `<em>${carrier.name}</em> attend un enfant.`);
+}
+
+function _genOffspring(p1, p2) {
+  const now = S.meta?.gameMin || 0;
+  // Stats : moyenne des parents ± bruit gaussien
+  const stats = {};
+  for (const k of Object.keys(p1.stats || {})) {
+    const avg = ((p1.stats[k] || 5) + (p2.stats[k] || 5)) / 2;
+    stats[k] = Math.max(1, Math.min(10, Math.round(avg + gaussInt(0, 1.2))));
+  }
+  // Skills : aptitudes héritées des parents (skill dominant)
+  const skills = {};
+  for (const s of SKILL_LIST) skills[s] = 0;
+  const sorted = SKILL_LIST.slice().sort(
+    (a, b) => ((p1.skills[b]||0) + (p2.skills[b]||0)) - ((p1.skills[a]||0) + (p2.skills[a]||0))
+  );
+  if (sorted[0]) skills[sorted[0]] = 1;
+  if (sorted[1] && Math.random() < 0.35) skills[sorted[1]] = 1;
+  // Traits : hérité 1-2 traits des parents + 15 % de mutation
+  const parentPool = [...new Set([...(p1.traits || []), ...(p2.traits || [])])];
+  const traits = [];
+  const nbTraits = 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < nbTraits && parentPool.length > 0; i++) {
+    const t = parentPool[Math.floor(Math.random() * parentPool.length)];
+    if (!traits.includes(t)) traits.push(t);
+  }
+  if (Math.random() < 0.15) {
+    const bonus = genTraits();
+    for (const t of bonus) { if (!traits.includes(t)) { traits.push(t); break; } }
+  }
+  return {
+    id: 'm_' + now.toString(36) + '_' + Math.floor(Math.random() * 9999).toString(36),
+    name: genName(),
+    birthGameMin: now,
+    joinedAt: now,
+    parentIds: [p1.id, p2.id],
+    origin: Math.random() < 0.5 ? p1.origin : p2.origin,
+    stats, skills, traits,
+    salary: 0,
+    statut: 'enfant',
+    sante: 100, moral: 85, loyaute: 90,
+    statuts: [], sequels: [], blessures: [],
+    spawnedAt: now
+  };
+}
+
+function _giveBirth(carrier) {
+  const partner = S.crew.find(c => c.id === carrier.grossesse?.partnerId);
+  const p2 = partner || carrier;
+  delete carrier.grossesse;
+  const child = _genOffspring(carrier, p2);
+  S.crew.push(child);
+  const parentStr = partner ? ` et <em>${partner.name}</em>` : '';
+  log('success', `★ <em>${child.name}</em> est né(e) ! Enfant de <em>${carrier.name}</em>${parentStr}.`);
+  carrier.moral = Math.min(100, carrier.moral + 15);
+  if (partner) partner.moral = Math.min(100, partner.moral + 15);
+  render();
+}
+
+function _becomeAdult(child) {
+  child.statut = 'libre';
+  // Boost sur les aptitudes héritées
+  const top = SKILL_LIST.slice().sort((a, b) => (child.skills[b]||0) - (child.skills[a]||0));
+  if (top[0] && (child.skills[top[0]] || 0) > 0) {
+    child.skills[top[0]] = Math.min(5, (child.skills[top[0]] || 0) + 1);
+  }
+  const age = currentAge(child);
+  log('success', `<em>${child.name}</em> atteint sa majorité (${age} ans) et rejoint l'équipage actif.`);
+  autoAssignMember(child.id);
+  render();
+}
+
+// Appelé chaque tick depuis state.js/tickOnce
+export function tickFamilyLife() {
+  if (!S.crew) return;
+  const now = S.meta?.gameMin || 0;
+
+  // — Couple formation : vérifié une fois par jour de jeu —
+  if (now % (24 * 60) < MIN_PER_TICK) {
+    const adults = S.crew.filter(m => m.statut !== 'mort' && m.statut !== 'enfant');
+    for (let i = 0; i < adults.length; i++) {
+      for (let j = i + 1; j < adults.length; j++) {
+        const a = adults[i], b = adults[j];
+        if (a.partnerId || b.partnerId) continue;
+        if (affinityBetween(a.id, b.id) < REL_LOVE) continue;
+        if (Math.random() < 0.01) formCouple(a.id, b.id); // ~30 %/an
+      }
+    }
+  }
+
+  // — Dissolution : vérifié une fois par semaine de jeu —
+  if (now % (7 * 24 * 60) < MIN_PER_TICK) {
+    for (const m of S.crew) {
+      if (!m.partnerId || m.statut === 'mort') continue;
+      const partner = S.crew.find(c => c.id === m.partnerId);
+      if (!partner || partner.statut === 'mort') {
+        dissolveCouple(m.id, m.partnerId, !!(!partner || partner.statut === 'mort'));
+        continue;
+      }
+      if (affinityBetween(m.id, m.partnerId) < REL_RIVAL) {
+        dissolveCouple(m.id, m.partnerId);
+      }
+    }
+  }
+
+  // — Grossesse périodique : vérifié une fois par mois de jeu —
+  if (now % (30 * 24 * 60) < MIN_PER_TICK) {
+    for (const m of S.crew) {
+      if (!m.partnerId || m.grossesse || m.statut === 'mort' || m.statut === 'enfant') continue;
+      const partner = S.crew.find(c => c.id === m.partnerId);
+      if (!partner) continue;
+      if (Math.random() < 0.10) _tryPregnancy(m, partner); // ~10 %/mois
+    }
+  }
+
+  // — Naissances —
+  for (const m of S.crew) {
+    if (!m.grossesse) continue;
+    if ((now - (m.grossesse.debut || 0)) >= PREGNANCY_DURATION_MIN) _giveBirth(m);
+  }
+
+  // — Majorité —
+  for (const m of S.crew) {
+    if (m.statut === 'enfant' && currentAge(m) >= ADULT_AGE) _becomeAdult(m);
   }
 }
 

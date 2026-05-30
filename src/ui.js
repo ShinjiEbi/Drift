@@ -5,7 +5,7 @@ import { $, $$, fmt, fmtMin } from './util.js';
 import {
   VERSION, MIN_PER_TICK, BUILD_TIME_MULT, PROD_MULT,
   RES_LABELS, RESOURCES, CAP, SKILL_LIST, SKILL_LABELS, STAT_LABELS,
-  JOB_BIOMASSE_MULT, YEAR_IN_GAME_MIN
+  JOB_BIOMASSE_MULT, YEAR_IN_GAME_MIN, ADULT_AGE, PREGNANCY_DURATION_MIN
 } from './constants.js';
 import {
   MODULES, MODULE_JOBS, VESSELS, ITEMS, ITEM_TYPES, ITEM_ORIGINS, ITEM_NAME_TO_ID,
@@ -54,7 +54,8 @@ import {
   STATUTS, canTrain, canTreat, admitToInfirmary, dischargeMember, fillTemplate,
   startDiagnostic, startTreatment,
   memberCombatStats, combatAllyAction, combatEndTurn,
-  ancienneteBonus
+  ancienneteBonus,
+  formCouple, dissolveCouple
 } from './app.js';
 
 
@@ -3310,7 +3311,24 @@ function renderPersonCard(p, opts = {}) {
         }
       }
     }
-    actionsHTML = `${postInfo}${medInfo}<div class="actions-row">
+    // Couple & grossesse
+    let familyHTML = '';
+    if (p.partnerId) {
+      const partner = S.crew.find(c => c.id === p.partnerId);
+      if (partner && partner.statut !== 'mort') {
+        familyHTML += `<div class="family-line">♥ <span class="partner-name">${partner.name}</span></div>`;
+      }
+    }
+    if (p.grossesse) {
+      const elapsed = (S.meta?.gameMin || 0) - (p.grossesse.debut || 0);
+      const pct = Math.min(100, Math.round((elapsed / PREGNANCY_DURATION_MIN) * 100));
+      const daysLeft = Math.max(0, Math.round((PREGNANCY_DURATION_MIN - elapsed) / (24 * 60)));
+      familyHTML += `<div class="pregnancy-wrap">
+        <div class="pregnancy-bar"><div class="pregnancy-fill" style="width:${pct}%"></div></div>
+        <div class="pregnancy-lbl">Grossesse · ${pct}% — encore ~${daysLeft} j</div>
+      </div>`;
+    }
+    actionsHTML = `${postInfo}${familyHTML}${medInfo}<div class="actions-row">
       <span class="status-tag ${p.statut}">${p.statut}</span>
       <span style="flex:1; text-align:right; font-family:var(--mono); font-size:11px; color:var(--text-mute);">
         Santé ${healthDisplay} · Moral ${p.moral} · Loy ${p.loyaute}
@@ -3385,24 +3403,65 @@ function renderCrewSummary() {
   `;
 }
 
+function renderChildCard(child) {
+  const age = currentAge(child);
+  const p1 = child.parentIds ? S.crew.find(m => m.id === child.parentIds[0]) : null;
+  const p2 = child.parentIds ? S.crew.find(m => m.id === child.parentIds[1]) : null;
+  const parentsStr = [p1?.name, p2?.name].filter(Boolean).join(' & ');
+  const yearsToAdult = Math.max(0, ADULT_AGE - age);
+  const growthPct = Math.min(100, Math.round((age / ADULT_AGE) * 100));
+  const topSkills = SKILL_LIST
+    .filter(s => (child.skills[s] || 0) > 0)
+    .map(s => `${SKILL_LABELS[s].slice(0, 4)} ${child.skills[s]}`)
+    .join(' · ') || 'aptitudes en développement';
+  const traits = (child.traits || []).slice(0, 2).map(t => TRAITS[t]?.nom || t).join(', ');
+  return `<div class="person child-card">
+    <div class="head-row">
+      <div class="pname">${child.name} <span class="child-tag">enfant</span></div>
+      <div class="pmeta">${age} an${age !== 1 ? 's' : ''}</div>
+    </div>
+    ${parentsStr ? `<div class="origin">Enfant de <small>${parentsStr}</small></div>` : ''}
+    <div class="child-growth">
+      <div class="child-growth-bar"><div class="child-growth-fill" style="width:${growthPct}%"></div></div>
+      <div class="child-growth-lbl">Majorité dans ${yearsToAdult > 0 ? `${yearsToAdult} an${yearsToAdult > 1 ? 's' : ''}` : 'très bientôt…'}</div>
+    </div>
+    <div class="child-skills">${topSkills}${traits ? ` · ${traits}` : ''}</div>
+  </div>`;
+}
+
 function renderCrew() {
   const list = $('#crewList');
   const sub = $('#crewSub');
   const cap = crewUsage();
-  const alive = aliveCrew();
+  const children = S.crew.filter(m => m.statut === 'enfant');
+  const alive = aliveCrew().filter(m => m.statut !== 'enfant');
   const dead = S.crew.filter(m => m.statut === 'mort');
+
+  const couplesCount = alive.filter(m => m.partnerId).length / 2;
+  const pregCount = alive.filter(m => m.grossesse).length;
+  let subParts = [];
+  if (cap.total > 0) subParts.push(`${cap.used} / ${cap.total} place(s)`);
+  if (couplesCount >= 1) subParts.push(`${Math.floor(couplesCount)} couple${couplesCount >= 2 ? 's' : ''}`);
+  if (pregCount > 0) subParts.push(`${pregCount} grossesse${pregCount > 1 ? 's' : ''}`);
+  if (children.length > 0) subParts.push(`${children.length} enfant${children.length > 1 ? 's' : ''}`);
 
   if (cap.total === 0) {
     sub.innerHTML = "Construis un <em>Habitat</em> pour pouvoir loger un équipage.";
   } else {
-    sub.innerHTML = `${cap.used} / ${cap.total} place(s) occupée(s)`;
+    sub.innerHTML = subParts.join(' · ');
   }
 
   let html = '';
-  if (alive.length === 0) {
+  if (alive.length === 0 && children.length === 0) {
     html = '<div class="empty">Aucun membre actif. Recrute via la Balise.</div>';
   } else {
     html = alive.map(p => renderPersonCard(p)).join('');
+  }
+
+  // Section enfants
+  if (children.length > 0) {
+    html += `<h3 class="section-h">Jeunes générations (${children.length})</h3>`;
+    html += children.map(c => renderChildCard(c)).join('');
   }
 
   // Section "In memoriam" pour les défunts (préservée pour la mémoire de la colonie)

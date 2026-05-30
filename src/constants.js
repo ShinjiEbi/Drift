@@ -1,7 +1,7 @@
 // constants.js — constantes globales (versions, multiplicateurs, libellés)
 // Extrait depuis app.js lors de la modularisation
 
-export const VERSION = '0.32.0';
+export const VERSION = '0.33.0';
 
 export const SAVE_KEY = 'drift_save_v1';
 
@@ -72,6 +72,15 @@ export const STAT_LABELS = {
 // ============================================================
 // Constantes
 export const YEAR_IN_GAME_MIN = 30 * 24 * 60;
+
+// ============================================================
+//   NAISSANCES & GÉNÉRATIONS (0.33)
+// ============================================================
+// Âge de majorité (en années de jeu)
+export const ADULT_AGE = 18;
+
+// Durée d'une grossesse en minutes de jeu (~9 mois de jeu = 0.75 année)
+export const PREGNANCY_DURATION_MIN = Math.round(0.75 * 30 * 24 * 60);
 
 // Seuils de relations
 export const REL_LOVE     = 80;
