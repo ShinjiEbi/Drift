@@ -4172,3 +4172,184 @@ nav.subtabs button:disabled {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
+
+/* ============================================================
+   0.31 — SYSTÈME DE COMBAT AU TOUR PAR TOUR
+   ============================================================ */
+
+/* En-tête du combat */
+.cbt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #1a0a0a;
+  border-bottom: 2px solid #6b1a1a;
+  margin: -16px -16px 14px;
+}
+.cbt-title { font-weight: 700; font-size: 1.05em; color: #e07a7a; letter-spacing: 0.04em; }
+.cbt-phase-lbl { font-size: 0.78em; font-family: var(--mono); padding: 3px 8px; border-radius: 3px; }
+.cbt-phase-lbl.player  { background: #1a3a1a; color: #7ace7a; }
+.cbt-phase-lbl.enemy   { background: #3a1a1a; color: #e07a7a; }
+.cbt-phase-lbl.ended   { background: #333; color: #aaa; }
+
+/* Arène */
+.cbt-arena {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.cbt-col { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.cbt-col-head { font-size: 0.7em; font-family: var(--mono); letter-spacing: 0.1em; color: var(--text-mute); text-transform: uppercase; padding: 0 2px 4px; border-bottom: 1px solid var(--border); }
+
+/* Carte alliée */
+.cbt-ally {
+  background: #0e1a0e;
+  border: 1px solid #2a4a2a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.cbt-ally:hover:not(.dead) { border-color: #4a8a4a; }
+.cbt-ally.selected { border-color: #7ace7a; background: #0e200e; }
+.cbt-ally.dead { opacity: 0.45; filter: grayscale(0.7); cursor: default; }
+.cbt-a-name { font-size: 0.82em; font-weight: 600; margin-bottom: 5px; color: #c8e8c8; }
+
+/* Carte ennemie */
+.cbt-enemy {
+  background: #1a0e0e;
+  border: 1px solid #4a2a2a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: default;
+  transition: border-color 0.15s;
+}
+.cbt-enemy.targetable { border-color: #e07a7a; cursor: crosshair; }
+.cbt-enemy.targetable:hover { background: #2a0e0e; border-color: #ff9999; }
+.cbt-enemy.dead { opacity: 0.35; filter: grayscale(0.9); }
+.cbt-e-name { font-size: 0.82em; font-weight: 600; margin-bottom: 5px; color: #e8c8c8; }
+
+/* Barre HP commune */
+.cbt-hp-bar {
+  height: 6px;
+  background: #222;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+.cbt-hp-fill { height: 100%; background: #4a8a4a; border-radius: 3px; transition: width 0.25s; }
+.cbt-hp-fill.low  { background: #8a7a3a; }
+.cbt-hp-fill.crit { background: #8a3a3a; }
+.cbt-hp-fill.dead { background: #333; }
+.cbt-hp-fill.enemy { background: #8a3a3a; }
+.cbt-hp-txt { font-size: 0.7em; color: var(--text-mute); font-family: var(--mono); }
+
+/* PA dots */
+.cbt-pa-row { display: flex; align-items: center; gap: 4px; margin-top: 5px; }
+.cbt-pa-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #222;
+  border: 1px solid #444;
+}
+.cbt-pa-dot.active { background: #7ace7a; border-color: #4a8a4a; }
+.cbt-pa-lbl { font-size: 0.65em; font-family: var(--mono); color: var(--text-mute); margin-left: 4px; }
+
+/* Journal de combat */
+.cbt-log {
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  max-height: 130px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  font-family: var(--mono);
+  font-size: 0.72em;
+}
+.cbt-log-line { padding: 1px 0; color: #b0b0b0; line-height: 1.6; }
+.cbt-log-line:last-child { color: #e0e0e0; }
+
+/* Boutons d'actions */
+.cbt-actions { display: flex; flex-direction: column; gap: 8px; }
+.cbt-action-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.cbt-action {
+  flex: 1 0 auto;
+  min-width: 100px;
+  background: #1a2a1a;
+  border: 1px solid #3a5a3a;
+  color: #c8e8c8;
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-size: 0.8em;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cbt-action:hover:not(:disabled) { background: #223322; border-color: #5a8a5a; }
+.cbt-action:disabled { opacity: 0.35; cursor: not-allowed; }
+.cbt-action.cbt-aoe { border-color: #6a4a1a; background: #1a1508; color: #e8d090; }
+.cbt-action.cbt-pass { border-color: #333; background: #111; color: #888; }
+.cbt-act-cost { font-size: 0.75em; font-family: var(--mono); color: var(--text-mute); margin-left: 4px; }
+
+/* Fin de tour / Retraite */
+.cbt-turn-row { display: flex; gap: 8px; }
+.cbt-end-turn {
+  flex: 1;
+  background: #1a2a1a;
+  border: 2px solid #4a8a4a;
+  color: #7ace7a;
+  border-radius: 4px;
+  padding: 10px;
+  font-weight: 700;
+  font-size: 0.85em;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.cbt-end-turn:hover { background: #223322; }
+.cbt-retreat {
+  background: #1a0808;
+  border: 1px solid #5a2a2a;
+  color: #e07a7a;
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 0.8em;
+  cursor: pointer;
+}
+.cbt-retreat:hover { background: #2a1010; }
+
+.cbt-ended {
+  text-align: center;
+  font-size: 1.1em;
+  font-weight: 700;
+  padding: 18px;
+  color: #c8e890;
+  letter-spacing: 0.08em;
+}
+.cbt-hint { font-size: 0.8em; color: var(--text-mute); text-align: center; padding: 10px; font-style: italic; }
+
+/* Bouclier énergétique en combat */
+.cbt-shield-bar {
+  height: 5px;
+  background: #0a1a2a;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 2px;
+  border: 1px solid #2a4a6a;
+}
+.cbt-shield-fill { height: 100%; background: #4a8ae0; border-radius: 2px; transition: width 0.2s; }
+
+/* Type d'arme badge */
+.cbt-wtype {
+  font-size: 0.6em;
+  font-family: var(--mono);
+  background: #1a2a3a;
+  color: #7ab8e8;
+  border-radius: 2px;
+  padding: 1px 5px;
+  margin-left: 5px;
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+}
+.cbt-cover-icon { font-size: 0.8em; margin-left: 3px; }

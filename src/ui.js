@@ -10,7 +10,7 @@ import {
 import {
   MODULES, MODULE_JOBS, VESSELS, ITEMS, ITEM_TYPES, ITEM_ORIGINS, ITEM_NAME_TO_ID,
   BLUEPRINTS, TECH_TREE, TECH_BRANCHES, FABRICATIONS, SCENES, TREATMENTS,
-  BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS
+  BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, ENEMY_TYPES
 } from './catalog.js';
 import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import {
@@ -52,7 +52,8 @@ import {
   significantRelations, ROLES, inventoryCount,
   TRAINING_PROGRAMS, infirmaryBeds, bedsInUse,
   STATUTS, canTrain, canTreat, admitToInfirmary, dischargeMember, fillTemplate,
-  startDiagnostic, startTreatment
+  startDiagnostic, startTreatment,
+  memberCombatStats, combatAllyAction, combatEndTurn
 } from './app.js';
 
 
@@ -2449,16 +2450,24 @@ function renderExpeditions() {
       // Bouton Reprendre si on est sur place et qu'une décision est attendue
       let actionBtn = '';
       if (exp.phase === 'sur_place' && exp.awaitingChoice) {
-        const sceneNum = exp.sceneIdx + 1;
-        const sceneTotal = exp.scenes.length;
-        actionBtn = `<button class="cta-btn" data-resume-exp="${exp.id}" style="margin-top:10px;padding:10px;font-size:11px;">
-          Reprendre la mission · scène ${sceneNum}/${sceneTotal}
-        </button>`;
+        if (exp.combat?.active) {
+          const roundLabel = `Round ${exp.combat.round}`;
+          const phase = exp.combat.phase === 'player' ? 'tour des alliés' : 'phase ennemie';
+          actionBtn = `<button class="cta-btn cbt-btn" data-resume-exp="${exp.id}" style="margin-top:10px;padding:10px;font-size:11px;background:#8b2020;">
+            ⚔ Combat en cours · ${roundLabel} · ${phase}
+          </button>`;
+        } else {
+          const sceneNum = exp.sceneIdx + 1;
+          const sceneTotal = exp.scenes.length;
+          actionBtn = `<button class="cta-btn" data-resume-exp="${exp.id}" style="margin-top:10px;padding:10px;font-size:11px;">
+            Reprendre la mission · scène ${sceneNum}/${sceneTotal}
+          </button>`;
+        }
       }
 
       // Pour la phase sur_place, on n'affiche pas la barre puisque le temps ne progresse pas
       const progressHTML = exp.phase === 'sur_place'
-        ? `<div class="eprog"><div class="lbl">Scène ${exp.sceneIdx + 1}/${exp.scenes.length} · décision attendue</div></div>`
+        ? `<div class="eprog"><div class="lbl">${exp.combat?.active ? `⚔ Combat · Round ${exp.combat.round}` : `Scène ${exp.sceneIdx + 1}/${exp.scenes.length} · décision attendue`}</div></div>`
         : `<div class="eprog">
             <div class="bar" style="width:${pct}%"></div>
             <div class="lbl">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
@@ -2518,6 +2527,212 @@ function openSceneOverlay(expId) {
   renderSceneOverlay();
 }
 
+// ============================================================
+//   OVERLAY DE COMBAT
+// ============================================================
+let _pendingCombatAction = null; // { allyId, action } — attend sélection d'une cible
+
+function renderCombatOverlay(exp) {
+  const cbt = exp.combat;
+  _pendingCombatAction = null;
+
+  // Étiquette du type d'arme
+  const weaponLabel = { melee: 'CAC', ranged: 'Dist.', precision: 'Sniper', shield_cinetique: 'Boucl.', shield_energetique: 'Énergie', exo: 'Exo', shield_refractant: 'Réfract.' };
+
+  // Carte d'un allié
+  const alliesHTML = cbt.allies.map(a => {
+    const dead = a.hp <= 0;
+    const hpPct = Math.max(0, a.hp / a.maxHp * 100);
+    const hpCls = dead ? 'dead' : a.hp < a.maxHp * 0.3 ? 'crit' : a.hp < a.maxHp * 0.6 ? 'low' : '';
+    const paDots = Array.from({ length: a.maxPa }, (_, i) =>
+      `<span class="cbt-pa-dot ${i < a.pa ? 'active' : ''}"></span>`
+    ).join('');
+    const sel = a.id === cbt.selectedAllyId ? 'selected' : '';
+    const coverActive = a.effects.some(e => e.type === 'cover');
+    const shieldBar = a.maxShieldHp > 0
+      ? `<div class="cbt-shield-bar"><div class="cbt-shield-fill" style="width:${Math.max(0, a.shieldHp / a.maxShieldHp * 100)}%"></div></div>
+         <div class="cbt-hp-txt" style="color:#7ab8e8">⚡${a.shieldHp}/${a.maxShieldHp} Bouclier</div>`
+      : '';
+    const wType = a.weaponType ? `<span class="cbt-wtype">${weaponLabel[a.weaponType] || a.weaponType}</span>` : '';
+    return `<div class="cbt-ally ${dead ? 'dead' : ''} ${sel}" data-cbt-ally="${a.id}">
+      <div class="cbt-a-name">${a.name}${wType}${coverActive ? ' <span class="cbt-cover-icon">🛡</span>' : ''}</div>
+      ${shieldBar}
+      <div class="cbt-hp-bar"><div class="cbt-hp-fill ${hpCls}" style="width:${hpPct}%"></div></div>
+      <div class="cbt-hp-txt">${a.hp}/${a.maxHp} PV</div>
+      <div class="cbt-pa-row">${paDots}<span class="cbt-pa-lbl">${a.pa} PA</span></div>
+    </div>`;
+  }).join('');
+
+  // Carte d'un ennemi
+  const enemiesHTML = cbt.enemies.map((e, i) => {
+    const dead = e.hp <= 0;
+    const hpPct = Math.max(0, e.hp / e.maxHp * 100);
+    const sel = _pendingCombatAction ? 'targetable' : '';
+    return `<div class="cbt-enemy ${dead ? 'dead' : ''} ${sel}" data-cbt-enemy="${i}">
+      <div class="cbt-e-name">${e.nom}</div>
+      <div class="cbt-hp-bar"><div class="cbt-hp-fill enemy" style="width:${hpPct}%"></div></div>
+      <div class="cbt-hp-txt">${e.hp}/${e.maxHp} PV · armure ${e.armor}</div>
+    </div>`;
+  }).join('');
+
+  // Journal (6 dernières lignes)
+  const logHTML = cbt.log.slice(-7).map(l =>
+    `<div class="cbt-log-line">${l}</div>`
+  ).join('');
+
+  // Actions pour l'allié sélectionné
+  const ally = cbt.allies.find(a => a.id === cbt.selectedAllyId);
+  const hasKit = ((exp.equipment?.nanobots_reparation || 0) + (exp.equipment?.kit_medical || 0)) > 0;
+  // Cherche n'importe quel explosif AoE disponible
+  const aoeItem = ['mine_eclats', 'grenade_concussion', 'grenade_iem'].find(id => (exp.equipment?.[id] || 0) > 0);
+  const aoeLabel = aoeItem ? (ITEMS[aoeItem]?.nom || aoeItem) : null;
+  const canHeal = ally && (ally.medecine > 0 || hasKit);
+
+  let actionsHTML = '';
+  if (cbt.phase === 'ended') {
+    const icon = cbt.outcome === 'victory' ? '🏆' : cbt.outcome === 'retreat' ? '↩' : '💀';
+    const label = cbt.outcome === 'victory' ? 'Victoire !' : cbt.outcome === 'retreat' ? 'Retraite' : 'Défaite';
+    actionsHTML = `<div class="cbt-ended">${icon} ${label}</div>`;
+  } else if (!ally || ally.hp <= 0) {
+    actionsHTML = `<div class="cbt-hint">Sélectionne un colon actif pour agir.</div>`;
+  } else {
+    actionsHTML = `
+      <div class="cbt-action-group">
+        <button class="cbt-action" data-cbt-act="attack" ${ally.pa < 1 ? 'disabled' : ''} title="Attaque standard · 1 PA">
+          Attaquer <span class="cbt-act-cost">1 PA</span>
+        </button>
+        <button class="cbt-action" data-cbt-act="precise" ${ally.pa < 2 ? 'disabled' : ''} title="+20% précision, +2 dégâts · 2 PA">
+          Tir ciblé <span class="cbt-act-cost">2 PA</span>
+        </button>
+        <button class="cbt-action" data-cbt-act="cover" ${ally.pa < 1 ? 'disabled' : ''} title="+3 armure ce round · 1 PA">
+          Couverture <span class="cbt-act-cost">1 PA</span>
+        </button>
+        ${canHeal ? `<button class="cbt-action" data-cbt-act="heal" ${ally.pa < 2 ? 'disabled' : ''} title="Soigne le plus blessé · 2 PA">
+          Soigner <span class="cbt-act-cost">2 PA</span>
+        </button>` : ''}
+        ${aoeLabel ? `<button class="cbt-action cbt-aoe" data-cbt-act="grenade" ${ally.pa < 1 ? 'disabled' : ''} title="${aoeLabel} · 1 PA (consomme l'item)">
+          ${aoeLabel} <span class="cbt-act-cost">1 PA</span>
+        </button>` : ''}
+        <button class="cbt-action cbt-pass" data-cbt-act="end_turn" title="Passe le reste du tour">
+          Passer
+        </button>
+      </div>
+      <div class="cbt-turn-row">
+        <button class="cbt-end-turn" data-cbt-end-turn>Fin de tour →</button>
+        <button class="cbt-retreat" data-cbt-retreat>Retraite</button>
+      </div>`;
+  }
+
+  $('#sceneInner').innerHTML = `
+    <div class="cbt-header">
+      <span class="cbt-title">⚔ Combat · Round ${cbt.round}</span>
+      <span class="cbt-phase-lbl ${cbt.phase}">${
+        cbt.phase === 'player' ? 'Tour des alliés' :
+        cbt.phase === 'enemy'  ? 'Phase ennemie…' : 'Terminé'
+      }</span>
+    </div>
+    <div class="cbt-arena">
+      <div class="cbt-col allies">
+        <div class="cbt-col-head">Équipage</div>
+        ${alliesHTML}
+      </div>
+      <div class="cbt-col enemies">
+        <div class="cbt-col-head">Ennemis</div>
+        ${enemiesHTML}
+      </div>
+    </div>
+    <div class="cbt-log">${logHTML}</div>
+    <div class="cbt-actions">${actionsHTML}</div>
+  `;
+
+  hookCombatOverlay(exp.id);
+}
+
+function hookCombatOverlay(expId) {
+  const inner = $('#sceneInner');
+
+  // Sélection d'un allié
+  inner.querySelectorAll('[data-cbt-ally]').forEach(el => {
+    el.addEventListener('click', () => {
+      const exp = S.expeditions.find(e => e.id === expId);
+      if (!exp?.combat) return;
+      const ally = exp.combat.allies.find(a => a.id === el.dataset.cbtAlly);
+      if (!ally || ally.hp <= 0) return;
+      _pendingCombatAction = null;
+      exp.combat.selectedAllyId = ally.id;
+      renderCombatOverlay(exp);
+    });
+  });
+
+  // Sélection d'une action
+  inner.querySelectorAll('[data-cbt-act]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      const exp = S.expeditions.find(e => e.id === expId);
+      if (!exp?.combat) return;
+      const action = btn.dataset.cbtAct;
+      const allyId = exp.combat.selectedAllyId;
+
+      if (action === 'attack' || action === 'precise') {
+        // Mode sélection de cible
+        _pendingCombatAction = { allyId, action };
+        // Highlight ennemis vivants
+        inner.querySelectorAll('[data-cbt-enemy]:not(.dead)').forEach(e => e.classList.add('targetable'));
+      } else {
+        // Actions sans cible
+        combatAllyAction(expId, allyId, action, 0);
+        renderCombatOverlay(exp);
+      }
+    });
+  });
+
+  // Clic sur un ennemi (après sélection d'action d'attaque)
+  inner.querySelectorAll('[data-cbt-enemy]').forEach(el => {
+    el.addEventListener('click', () => {
+      const exp = S.expeditions.find(e => e.id === expId);
+      if (!exp?.combat || !_pendingCombatAction) return;
+      const enemyIdx = parseInt(el.dataset.cbtEnemy, 10);
+      const enemy = exp.combat.enemies[enemyIdx];
+      if (!enemy || enemy.hp <= 0) return;
+      const { allyId, action } = _pendingCombatAction;
+      _pendingCombatAction = null;
+      combatAllyAction(expId, allyId, action, enemyIdx);
+      // Si le combat est terminé, basculer sur la scène ou fermer
+      if (!exp.combat.active) {
+        const stillInPhase = exp.phase === 'sur_place' && exp.awaitingChoice;
+        if (stillInPhase) renderSceneOverlay();
+        else closeSceneOverlay();
+      } else {
+        renderCombatOverlay(exp);
+      }
+    });
+  });
+
+  // Fin de tour
+  inner.querySelector('[data-cbt-end-turn]')?.addEventListener('click', () => {
+    const exp = S.expeditions.find(e => e.id === expId);
+    if (!exp?.combat) return;
+    combatEndTurn(expId);
+    if (!exp.combat.active) {
+      const stillInPhase = exp.phase === 'sur_place' && exp.awaitingChoice;
+      if (stillInPhase) renderSceneOverlay();
+      else closeSceneOverlay();
+    } else {
+      renderCombatOverlay(exp);
+    }
+  });
+
+  // Retraite
+  inner.querySelector('[data-cbt-retreat]')?.addEventListener('click', () => {
+    const exp = S.expeditions.find(e => e.id === expId);
+    if (!exp?.combat) return;
+    if (confirm('Confirmer la retraite ? L\'équipe rentre immédiatement avec des pertes possibles.')) {
+      combatAllyAction(expId, exp.combat.selectedAllyId || exp.combat.allies[0]?.id, 'retreat', -1);
+      closeSceneOverlay();
+    }
+  });
+}
+
 function closeSceneOverlay() {
   _activeSceneExpId = null;
   $('#sceneOverlay').classList.remove('show');
@@ -2535,6 +2750,11 @@ function renderSceneOverlay() {
   // Si la mission a quitté la phase sur_place, on ferme
   if (exp.phase !== 'sur_place') {
     closeSceneOverlay();
+    return;
+  }
+  // Si un combat est en cours, afficher l'UI de combat
+  if (exp.combat?.active) {
+    renderCombatOverlay(exp);
     return;
   }
 

@@ -549,12 +549,14 @@ export const ITEMS = {
   lance_flammes: {
     nom: "Lance-flammes portable",
     type: 'weapon', origin: 'humain',
-    desc: "Arme thermique. Efficace contre la flore agressive et la faune."
+    desc: "Arme thermique. Efficace contre la flore agressive et la faune.",
+    combat: { damage: 4, label: "+4 dégâts" }
   },
   arme_resonance: {
     nom: "Arme à résonance",
     type: 'weapon', origin: 'alien_a',
-    desc: "Arme énergétique cristalline. Brise les structures alien à distance."
+    desc: "Arme énergétique cristalline. Brise les structures alien à distance.",
+    combat: { damage: 3, accuracy: 15, label: "+3 dégâts, +15% précision" }
   },
 
   // ===== Items uniques de chroniques (0.27) =====
@@ -597,12 +599,14 @@ export const ITEMS = {
   nanobots_reparation: {
     nom: "Nanobots de réparation",
     type: 'consumable', origin: 'humain',
-    desc: "Microbots injectables. Réparent les micro-lésions en quelques heures. Stabilise un colon blessé léger sans médecin sur le terrain."
+    desc: "Microbots injectables. Réparent les micro-lésions en quelques heures. Stabilise un colon blessé léger sans médecin sur le terrain.",
+    combat: { heal: 6, label: "+6 PV (soins combat)" }
   },
   mine_eclats: {
     nom: "Mine à éclats",
     type: 'weapon', origin: 'humain',
-    desc: "Dispositif à pression enterré. Dissuade la faune agressive et couvre les retraites. Usage unique, zone d'effet."
+    desc: "Dispositif à pression enterré. Dissuade la faune agressive et couvre les retraites. Usage unique, zone d'effet.",
+    combat: { aoe: true, damage: 5, label: "+5 dégâts (tous ennemis)" }
   },
   explosif_demolition: {
     nom: "Explosif de démolition",
@@ -619,7 +623,8 @@ export const ITEMS = {
   tenue_camouflage: {
     nom: "Tenue de camouflage",
     type: 'tool', origin: 'humain',
-    desc: "Revêtement adaptatif multicouche. Atténue la signature thermique et visuelle. Réduit significativement le risque d'être repéré par la faune ou les factions hostiles."
+    desc: "Revêtement adaptatif multicouche. Atténue la signature thermique et visuelle. Réduit significativement le risque d'être repéré par la faune ou les factions hostiles.",
+    combat: { dodge: 20, label: "+20% esquive" }
   },
   grappin_tactique: {
     nom: "Grappin tactique",
@@ -629,7 +634,8 @@ export const ITEMS = {
   marteau_sonique: {
     nom: "Marteau sonique",
     type: 'weapon', origin: 'humain',
-    desc: "Générateur d'ondes de choc focalisées. Brise les structures lithiques et désarticule les exosquelettes. Particulièrement efficace contre les défenses mécaniques alien."
+    desc: "Générateur d'ondes de choc focalisées. Brise les structures lithiques et désarticule les exosquelettes. Particulièrement efficace contre les défenses mécaniques alien.",
+    combat: { damage: 5, label: "+5 dégâts" }
   },
   balise_retour: {
     nom: "Balise de retour d'urgence",
@@ -639,7 +645,8 @@ export const ITEMS = {
   bouclier_plasma: {
     nom: "Bouclier plasma personnel",
     type: 'weapon', origin: 'humain',
-    desc: "Générateur de champ électro-magnétique portatif. Absorbe les premiers impacts d'énergie et de projectiles. Recharge passif entre les engagements."
+    desc: "Générateur de champ électro-magnétique portatif. Absorbe les premiers impacts d'énergie et de projectiles. Recharge passif entre les engagements.",
+    combat: { armor: 3, label: "+3 armure" }
   },
 
   // — Outils pour la colonie —
@@ -698,6 +705,96 @@ export const ITEMS = {
     nom: "Armure composite",
     type: 'tool', origin: 'fusion',
     desc: "Alliage stratifié de métal terrestre, cristal alien-A et membrane organique alien-B. La meilleure protection individuelle existante. Résiste aux menaces thermiques, énergétiques et biologiques."
+  },
+
+  // ===== 0.31 — Armement et protection de combat =====
+
+  // — Corps-à-corps —
+  matraque_securite: {
+    nom: "Matraque de sécurité",
+    type: 'weapon', origin: 'humain',
+    desc: "Bâton électrifié réglementaire. Simple, efficace, silencieux. La Vigueur du porteur décuple son efficacité.",
+    combat: { type: 'melee', damage: 3, statBonus: 'vigueur', label: "+3 dégâts + Vigueur (cac)" }
+  },
+  lame_vibrante: {
+    nom: "Lame vibrante",
+    type: 'weapon', origin: 'humain',
+    desc: "Lame à oscillation ultrasonique qui traverse la plupart des armures légères. Requiert force et technique. Vigueur amplifiée.",
+    combat: { type: 'melee', damage: 5, armorPen: 2, statBonus: 'vigueur', label: "+5 dégâts + Vigueur, pénètre 2 armure" }
+  },
+  poing_amplifie: {
+    nom: "Poing amplifié",
+    type: 'weapon', origin: 'humain',
+    desc: "Gant motorisé à servo-assistance. Démultiplie la force du porteur. Devastateur contre les structures mécaniques — et les adversaires. Vigueur maximisée.",
+    combat: { type: 'melee', damage: 7, armorPen: 3, statBonus: 'vigueur', label: "+7 dégâts + Vigueur, pénètre 3 armure" }
+  },
+
+  // — Distance courte —
+  pistolet_plasma: {
+    nom: "Pistolet plasma",
+    type: 'weapon', origin: 'humain',
+    desc: "Arme de poing à plasma comprimé. Polyvalente, légère, facile à manier. Idéale en soutien ou en dernier recours.",
+    combat: { type: 'ranged', damage: 2, accuracy: 10, label: "+2 dégâts, +10% précision" }
+  },
+  fusil_assault: {
+    nom: "Fusil d'assaut modulaire",
+    type: 'weapon', origin: 'humain',
+    desc: "Arme semi-automatique haute cadence. Couverture de feu supérieure. Dextérité amplifiée par le système de visée gyro-stabilisé.",
+    combat: { type: 'ranged', damage: 3, accuracy: 5, statBonus: 'dexterite', label: "+3 dégâts + Dextérité, +5% précision" }
+  },
+
+  // — Distance longue / précision —
+  fusil_precision: {
+    nom: "Fusil de précision",
+    type: 'weapon', origin: 'humain',
+    desc: "Sniper à longue portée avec correcteur balistique. Chaque tir compte. Le Sang-froid du tireur est décisif.",
+    combat: { type: 'precision', damage: 5, accuracy: 20, statBonus: 'sangfroid', label: "+5 dégâts, +20% précision + Sang-froid" }
+  },
+  canon_ionique: {
+    nom: "Canon ionique alien",
+    type: 'weapon', origin: 'alien_a',
+    desc: "Émetteur d'ions cristallins focalisés. Pénètre les blindages denses et désorganise les systèmes électroniques. Origine Alien-A.",
+    combat: { type: 'ranged', damage: 5, armorPen: 4, accuracy: 5, label: "+5 dégâts, pénètre 4 armure, +5% précision" }
+  },
+
+  // — Grenades & explosifs —
+  grenade_concussion: {
+    nom: "Grenade à concussion",
+    type: 'weapon', origin: 'humain',
+    desc: "Onde de choc concentrée. Étourdit plusieurs cibles simultanément, les rendant moins réactives pendant un round.",
+    combat: { aoe: true, damage: 3, stun: 1, label: "+3 dégâts zone, étourdit (−1 PA round suivant)" }
+  },
+  grenade_iem: {
+    nom: "Grenade IEM",
+    type: 'weapon', origin: 'humain',
+    desc: "Impulsion électromagnétique focalisée. Inutile contre la faune organique, devastatrice contre les machines et drones.",
+    combat: { aoe: true, damage: 2, machineBonus: 8, label: "+2 dégâts zone (+10 vs machines/drones)" }
+  },
+
+  // — Boucliers & armures —
+  bouclier_cinetique: {
+    nom: "Bouclier cinétique",
+    type: 'weapon', origin: 'humain',
+    desc: "Plaque de polymère balistique renforcé. Absorbe les impacts physiques et les projectiles. Réduit significativement les dégâts subis.",
+    combat: { armor: 4, type: 'shield_cinetique', label: "+4 armure cinétique" }
+  },
+  bouclier_energetique: {
+    nom: "Bouclier énergétique",
+    type: 'weapon', origin: 'humain',
+    desc: "Générateur de champ électromagnétique compact. Crée un tampon d'énergie qui encaisse les premiers dégâts avant la chair et les os.",
+    combat: { shieldHp: 12, type: 'shield_energetique', label: "Tampon énergie 12 PV (prend les dégâts en premier)" }
+  },
+  armure_exo: {
+    nom: "Exo-armure légère",
+    type: 'weapon', origin: 'humain',
+    desc: "Combinaison servo-assistée qui amplifie endurance et résistance. La Vigueur du porteur se traduit directement en points de vie supplémentaires.",
+    combat: { armor: 3, type: 'exo', statBonus: 'vigueur', label: "+3 armure + Vigueur → PV bonus" }
+  },
+  bouclier_refractant: {
+    nom: "Bouclier réfractant alien",
+    type: 'weapon', origin: 'alien_a',
+    desc: "Cristal de confinement alien synthétisé en paroi de bouclier. Combine absorption cinétique et tampon énergétique. Technologie Alien-A de pointe.",
+    combat: { armor: 3, shieldHp: 10, type: 'shield_refractant', label: "+3 armure + tampon énergie 10 PV" }
   }
 };
 
@@ -937,6 +1034,96 @@ export const BLUEPRINTS = {
     origin: 'fusion', rarity: 4,
     unlocks: { kind: 'fab', target: 'armure_composite', label: 'Armure composite' },
     desc: "Alliage triple : métal, cristal, membrane organique. La protection ultime. Plans presque introuvables."
+  },
+
+  // ===== 0.31 — Armement de combat =====
+
+  // — Corps-à-corps humain —
+  bp_matraque_securite: {
+    nom: "Schéma : Matraque de sécurité",
+    origin: 'humain', rarity: 1,
+    unlocks: { kind: 'fab', target: 'matraque_securite', label: 'Matraque de sécurité' },
+    desc: "Plans d'une arme d'impact électrifiée. Standard des forces de sécurité coloniales."
+  },
+  bp_lame_vibrante: {
+    nom: "Schéma : Lame vibrante",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'lame_vibrante', label: 'Lame vibrante' },
+    desc: "Technologie d'oscillation ultrasonique appliquée à une lame. Pénètre les armures légères."
+  },
+  bp_poing_amplifie: {
+    nom: "Schéma : Poing amplifié",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'poing_amplifie', label: 'Poing amplifié' },
+    desc: "Gant servo-motorisé à amplification musculaire. Requiert une mécanique fine."
+  },
+
+  // — Distance humain —
+  bp_pistolet_plasma: {
+    nom: "Schéma : Pistolet plasma",
+    origin: 'humain', rarity: 1,
+    unlocks: { kind: 'fab', target: 'pistolet_plasma', label: 'Pistolet plasma' },
+    desc: "Plans d'une arme de poing à plasma comprimé. Compact et polyvalent."
+  },
+  bp_fusil_assault: {
+    nom: "Schéma : Fusil d'assaut",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'fusil_assault', label: "Fusil d'assaut modulaire" },
+    desc: "Architecture modulaire à haute cadence. Standard militaire pré-Effondrement."
+  },
+  bp_fusil_precision: {
+    nom: "Schéma : Fusil de précision",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'fusil_precision', label: 'Fusil de précision' },
+    desc: "Plans d'un fusil longue portée avec correcteur balistique gyro-stabilisé."
+  },
+
+  // — Grenades —
+  bp_grenade_concussion: {
+    nom: "Schéma : Grenade à concussion",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'grenade_concussion', label: 'Grenade à concussion' },
+    desc: "Dispositif de choc concentré à rayon d'effet contrôlé."
+  },
+  bp_grenade_iem: {
+    nom: "Schéma : Grenade IEM",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'grenade_iem', label: 'Grenade IEM' },
+    desc: "Impulsion électromagnétique focalisée. Devastating contre les systèmes électroniques."
+  },
+
+  // — Boucliers et armures —
+  bp_bouclier_cinetique: {
+    nom: "Schéma : Bouclier cinétique",
+    origin: 'humain', rarity: 2,
+    unlocks: { kind: 'fab', target: 'bouclier_cinetique', label: 'Bouclier cinétique' },
+    desc: "Plaque balistique légère en polymère composite. Équipement standard de protection."
+  },
+  bp_bouclier_energetique: {
+    nom: "Schéma : Bouclier énergétique",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'bouclier_energetique', label: 'Bouclier énergétique' },
+    desc: "Générateur de champ EM compact. Tampon d'énergie absorbant les premiers impacts."
+  },
+  bp_armure_exo: {
+    nom: "Schéma : Exo-armure légère",
+    origin: 'humain', rarity: 3,
+    unlocks: { kind: 'fab', target: 'armure_exo', label: 'Exo-armure légère' },
+    desc: "Combinaison servo-assistée. La Vigueur du porteur se traduit en résistance supplémentaire."
+  },
+
+  // — Technologie Alien-A —
+  bp_canon_ionique: {
+    nom: "Schéma : Canon ionique alien",
+    origin: 'alien_a', rarity: 4,
+    unlocks: { kind: 'fab', target: 'canon_ionique', label: 'Canon ionique alien' },
+    desc: "Émetteur d'ions cristallins. Technologie Alien-A reverse-engineered. Pénètre tous les blindages connus."
+  },
+  bp_bouclier_refractant: {
+    nom: "Schéma : Bouclier réfractant alien",
+    origin: 'alien_a', rarity: 4,
+    unlocks: { kind: 'fab', target: 'bouclier_refractant', label: 'Bouclier réfractant alien' },
+    desc: "Cristal de confinement alien en paroi active. Combine protection physique et énergie."
   }
 };
 
@@ -1451,6 +1638,122 @@ export const FABRICATIONS = {
     time: 840,
     prereq: { workshopLevel: 5, blueprint: 'bp_armure_composite', tech: ['tech_armure_composite'] },
     desc: "Protection ultime. Résiste à toutes les menaces connues."
+  },
+
+  // ===== 0.31 — Fabrications armement de combat =====
+
+  // — Corps-à-corps (niveau 1-3) —
+  fab_matraque_securite: {
+    nom: "Matraque de sécurité",
+    produces: 'matraque_securite',
+    cost: { metal: 12, cristal: 5, energie: 4 },
+    time: 90,
+    prereq: { workshopLevel: 1, blueprint: 'bp_matraque_securite' },
+    desc: "Bâton électrifié. Bonus Vigueur. Rapide à fabriquer."
+  },
+  fab_lame_vibrante: {
+    nom: "Lame vibrante",
+    produces: 'lame_vibrante',
+    cost: { metal: 30, cristal: 15, energie: 10 },
+    time: 270,
+    prereq: { workshopLevel: 2, blueprint: 'bp_lame_vibrante' },
+    desc: "Lame à oscillation ultrasonique. Vigueur amplifiée, pénètre 2 armure."
+  },
+  fab_poing_amplifie: {
+    nom: "Poing amplifié",
+    produces: 'poing_amplifie',
+    cost: { metal: 45, cristal: 20, energie: 18, datacubes: 5 },
+    time: 420,
+    prereq: { workshopLevel: 3, blueprint: 'bp_poing_amplifie', tech: ['tech_automatisation'] },
+    desc: "Servo-gant à amplification. Vigueur maximisée, pénètre 3 armure."
+  },
+
+  // — Distance (niveau 1-3) —
+  fab_pistolet_plasma: {
+    nom: "Pistolet plasma",
+    produces: 'pistolet_plasma',
+    cost: { metal: 18, cristal: 10, energie: 6 },
+    time: 120,
+    prereq: { workshopLevel: 1, blueprint: 'bp_pistolet_plasma' },
+    desc: "Arme de poing plasma. Compact, léger, polyvalent."
+  },
+  fab_fusil_assault: {
+    nom: "Fusil d'assaut modulaire",
+    produces: 'fusil_assault',
+    cost: { metal: 35, cristal: 18, energie: 12 },
+    time: 240,
+    prereq: { workshopLevel: 2, blueprint: 'bp_fusil_assault' },
+    desc: "Fusil semi-auto gyrostabilisé. Dextérité amplifiée par le viseur."
+  },
+  fab_fusil_precision: {
+    nom: "Fusil de précision",
+    produces: 'fusil_precision',
+    cost: { metal: 40, cristal: 25, energie: 15, datacubes: 5 },
+    time: 360,
+    prereq: { workshopLevel: 3, blueprint: 'bp_fusil_precision', tech: ['tech_blindage'] },
+    desc: "Sniper longue portée. Sang-froid amplifié par le correcteur balistique."
+  },
+
+  // — Grenades (niveau 2-3) —
+  fab_grenade_concussion: {
+    nom: "Grenade à concussion",
+    produces: 'grenade_concussion',
+    cost: { metal: 20, cristal: 8, energie: 8 },
+    time: 150,
+    prereq: { workshopLevel: 2, blueprint: 'bp_grenade_concussion' },
+    desc: "Onde de choc AoE. Étourdit les ennemis (-1 PA round suivant)."
+  },
+  fab_grenade_iem: {
+    nom: "Grenade IEM",
+    produces: 'grenade_iem',
+    cost: { metal: 15, cristal: 20, energie: 15, datacubes: 5 },
+    time: 210,
+    prereq: { workshopLevel: 3, blueprint: 'bp_grenade_iem', tech: ['tech_nanotech'] },
+    desc: "Impulsion EM. Devastatrice contre machines et drones."
+  },
+
+  // — Boucliers et armures (niveau 2-4) —
+  fab_bouclier_cinetique: {
+    nom: "Bouclier cinétique",
+    produces: 'bouclier_cinetique',
+    cost: { metal: 35, cristal: 10, biomasse: 5 },
+    time: 210,
+    prereq: { workshopLevel: 2, blueprint: 'bp_bouclier_cinetique' },
+    desc: "Plaque balistique polymère. +4 armure cinétique."
+  },
+  fab_bouclier_energetique: {
+    nom: "Bouclier énergétique",
+    produces: 'bouclier_energetique',
+    cost: { metal: 25, cristal: 35, energie: 20 },
+    time: 360,
+    prereq: { workshopLevel: 3, blueprint: 'bp_bouclier_energetique', tech: ['tech_batteries_avancees'] },
+    desc: "Générateur EM compact. Tampon 12 PV qui encaisse avant les PV du colon."
+  },
+  fab_armure_exo: {
+    nom: "Exo-armure légère",
+    produces: 'armure_exo',
+    cost: { metal: 50, cristal: 20, energie: 15, datacubes: 8 },
+    time: 480,
+    prereq: { workshopLevel: 3, blueprint: 'bp_armure_exo', tech: ['tech_automatisation'] },
+    desc: "+3 armure + PV bonus selon Vigueur du porteur."
+  },
+
+  // — Technologie Alien-A (niveau 4-5) —
+  fab_canon_ionique: {
+    nom: "Canon ionique alien",
+    produces: 'canon_ionique',
+    cost: { cristal: 65, datacubes: 18, energie: 20, metal: 25 },
+    time: 600,
+    prereq: { workshopLevel: 4, blueprint: 'bp_canon_ionique', tech: ['tech_principes_xeno', 'tech_batteries_avancees'] },
+    desc: "+5 dégâts, pénètre 4 armure. Technologie Alien-A."
+  },
+  fab_bouclier_refractant: {
+    nom: "Bouclier réfractant alien",
+    produces: 'bouclier_refractant',
+    cost: { cristal: 70, metal: 30, datacubes: 15, energie: 25 },
+    time: 660,
+    prereq: { workshopLevel: 5, blueprint: 'bp_bouclier_refractant', tech: ['tech_principes_xeno', 'tech_batteries_avancees'] },
+    desc: "+3 armure + tampon 10 PV. Combinaison cinétique/énergétique Alien-A."
   }
 };
 
@@ -1628,13 +1931,11 @@ export const SCENES = [
     weight: 5,
     text: "Une masse de muscle et de griffes émerge des herbes. Six yeux, quatre pattes, une mâchoire qui s'ouvre dans le mauvais sens.",
     choices: [
+      { label: "Engager le combat", outcome: { combat: { enemies: ['predateur_lunaire'], lootOnWin: { biomasse: 45 }, onDefeat: 'retreat' } } },
       { label: "Repousser au lance-flammes", req: { item: 'lance_flammes' },
         outcome: { loot: { biomasse: 50 }, log: "La créature recule devant les flammes, puis s'effondre." } },
       { label: "Tirer à l'arme à résonance", req: { item: 'arme_resonance' },
         outcome: { loot: { biomasse: 50, datacubes: 3 }, log: "Un seul tir. La créature se désintègre par fréquence." } },
-      { label: "Combattre", risky: { stat: 'vigueur', dc: 6,
-          success: { loot: { biomasse: 40 }, log: "La créature s'effondre. Récolte de matière organique." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 1 } } },
       { label: "Reculer en formation défensive", req: { skill: { key: 'combat', min: 2 } },
         outcome: { log: "L'équipe se replie sans pertes. La créature renonce." } },
       { label: "Laisser un appât et fuir", consume: { biomasse: 20 },
@@ -2642,4 +2943,105 @@ export const TRAITS = {
   distant:           { nom:'Distant',            kind:'ambigu',  desc:"Immunisé au deuil · isole peu à peu l'équipage.",             weight:3 },
   hyperempathe:      { nom:'Hyper-empathique',   kind:'ambigu',  desc:"+2 Charisme · subit les traumas des autres.",                 weight:2 }
 };
+
+// ============================================================
+//   TYPES D'ENNEMIS — COMBAT AU TOUR PAR TOUR (0.31)
+// ============================================================
+// hp: points de vie | armor: réduction dégâts | damage: [min, max] | accuracy: % touché
+// pa: points d'action par tour (usage interne) | loot: récompense si victoire
+
+export const ENEMY_TYPES = {
+  // — Faune —
+  predateur_lunaire:  { nom: "Prédateur lunaire",    category: 'faune',   hp: 14, armor: 1, damage: [2, 5], accuracy: 65, pa: 2, loot: { biomasse: 8 } },
+  meute_rapaces:      { nom: "Meute de rapaces",      category: 'faune',   hp:  8, armor: 0, damage: [1, 3], accuracy: 70, pa: 3, loot: { biomasse: 4 } },
+  predateur_alpha:    { nom: "Prédateur alpha",        category: 'faune',   hp: 22, armor: 2, damage: [3, 7], accuracy: 60, pa: 2, loot: { biomasse: 18 } },
+  drone_bio:          { nom: "Drone biologique",       category: 'faune',   hp: 12, armor: 1, damage: [2, 5], accuracy: 72, pa: 3, loot: { biomasse: 10 } },
+
+  // — Machines / Gardiens —
+  drone_gardien:      { nom: "Drone gardien",          category: 'machine', hp: 16, armor: 4, damage: [2, 6], accuracy: 75, pa: 2,
+    loot: { metal: 12, composants: 5 }, itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }] },
+  gardien_antique:    { nom: "Gardien antique",         category: 'machine', hp: 26, armor: 6, damage: [3, 8], accuracy: 65, pa: 2,
+    loot: { metal: 25, cristal: 10 }, itemLoot: [{ item: 'grenade_iem', chance: 0.30 }, { item: 'bouclier_cinetique', chance: 0.15 }] },
+  sentinelle_alien:   { nom: "Sentinelle alien",        category: 'machine', hp: 18, armor: 3, damage: [3, 7], accuracy: 70, pa: 2,
+    loot: { cristal: 8, datacubes: 4 }, itemLoot: [{ item: 'canon_ionique', chance: 0.10 }] },
+
+  // — Xénoformes —
+  xenoforme_alpha:    { nom: "Xénoforme α",            category: 'alien',   hp: 18, armor: 2, damage: [2, 6], accuracy: 65, pa: 2,
+    loot: { cristal: 10, datacubes: 4 }, itemLoot: [{ item: 'bouclier_refractant', chance: 0.08 }] },
+  xenoforme_reine:    { nom: "Reine xénoforme",         category: 'alien',   hp: 32, armor: 3, damage: [4,10], accuracy: 60, pa: 2,
+    loot: { cristal: 20, datacubes: 10 }, itemLoot: [{ item: 'bouclier_refractant', chance: 0.25 }, { item: 'canon_ionique', chance: 0.12 }] },
+  spore_toxique:      { nom: "Spore toxique",           category: 'alien',   hp:  6, armor: 0, damage: [1, 2], accuracy: 80, pa: 3, loot: { biomasse: 6 } },
+
+  // — Humains hostiles —
+  pillard:            { nom: "Pillard",                 category: 'humain',  hp: 10, armor: 2, damage: [2, 5], accuracy: 70, pa: 2,
+    loot: { metal: 8, biomasse: 5 }, itemLoot: [{ item: 'matraque_securite', chance: 0.25 }, { item: 'pistolet_plasma', chance: 0.15 }] },
+  mercenaire:         { nom: "Mercenaire",              category: 'humain',  hp: 14, armor: 3, damage: [3, 6], accuracy: 75, pa: 2,
+    loot: { metal: 15, biomasse: 3 }, itemLoot: [{ item: 'fusil_assault', chance: 0.20 }, { item: 'bouclier_cinetique', chance: 0.18 }] },
+  garde_elite:        { nom: "Garde d'élite",           category: 'humain',  hp: 18, armor: 4, damage: [3, 7], accuracy: 80, pa: 2,
+    loot: { metal: 20 }, itemLoot: [{ item: 'fusil_precision', chance: 0.15 }, { item: 'armure_exo', chance: 0.12 }, { item: 'bouclier_energetique', chance: 0.12 }] },
+};
+
+// ============================================================
+//   SCÈNES DE COMBAT (0.31)
+// ============================================================
+// Ajoutées dynamiquement dans SCENES via spread — triggers via outcome.combat
+
+const COMBAT_SCENES = [
+  {
+    id: 'combat_embuscade_pillards',
+    tags: ['civ_dechue', 'hostile'],
+    weight: 3,
+    text: "Des silhouettes en combinaison rapiécée surgissent des décombres. Des pillards — armés, affamés, et très peu enclins à négocier.",
+    choices: [
+      { label: "Engager le combat", outcome: { combat: { enemies: ['pillard', 'pillard'], lootOnWin: { metal: 20, biomasse: 10 }, onDefeat: 'retreat' } } },
+      { label: "Tenter de négocier", risky: { stat: 'charisme', dc: 7,
+          success: { loot: { metal: 10 }, log: "Accord conclu. Ils laissent passer en échange de quelques matériaux." },
+          fail:    { combat: { enemies: ['pillard', 'mercenaire'], lootOnWin: { metal: 25 }, onDefeat: 'retreat' } } } },
+      { label: "Battre en retraite", outcome: { log: "Demi-tour. La zone est trop dangereuse.", retreat: true } }
+    ]
+  },
+  {
+    id: 'combat_drone_gardien',
+    tags: ['ruines_humaines', 'danger_meca'],
+    weight: 3,
+    text: "Une sphère métallique descend du plafond en ronronnant. Son œil rouge balaie la salle. Protocole de sécurité encore actif après des siècles.",
+    choices: [
+      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 15, composants: 8 }, onDefeat: 'retreat' } } },
+      { label: "Pirater le protocole", req: { skill: { key: 'ingenierie', min: 3 } },
+        outcome: { loot: { metal: 20, composants: 10 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
+      { label: "Contourner en silence", risky: { stat: 'dexterite', dc: 6,
+          success: { log: "Le drone ne détecte rien. Passage libre." },
+          fail:    { combat: { enemies: ['drone_gardien', 'drone_gardien'], lootOnWin: { metal: 20 }, onDefeat: 'retreat' } } } }
+    ]
+  },
+  {
+    id: 'combat_xenoforme',
+    tags: ['alien', 'faune'],
+    weight: 2,
+    text: "Quelque chose surgit des parois cristallines — pas une créature familière. Des appendices translucides, une bioluminescence pulsante, et une agressivité immédiate.",
+    choices: [
+      { label: "Combattre la créature", outcome: { combat: { enemies: ['xenoforme_alpha'], lootOnWin: { cristal: 12, datacubes: 5 }, onDefeat: 'retreat' } } },
+      { label: "Utiliser le résonateur harmonique", req: { item: 'resonateur_harmonique' },
+        outcome: { loot: { cristal: 15, datacubes: 8 }, log: "Le résonateur neutralise la créature en moins d'une seconde." } },
+      { label: "Décrocher immédiatement", outcome: { log: "Retraite tactique. La créature ne poursuit pas loin.", threat: -1 } }
+    ]
+  },
+  {
+    id: 'combat_meute',
+    tags: ['faune', 'predateurs'],
+    weight: 4,
+    text: "Pas un prédateur — une meute. Cinq, peut-être six silhouettes rapides qui convergent de plusieurs directions à la fois.",
+    choices: [
+      { label: "Tenir position et combattre", outcome: { combat: { enemies: ['meute_rapaces', 'meute_rapaces', 'meute_rapaces'], lootOnWin: { biomasse: 25 }, onDefeat: 'retreat' } } },
+      { label: "Brûler un périmètre défensif", req: { item: 'lance_flammes' },
+        outcome: { loot: { biomasse: 30 }, log: "Les flammes forment un mur. La meute recule et se disperse." } },
+      { label: "Se replier en courant", risky: { stat: 'dexterite', dc: 5,
+          success: { log: "L'équipe distance la meute. Course serrée." },
+          fail:    { status: 'blessure_legere', morale: -2, log: "Un membre est rattrapé et mordu avant de s'échapper." } } }
+    ]
+  }
+];
+
+// Injection des scènes de combat dans le tableau SCENES principal
+SCENES.push(...COMBAT_SCENES);
 
