@@ -53,7 +53,8 @@ import {
   TRAINING_PROGRAMS, infirmaryBeds, bedsInUse,
   STATUTS, canTrain, canTreat, admitToInfirmary, dischargeMember, fillTemplate,
   startDiagnostic, startTreatment,
-  memberCombatStats, combatAllyAction, combatEndTurn
+  memberCombatStats, combatAllyAction, combatEndTurn,
+  ancienneteBonus
 } from './app.js';
 
 
@@ -740,9 +741,19 @@ function renderSlotRow(modKey, slotIdx, job) {
     } else {
       statusLabel = `<div class="occ-status">${occMember.statut}</div>`;
     }
+    let careerBadge = '';
+    if (isReallyOnPost && occMember.posteInfo) {
+      const ab = ancienneteBonus(occMember);
+      const dureeDays = Math.floor(((S.meta?.gameMin || 0) - (occMember.posteInfo.depuis || 0)) / (24*60));
+      careerBadge = `<div class="career-since">Dep. J.${dureeDays}</div>`;
+      if (ab.label) {
+        careerBadge += `<div class="career-badge cb-${ab.label.toLowerCase()}">${ab.label} +${Math.round((ab.mult-1)*100)}%</div>`;
+      }
+    }
     occHTML = `<div class="slot-occupant">
       <div class="occ-name ${unfitCls}">${occMember.name}</div>
       ${statusLabel}
+      ${careerBadge}
     </div>`;
   } else {
     occHTML = `<div class="slot-occupant empty">vacant</div>`;
@@ -3278,7 +3289,7 @@ function renderPersonCard(p, opts = {}) {
     // Indicateur santé selon âge (cap diminué)
     const healthCap = maxHealthOf(p);
     const healthDisplay = healthCap < 100 ? `${p.sante}%/${healthCap}%` : `${p.sante}%`;
-    // 0.22 — Affiche le poste de base persistant (visible même quand le colon est absent)
+    // Affiche le poste de base persistant + ancienneté + historique carrière
     let postInfo = '';
     const a = memberAssignment(p.id);
     if (a) {
@@ -3286,9 +3297,17 @@ function renderPersonCard(p, opts = {}) {
       const job = jobsForModule(a.modKey)[a.slotIdx];
       if (def && job) {
         const role = ROLES[job.role];
-        postInfo = `<div style="font-family:var(--mono);font-size:11px;margin-bottom:6px;letter-spacing:0.04em;color:var(--text-mute);">
-          Poste : <span style="color:${role.color}">${job.label}</span> · ${def.nom}
+        const ab = ancienneteBonus(p);
+        const dureeDays = p.posteInfo ? Math.floor(((S.meta?.gameMin || 0) - (p.posteInfo.depuis || 0)) / (24*60)) : 0;
+        const ancBadge = ab.label
+          ? ` <span class="career-badge cb-${ab.label.toLowerCase()}">${ab.label} +${Math.round((ab.mult-1)*100)}%</span>`
+          : (dureeDays > 0 ? ` <span style="opacity:0.55;font-size:10px">Dep. J.${dureeDays}</span>` : '');
+        postInfo = `<div class="crew-post-line">
+          Poste : <span style="color:${role.color}">${job.label}</span> · ${def.nom}${ancBadge}
         </div>`;
+        if (p.posteHistorique?.length) {
+          postInfo += `<div class="crew-career-hist">${p.posteHistorique.length} poste${p.posteHistorique.length>1?'s':''} précédent${p.posteHistorique.length>1?'s':''}</div>`;
+        }
       }
     }
     actionsHTML = `${postInfo}${medInfo}<div class="actions-row">

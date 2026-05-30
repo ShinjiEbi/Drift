@@ -131,17 +131,37 @@ export function assignMember(memberId, modKey, slotIdx) {
 
   // Désaffecte le membre de son poste précédent (s'il en avait un)
   const prev = memberAssignment(memberId);
-  if (prev) delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
+  if (prev) {
+    // Archive career history before leaving previous post
+    if (member.posteInfo) {
+      if (!member.posteHistorique) member.posteHistorique = [];
+      member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
+      delete member.posteInfo;
+    }
+    delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
+  }
 
   // Si un autre colon occupait ce poste, le désaffecter
   const occupant = memberAt(modKey, slotIdx);
   if (occupant) {
+    if (occupant.posteInfo) {
+      if (!occupant.posteHistorique) occupant.posteHistorique = [];
+      occupant.posteHistorique.push({ ...occupant.posteInfo, jusqua: S.meta?.gameMin || 0 });
+      delete occupant.posteInfo;
+    }
     occupant.statut = 'libre';
   }
 
-  // Affecte
+  // Affecte et enregistre le poste actuel
   S.assignments[jobKey(modKey, slotIdx)] = memberId;
   member.statut = 'travail';
+  member.posteInfo = {
+    modKey,
+    slotIdx,
+    titre: job.label,
+    role: job.role,
+    depuis: S.meta?.gameMin || 0
+  };
   return { ok: true };
 }
 
@@ -149,8 +169,14 @@ export function assignMember(memberId, modKey, slotIdx) {
 export function unassignMember(memberId) {
   const a = memberAssignment(memberId);
   if (!a) return;
-  delete S.assignments[jobKey(a.modKey, a.slotIdx)];
   const member = S.crew.find(m => m.id === memberId);
+  // Archive career history
+  if (member?.posteInfo) {
+    if (!member.posteHistorique) member.posteHistorique = [];
+    member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
+    delete member.posteInfo;
+  }
+  delete S.assignments[jobKey(a.modKey, a.slotIdx)];
   if (member && member.statut === 'travail') member.statut = 'libre';
 }
 
@@ -159,9 +185,27 @@ export function unassignSlot(modKey, slotIdx) {
   const k = jobKey(modKey, slotIdx);
   const id = S.assignments[k];
   if (!id) return;
-  delete S.assignments[k];
   const member = S.crew.find(m => m.id === id);
+  if (member?.posteInfo) {
+    if (!member.posteHistorique) member.posteHistorique = [];
+    member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
+    delete member.posteInfo;
+  }
+  delete S.assignments[k];
   if (member && member.statut === 'travail') member.statut = 'libre';
+}
+
+// Bonus de production lié à l'ancienneté dans le poste actuel.
+// Un colon qui reste longtemps sur son poste devient plus efficace.
+export function ancienneteBonus(member) {
+  if (!member?.posteInfo) return { mult: 1.0, label: null, annees: 0 };
+  const dureeMin = (S.meta?.gameMin || 0) - (member.posteInfo.depuis || 0);
+  const annees = dureeMin / YEAR_IN_GAME_MIN;
+  if (annees < 1)  return { mult: 1.0,  label: null,          annees };
+  if (annees < 3)  return { mult: 1.05, label: 'Confirmé',    annees };
+  if (annees < 7)  return { mult: 1.12, label: 'Expérimenté', annees };
+  if (annees < 15) return { mult: 1.20, label: 'Vétéran',     annees };
+  return               { mult: 1.30, label: 'Légendaire',  annees };
 }
 
 // 0.22 — Retour à la base après expédition / soins / formation / mission diplo.
@@ -250,6 +294,7 @@ export function moduleEfficiency(modKey) {
   let secFilled = 0;
   let supFilled = 0;
   let cmdFilled = 0;
+  let tenureBonus = 0;
 
   for (let i = 0; i < jobs.length; i++) {
     const j = jobs[i];
@@ -260,6 +305,7 @@ export function moduleEfficiency(modKey) {
     if (j.role === 'production') prodCount++;
     if (reallyOnPost) {
       filled++;
+      if (j.role === 'production') tenureBonus += ancienneteBonus(occMember).mult - 1.0;
       switch (j.role) {
         case 'production':   prodFilled++; break;
         case 'qualite':      qualityFilled++; break;
@@ -273,7 +319,7 @@ export function moduleEfficiency(modKey) {
 
   const fillFraction = filled / jobs.length;
   // Production : mode automatisé à JOB_BASE_FRACTION, ou
-  //   (prodFilled / prodCount) × 1.0 si tous les postes prod sont pourvus, +30% bonus chaque qualité
+  //   (prodFilled / prodCount) × 1.0 si tous les postes prod sont pourvus, +qualité/ancienneté
   let prodMult;
   if (prodCount === 0) {
     // pas de poste prod → fillFraction comme proxy
@@ -283,6 +329,7 @@ export function moduleEfficiency(modKey) {
     prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * prodRatio;
     prodMult += qualityFilled * 0.20;   // chaque qualité = +20%
     prodMult += cmdFilled * 0.05;       // commandement bonus modeste
+    prodMult += tenureBonus;            // ancienneté des producteurs
   }
   // Upkeep : chaque logistique réduit l'upkeep de 15%, plancher à 50%
   let upkeepMult = 1 - logFilled * 0.15;
