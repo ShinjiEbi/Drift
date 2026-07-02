@@ -74,7 +74,7 @@ export function jobsForModule(modKey) {
 
 // Vérifie si un membre est éligible à un poste (skill / trait)
 export function isEligibleForJob(member, job) {
-  if (!member || member.statut === 'mort') return false;
+  if (!member || member.statut === 'mort' || member.statut === 'enfant') return false;
   if (job.req?.skill) {
     if ((member.skills[job.req.skill.key] || 0) < job.req.skill.min) return false;
   }
@@ -1864,6 +1864,8 @@ function memberDies(member, cause = 'cause inconnue') {
   unassignMember(member.id);
   // Dissolution du couple
   if (member.partnerId) dissolveCouple(member.id, member.partnerId, true);
+  // Grossesse interrompue
+  delete member.grossesse;
   member.statut = 'mort';
   member.diedAt = S.meta.gameMin;
   // Retire les traitements en cours
@@ -2576,7 +2578,6 @@ function _giveBirth(carrier) {
   log('success', `★ <em>${child.name}</em> est né(e) ! Enfant de <em>${carrier.name}</em>${parentStr}.`);
   carrier.moral = Math.min(100, carrier.moral + 15);
   if (partner) partner.moral = Math.min(100, partner.moral + 15);
-  render();
 }
 
 function _becomeAdult(child) {
@@ -2589,7 +2590,6 @@ function _becomeAdult(child) {
   const age = currentAge(child);
   log('success', `<em>${child.name}</em> atteint sa majorité (${age} ans) et rejoint l'équipage actif.`);
   autoAssignMember(child.id);
-  render();
 }
 
 // Appelé chaque tick depuis state.js/tickOnce
@@ -2637,7 +2637,7 @@ export function tickFamilyLife() {
 
   // — Naissances —
   for (const m of S.crew) {
-    if (!m.grossesse) continue;
+    if (!m.grossesse || m.statut === 'mort') continue;
     if ((now - (m.grossesse.debut || 0)) >= PREGNANCY_DURATION_MIN) _giveBirth(m);
   }
 
@@ -4917,6 +4917,7 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
     if (!def) return null;
     return {
       idx, type: typeId, nom: def.nom,
+      category: def.category || null,
       hp: def.hp, maxHp: def.hp,
       armor: def.armor || 0,
       damage: def.damage || [1, 3],
@@ -4949,6 +4950,17 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   if (!exp?.combat?.active || exp.combat.phase !== 'player') return;
 
   const cbt = exp.combat;
+
+  // Retraite : décision d'équipe, possible même si l'allié sélectionné est à terre
+  if (action === 'retreat') {
+    cbt.log.push("Retraite ! L'équipe bat en retraite.");
+    cbt.phase = 'ended';
+    cbt.outcome = 'retreat';
+    resolveCombatEnd(exp);
+    render();
+    return;
+  }
+
   const ally = cbt.allies.find(a => a.id === allyId);
   if (!ally || ally.hp <= 0) return;
 
@@ -5042,8 +5054,9 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
     const living = cbt.enemies.filter(e => e.hp > 0);
     for (const e of living) {
       let dmg = baseDmg;
-      // Grenade IEM : bonus vs machines
-      if (aoeItem === 'grenade_iem' && e.category === 'machine') dmg += grDef.machineBonus || 8;
+      // Grenade IEM : bonus vs machines (fallback catalogue pour combats sauvegardés avant 0.34.1)
+      const cat = e.category || ENEMY_TYPES[e.type]?.category;
+      if (aoeItem === 'grenade_iem' && cat === 'machine') dmg += grDef.machineBonus || 8;
       e.hp = Math.max(0, e.hp - Math.max(1, dmg - e.armor));
       // Grenade concussion : étourdit (perd 1 PA au prochain tour)
       if (aoeItem === 'grenade_concussion' && (grDef.stun || 0) > 0 && e.hp > 0) {
@@ -5061,6 +5074,7 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
     ally.pa -= 1;
     downed.au_sol = false;
     downed.hp = 2;
+    downed.pa = 0; // se relève, mais n'agit qu'au prochain round
     cbt.log.push(`${ally.name} stabilise ${downed.name} — de retour au combat (2 PV) !`);
   }
   else if (action === 'garde') {
@@ -5077,14 +5091,6 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   else if (action === 'end_turn') {
     ally.pa = 0;
     cbt.log.push(`${ally.name} passe son tour.`);
-  }
-  else if (action === 'retreat') {
-    cbt.log.push("Retraite ! L'équipe bat en retraite.");
-    cbt.phase = 'ended';
-    cbt.outcome = 'retreat';
-    resolveCombatEnd(exp);
-    render();
-    return;
   }
 
   // Victoire immédiate si tous les ennemis sont à 0
@@ -5127,9 +5133,6 @@ function _processEnemyPhase(exp) {
   for (const a of cbt.allies) {
     if (a.hp <= 0 && !a.au_sol) a.au_sol = true;
   }
-
-  // Detect pack-type enemy deaths for pack behavior bonus
-  const packDeathsThisRound = {};
 
   function _doEnemyAttack(enemy, dmgMult, accBonus, dmgBonus) {
     const aliveNow = living();
@@ -5808,4 +5811,12 @@ if (document.readyState === 'loading') {
 } else {
   // Document déjà chargé : différer d'un tick
   setTimeout(boot, 0);
+}
+
+// Hook console/debug : accès aux modules depuis la console navigateur
+// (diagnostic d'une save cassée, tests, cheats assumés…)
+if (typeof window !== 'undefined') {
+  Promise.all([import('./state.js'), import('./app.js'), import('./ui.js')])
+    .then(([state, app, ui]) => { window.DRIFT = { state, app, ui, get S() { return state.S; } }; })
+    .catch(() => {});
 }

@@ -59,27 +59,38 @@ import {
 } from './app.js';
 
 
+// Chaque panneau est rendu indépendamment : si l'un plante (donnée
+// inattendue, vieille save…), les autres continuent de s'afficher.
+// Sans ça, une seule exception vidait toutes les pages suivantes.
+function _safeRender(name, fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error(`[RENDER] Erreur dans ${name} :`, err);
+  }
+}
+
 export function render() {
-  renderHeader();
-  renderResources();
-  renderCrewSummary();
-  renderBuildSlot();
-  renderModules();
-  renderAssignments();
-  renderCrew();
-  renderFormation();
-  renderSoins();
-  renderRecruit();
-  renderGalaxy();
-  renderFleet();
-  renderExpeditions();
-  renderInventory();
-  renderLibrary();
-  renderResearch();
-  renderWorkshop();
-  renderArcs();
-  renderDiplomacy();
-  renderJournal();
+  _safeRender('renderHeader', renderHeader);
+  _safeRender('renderResources', renderResources);
+  _safeRender('renderCrewSummary', renderCrewSummary);
+  _safeRender('renderBuildSlot', renderBuildSlot);
+  _safeRender('renderModules', renderModules);
+  _safeRender('renderAssignments', renderAssignments);
+  _safeRender('renderCrew', renderCrew);
+  _safeRender('renderFormation', renderFormation);
+  _safeRender('renderSoins', renderSoins);
+  _safeRender('renderRecruit', renderRecruit);
+  _safeRender('renderGalaxy', renderGalaxy);
+  _safeRender('renderFleet', renderFleet);
+  _safeRender('renderExpeditions', renderExpeditions);
+  _safeRender('renderInventory', renderInventory);
+  _safeRender('renderLibrary', renderLibrary);
+  _safeRender('renderResearch', renderResearch);
+  _safeRender('renderWorkshop', renderWorkshop);
+  _safeRender('renderArcs', renderArcs);
+  _safeRender('renderDiplomacy', renderDiplomacy);
+  _safeRender('renderJournal', renderJournal);
 }
 
 function renderHeader() {
@@ -817,7 +828,8 @@ function renderAssignPickerContent() {
   const currentOccupant = memberAt(modKey, slotIdx);
 
   // Tri des candidats : éligibles d'abord, puis non-éligibles. Pour les éligibles, score décroissant.
-  const allCrew = S.crew.filter(m => m.statut !== 'mort');
+  // Les enfants ne travaillent pas.
+  const allCrew = S.crew.filter(m => m.statut !== 'mort' && m.statut !== 'enfant');
   const items = allCrew.map(m => {
     const eligible = isEligibleForJob(m, job);
     const isCurrent = currentOccupant?.id === m.id;
@@ -3493,7 +3505,7 @@ function renderCrew() {
           <div class="pname">${p.name}</div>
           <div class="pmeta">décédé(e) J${d}</div>
         </div>
-        <div class="origin">${p.origin?.label || ''}<small>${traits} · ${p.age} ans</small></div>
+        <div class="origin">${p.origin?.label || ''}<small>${traits} · ${currentAge(p)} ans</small></div>
       </div>`;
     }).join('');
   }
