@@ -180,6 +180,23 @@ export function unassignMember(memberId) {
   if (member && member.statut === 'travail') member.statut = 'libre';
 }
 
+// Assainit les affectations : supprime celles qui pointent vers un slot
+// qui n'existe plus (module rétrogradé par un incident, save d'une version
+// où le module avait plus de niveaux…). Répare aussi les colons bloqués
+// en 'travail' sans poste. Appelé au boot.
+export function sanitizeAssignments() {
+  for (const k of Object.keys(S.assignments || {})) {
+    const [modKey, idxStr] = k.split(':');
+    const slotIdx = parseInt(idxStr, 10);
+    const job = jobsForModule(modKey)[slotIdx];
+    if (!job) unassignSlot(modKey, slotIdx);
+  }
+  // Colons en 'travail' sans affectation → libres
+  for (const m of S.crew || []) {
+    if (m.statut === 'travail' && !memberAssignment(m.id)) m.statut = 'libre';
+  }
+}
+
 // Désaffecte un poste précis (utile si bâtiment supprimé/dégradé — pas encore d'usage)
 export function unassignSlot(modKey, slotIdx) {
   const k = jobKey(modKey, slotIdx);
@@ -1742,8 +1759,7 @@ export function startDiagnostic(memberId, statusIdx) {
     if (S.res[k] < cost[k]) { toast(`Ressources insuffisantes (${RES_LABELS[k]})`); return; }
   }
   for (const k in cost) S.res[k] -= cost[k];
-  doctor.statut = 'expedition';   // bloqué temporaire (réutilise le statut, géré dans render)
-  doctor.statut = 'libre';        // simplification : diagnostic instantané narratif
+  // Diagnostic instantané narratif — le médecin garde son statut et son poste.
 
   const success = rollDiagnostic(memberId, status.key, doctor);
   if (success) {
@@ -1884,6 +1900,22 @@ function memberDies(member, cause = 'cause inconnue') {
   notif.death(member.name, cause);
   // 0.18 — Trauma psy sur amis proches, baume pour les rivaux
   triggerGriefOnFriends(member);
+  // Purge des relations du défunt (après le deuil, qui lit les affinités)
+  if (S.relations) {
+    for (const k of Object.keys(S.relations)) {
+      const [a, b] = k.split('|');
+      if (a === member.id || b === member.id) delete S.relations[k];
+    }
+  }
+}
+
+// Quand un statut est retiré à l'index `removedIdx`, les traitements en cours
+// qui visaient un index supérieur doivent être décalés, sinon ils soignent
+// le mauvais statut (ou un statut inexistant → soin gaspillé).
+function _reindexTreatments(memberId, removedIdx) {
+  for (const t of S.treatments || []) {
+    if (t.memberId === memberId && t.statusIdx > removedIdx) t.statusIdx--;
+  }
 }
 
 // Fait évoluer les statuts d'un membre (appelé chaque tick)
@@ -1912,6 +1944,7 @@ export function progressMemberStatuts(member) {
 
     if (def.untreated.selfCure && elapsed >= def.untreated.afterMin) {
       member.statuts.splice(i, 1);
+      _reindexTreatments(member.id, i);
       log('neutral', `<em>${member.name}</em> guérit naturellement (${def.nom.toLowerCase()}).`);
       if (member.statut === 'infirmerie' && member.statuts.length === 0) {
         returnToBase(member);
@@ -1932,6 +1965,7 @@ export function progressMemberStatuts(member) {
       if (become === 'eclosion') {
         // Convertit en pathogene_alien
         member.statuts.splice(i, 1);
+        _reindexTreatments(member.id, i);
         inflictStatus(member, 'pathogene_alien', "éclosion parasitaire");
       }
     }
@@ -2638,7 +2672,14 @@ export function tickFamilyLife() {
   // — Naissances —
   for (const m of S.crew) {
     if (!m.grossesse || m.statut === 'mort') continue;
-    if ((now - (m.grossesse.debut || 0)) >= PREGNANCY_DURATION_MIN) _giveBirth(m);
+    if ((now - (m.grossesse.debut || 0)) >= PREGNANCY_DURATION_MIN) {
+      // Accouchement différé si la mère est absente ou si la colonie est
+      // pleine (la capacité a pu se remplir pendant les 9 mois).
+      if (m.statut === 'expedition' || m.statut === 'infirmerie' || m.statut === 'diplomatie') continue;
+      const usage = crewUsage();
+      if (usage.used >= usage.total) continue;
+      _giveBirth(m);
+    }
   }
 
   // — Majorité —
@@ -2676,7 +2717,7 @@ export function significantRelations(memberId) {
   if (!S.relations) return { friends: [], rivals: [] };
   const out = [];
   for (const m of (S.crew || [])) {
-    if (m.id === memberId) continue;
+    if (m.id === memberId || m.statut === 'mort') continue;
     const aff = affinityBetween(memberId, m.id);
     if (Math.abs(aff) >= REL_FRIEND) {
       out.push({ memberId: m.id, member: m, affinity: aff });
@@ -2852,6 +2893,9 @@ export function applyIncidentChoice(inc, choice, victim) {
     const mod = S.modules[inc.modKey];
     if (mod && mod.level > 1) {
       mod.level--;
+      // Libère le poste perdu avec le niveau, sinon son occupant devient
+      // un « fantôme » : bloqué en travail sur un slot qui n'existe plus.
+      unassignSlot(inc.modKey, mod.level);
       log('warn', `<em>${MODULES[inc.modKey].nom}</em> est endommagé : niveau ramené à ${mod.level}.`);
     } else if (mod && mod.level === 1) {
       log('warn', `<em>${MODULES[inc.modKey].nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`);
@@ -2995,8 +3039,8 @@ function hookIncidentModal() {
 }
 
 // Compatibilité : ancien rollColonyIncident remplacé par tickIncidents
-export function rollColonyIncident() {
-  tickIncidents(false);
+export function rollColonyIncident(silent = false) {
+  tickIncidents(silent);
 }
 
 // ============================================================
@@ -3971,14 +4015,19 @@ export function launchDiplomaticMission(factionId, memberId) {
   m.statut = 'diplomatie';
   if (!S.diplomaticMissions) S.diplomaticMissions = [];
   const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);
+  // Un Émissaire disponible escorte automatiquement la mission : c'est lui
+  // qui porte le bonus diplomatique ×1.5 (lu par completeDiplomaticMission).
+  const emissaire = S.fleet.find(v => v.type === 'emissaire' && v.available);
   S.diplomaticMissions.push({
     id: 'dipl_' + Date.now().toString(36),
     factionId,
     memberId,
     startedAt: S.meta.gameMin,
-    duration
+    duration,
+    vesselType: emissaire ? 'emissaire' : null
   });
-  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>. Retour dans ${fmtMin(duration)}.`);
+  const escortNote = emissaire ? ` Escorté(e) par l'Émissaire <em>${emissaire.name}</em> (bonus diplomatique ×1.5).` : '';
+  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>. Retour dans ${fmtMin(duration)}.${escortNote}`);
   render();
 }
 
@@ -4050,9 +4099,11 @@ function completeDiplomaticMission(mis) {
     const critLabel = isCrit ? ' ★ Succès exceptionnel.' : '';
     log('success', `<em>${member.name}</em> revient de mission diplomatique.${critLabel} <em>${faction.name}</em> : réputation +${gain}${multLabel}.${extraLog}`);
     member.moral = Math.min(100, member.moral + (isCrit ? 10 : 5));
-    // Progression compétence : légère montée si critique
-    if (isCrit && primaryScore < 5) {
-      member.skills[primarySkill] = Math.min(5, primaryScore + 0.1);
+    // Progression compétence : 10 % de chance de +1 sur un critique
+    // (entier — les décimaux cassaient l'affichage et la formation)
+    if (isCrit && primaryScore < 5 && Math.random() < 0.10) {
+      member.skills[primarySkill] = Math.min(5, Math.floor(primaryScore) + 1);
+      log('success', `<em>${member.name}</em> progresse en ${SKILL_LABELS[primarySkill]} (${member.skills[primarySkill]}).`);
     }
   } else {
     const malus = roll <= 2 ? -10 : (roll <= 4 ? -5 : 0);
@@ -4093,7 +4144,8 @@ function genVesselName(typeKey) {
     vedette:  ['Furet','Faucon','Aiguille','Gypaète','Effraie','Saiga','Vif'],
     navette:  ['Bouvreuil','Mousson','Cabestan','Rhéa','Albatros','Truite'],
     cargo:    ['Ourse','Mastodon','Kraken','Charrette','Bourdon','Wapiti'],
-    cuirasse: ['Sentinelle','Hégémon','Lance','Meute','Chambellan']
+    cuirasse: ['Sentinelle','Hégémon','Lance','Meute','Chambellan'],
+    emissaire:['Concorde','Olivier','Héraut','Legato','Pactole','Aparté']
   };
   const list = prefixes[typeKey] || ['Vaisseau'];
   const num = Math.floor(Math.random() * 89) + 11; // 11–99
@@ -4288,7 +4340,17 @@ export function tickExpeditions() {
   const completed = [];
   for (const exp of S.expeditions) {
     // On ne fait pas avancer le temps quand on attend un choix joueur
-    if (exp.phase === 'sur_place' && exp.awaitingChoice) continue;
+    if (exp.phase === 'sur_place' && exp.awaitingChoice) {
+      // Filet anti-softlock : si la scène attendue est introuvable
+      // (chronique désynchronisée, save corrompue…), on rentre au lieu
+      // de bloquer le vaisseau et l'équipage pour toujours.
+      if (!exp.combat?.active && !currentScene(exp)) {
+        exp.accumulatedLog.push("Séquence interrompue — retour au vaisseau.");
+        log('warn', `Expédition sur <em>${bodyOfExpedition(exp)?.name || '?'}</em> : scénario introuvable, l'équipe rentre.`);
+        startReturn(exp);
+      }
+      continue;
+    }
 
     exp.elapsedMin += MIN_PER_TICK;
     // Transitions de phase
@@ -4478,6 +4540,19 @@ export function currentScene(exp) {
   }
   if (exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
   const sceneId = exp.scenes[exp.sceneIdx];
+  // La scène d'intro de chronique est synthétique : elle n'existe dans aucun
+  // catalogue (launchExpedition ne stocke que les IDs), on la reconstruit ici.
+  if (sceneId === '__chron_intro__') {
+    const body = bodyOfExpedition(exp);
+    const ep = body ? currentChronicleEpisode(body) : null;
+    if (!ep) return null; // chronique désynchronisée — le filet de tickExpeditions gère
+    return {
+      id: '__chron_intro__',
+      tags: ['__chronicle_intro__'],
+      text: chronicleEpisodeIntro(body),
+      choices: [{ label: "Avancer", outcome: { log: '', next: ep.firstScene } }]
+    };
+  }
   // Chercher d'abord dans CHRONICLE_SCENES (pour les ID qui y sont)
   const cs = CHRONICLE_SCENES.find(s => s.id === sceneId);
   if (cs) return cs;
@@ -4563,6 +4638,26 @@ export function evaluateChoice(exp, choice) {
 }
 
 // Joue un choix : exécute l'outcome (avec jet de risque éventuel)
+// Filet de sécurité : si TOUS les choix d'une scène sont verrouillés pour
+// l'équipe présente (skills/items/ressources manquants), l'UI propose un
+// repli qui passe la scène au lieu de bloquer l'expédition.
+export function skipBlockedScene(expId) {
+  const exp = S.expeditions.find(e => e.id === expId);
+  if (!exp || !exp.awaitingChoice || exp.combat?.active) return;
+  const scene = currentScene(exp);
+  if (!scene) return;
+  const anyAvailable = scene.choices.some(c => evaluateChoice(exp, c).available);
+  if (anyAvailable) return; // pas un vrai blocage
+  exp.accumulatedLog.push("L'équipe se retire, faute de moyens d'agir ici.");
+  if (exp.chronicleSceneId) {
+    // Au milieu d'une chronique, on ne peut pas sauter : on rentre
+    startReturn(exp);
+    render();
+    return;
+  }
+  advanceScene(exp);
+}
+
 export function playChoice(expId, choiceIdx) {
   const exp = S.expeditions.find(e => e.id === expId);
   if (!exp || !exp.awaitingChoice) return;
@@ -5010,7 +5105,7 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
             } else {
               ally.hp = Math.max(0, ally.hp - effCtrDmg);
             }
-            if (ally.hp <= 0) ally.au_sol = true;
+            if (ally.hp <= 0) { ally.au_sol = true; ally.effects = []; }
             cbt.log.push(`↩ Contre-attaque de ${target.nom} : ${effCtrDmg} dégâts sur ${ally.name}${ally.hp <= 0 ? ' — à terre !' : '!'}`);
           } else {
             cbt.log.push(`↩ ${target.nom} tente une contre-attaque : manqué !`);
@@ -5030,16 +5125,18 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   }
   else if (action === 'heal') {
     if (ally.pa < 2) return;
-    const wounded = cbt.allies.filter(a => a.hp > 0 && a.hp < a.maxHp).sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
-    const healTarget = wounded[0] || ally;
+    const wounded = cbt.allies.filter(a => a.hp > 0 && !a.au_sol && a.hp < a.maxHp).sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
+    const healTarget = wounded[0];
+    if (!healTarget) { toast('Personne à soigner.'); return; }
     ally.pa -= 2;
-    const healAmt = 3 + ally.medecine * 2;
+    // Le kit apporte un vrai bonus (+4 PV) — il n'est plus gaspillé pour rien
+    const usedKit = _consumeCombatItem(exp, 'nanobots_reparation') || _consumeCombatItem(exp, 'kit_medical');
+    const healAmt = 3 + ally.medecine * 2 + (usedKit ? 4 : 0);
     healTarget.hp = Math.min(healTarget.maxHp, healTarget.hp + healAmt);
     // Restaure aussi le bouclier si partiellement entamé
     if (healTarget.maxShieldHp > 0 && healTarget.shieldHp < healTarget.maxShieldHp) {
       healTarget.shieldHp = Math.min(healTarget.maxShieldHp, healTarget.shieldHp + Math.floor(healAmt / 2));
     }
-    const usedKit = _consumeCombatItem(exp, 'nanobots_reparation') || _consumeCombatItem(exp, 'kit_medical');
     cbt.log.push(`${ally.name} soigne ${healTarget.name} : +${healAmt} PV${usedKit ? ' (kit utilisé)' : ''}.`);
   }
   else if (action === 'grenade') {
@@ -5098,6 +5195,17 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
     cbt.phase = 'ended';
     cbt.outcome = 'victory';
     cbt.log.push("🏆 Victoire ! Tous les ennemis neutralisés.");
+    resolveCombatEnd(exp);
+    render();
+    return;
+  }
+  // Défaite immédiate si tout le monde est tombé (ex. contre-attaque fatale
+  // sur le dernier allié debout) — sans ce check, le combat restait figé
+  // en phase joueur sans aucune action possible.
+  if (cbt.allies.every(a => a.hp <= 0 || a.au_sol)) {
+    cbt.phase = 'ended';
+    cbt.outcome = 'defeat';
+    cbt.log.push("💀 Défaite — toute l'équipe est à terre.");
     resolveCombatEnd(exp);
     render();
   }
@@ -5172,7 +5280,7 @@ function _processEnemyPhase(exp) {
         target.hp = Math.max(0, target.hp - effectiveDmg);
         cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${chargeNote}${target.hp <= 0 ? ' — à terre !' : '.'}`);
       }
-      if (target.hp <= 0) target.au_sol = true;
+      if (target.hp <= 0) { target.au_sol = true; target.effects = []; }
     } else {
       cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 ? 'esquivé !' : 'raté !'}`);
     }
@@ -5647,6 +5755,7 @@ function boot() {
   }
   
   try {
+    sanitizeAssignments();
     autoAssignAllFreeMembers();
   } catch (err) {
     console.error('[BOOT] Erreur autoAssign :', err);

@@ -2060,6 +2060,17 @@ nav.subtabs button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* Repli quand tous les choix sont verrouillés (anti-softlock) */
+.scene-choice.scene-skip {
+  border-style: dashed;
+  border-color: #5a4a2a;
+  color: var(--text-mute);
+  font-style: italic;
+}
+.scene-choice.scene-skip:hover {
+  border-color: var(--amber);
+  color: var(--text);
+}
 .scene-choice .req {
   display: block;
   font-family: var(--mono);

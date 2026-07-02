@@ -42,7 +42,7 @@ import {
   inflictStatus, bestAvailableDoctor,
   hangarBonuses, canBuildVessel, startVesselBuild,
   canLaunchExpedition, launchExpedition, abandonExpedition,
-  playChoice, currentScene, evaluateChoice,
+  playChoice, currentScene, evaluateChoice, skipBlockedScene,
   triggerIncident, applyIncidentChoice, applyColonyEventChoice,
   getArcState, isArcComplete, isStepComplete,
   factionStatus, adjustReputation, toggleFactionTrade,
@@ -840,7 +840,7 @@ function renderAssignPickerContent() {
       const a = memberAssignment(m.id);
       if (a) {
         const otherJob = jobsForModule(a.modKey)[a.slotIdx];
-        busy = `${MODULES[a.modKey].nom} · ${otherJob.label}`;
+        busy = otherJob ? `${MODULES[a.modKey]?.nom || a.modKey} · ${otherJob.label}` : 'travail';
       } else busy = 'travail';
     }
     // Score / statistique pertinente
@@ -2619,7 +2619,8 @@ function renderCombatOverlay(exp) {
   const hasKit = ((exp.equipment?.nanobots_reparation || 0) + (exp.equipment?.kit_medical || 0)) > 0;
   const aoeItem = ['mine_eclats', 'grenade_concussion', 'grenade_iem'].find(id => (exp.equipment?.[id] || 0) > 0);
   const aoeLabel = aoeItem ? (ITEMS[aoeItem]?.nom || aoeItem) : null;
-  const canHeal = ally && (ally.medecine > 0 || hasKit);
+  const hasWounded = cbt.allies.some(a => a.hp > 0 && !a.au_sol && a.hp < a.maxHp);
+  const canHeal = ally && hasWounded && (ally.medecine > 0 || hasKit);
   const hasDowned = cbt.allies.some(a => a.au_sol);
   const hasOtherAlly = ally && cbt.allies.some(a => a.id !== ally?.id && a.hp > 0 && !a.au_sol);
 
@@ -2629,7 +2630,13 @@ function renderCombatOverlay(exp) {
     const label = cbt.outcome === 'victory' ? 'Victoire !' : cbt.outcome === 'retreat' ? 'Retraite' : 'Défaite';
     actionsHTML = `<div class="cbt-ended">${icon} ${label}</div>`;
   } else if (!ally || ally.hp <= 0 || ally.au_sol) {
-    actionsHTML = `<div class="cbt-hint">Sélectionne un colon actif pour agir.</div>`;
+    // Garde toujours Fin de tour + Retraite accessibles, sinon l'écran
+    // devient une impasse quand plus aucun colon ne peut agir.
+    actionsHTML = `<div class="cbt-hint">Sélectionne un colon actif pour agir.</div>
+      <div class="cbt-turn-row">
+        <button class="cbt-end-turn" data-cbt-end-turn>Fin de tour →</button>
+        <button class="cbt-retreat" data-cbt-retreat>Retraite</button>
+      </div>`;
   } else {
     const attackLabel = ally.weaponType === 'ranged' || ally.weaponType === 'precision' ? 'Tirer' : 'Attaquer CAC';
     actionsHTML = `
@@ -2871,6 +2878,15 @@ function renderSceneOverlay() {
     </button>`;
   }).join('');
 
+  // Filet de sécurité : si TOUS les choix sont verrouillés pour cette équipe
+  // (skills/items/ressources manquants), on offre un repli — sinon softlock.
+  const allLocked = scene.choices.length > 0 && scene.choices.every(ch => !evaluateChoice(exp, ch).available);
+  const fallbackHTML = allLocked
+    ? `<button class="scene-choice scene-skip" data-scene-skip>
+         Se retirer — l'équipe n'a pas les moyens d'agir ici
+       </button>`
+    : '';
+
   // Équipage actif
   const teamHTML = exp.crewIds.map(id => {
     const m = S.crew.find(c => c.id === id);
@@ -2929,7 +2945,7 @@ function renderSceneOverlay() {
       <div class="sh-progress">${dots}</div>
     </div>
     <div class="scene-body">${text}</div>
-    <div class="scene-choices">${choicesHTML}</div>
+    <div class="scene-choices">${choicesHTML}${fallbackHTML}</div>
     <div class="scene-team">
       <h4>Équipage présent</h4>
       <div class="scene-team-list">${teamHTML}</div>
@@ -2957,6 +2973,12 @@ function renderSceneOverlay() {
         renderSceneOverlay();
       }
     });
+  });
+  $('#sceneInner').querySelector('button[data-scene-skip]')?.addEventListener('click', () => {
+    skipBlockedScene(_activeSceneExpId);
+    const exp = S.expeditions.find(e => e.id === _activeSceneExpId);
+    if (!exp || exp.phase !== 'sur_place') closeSceneOverlay();
+    else renderSceneOverlay();
   });
   $('#sceneInner').querySelectorAll('button[data-action-scene]').forEach(btn => {
     btn.addEventListener('click', () => {

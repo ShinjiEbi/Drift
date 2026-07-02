@@ -180,9 +180,13 @@ export const buildTime = (id, lvl) => MODULES[id].time(lvl) * BUILD_TIME_MULT;
 // Capacité équipage totale (utilisée plus tard)
 export function crewCap() {
   let c = 0;
+  const now = S.meta?.gameMin || 0;
   for (const id of Object.keys(S.modules)) {
     const def = MODULES[id]; const m = S.modules[id];
-    if (def?.capCrew) c += def.capCrew(m.level);
+    if (!def?.capCrew) continue;
+    // Un module de logement hors service n'héberge personne
+    if (m.disabledUntil && m.disabledUntil > now) continue;
+    c += def.capCrew(m.level);
   }
   return c;
 }
@@ -757,9 +761,10 @@ export function tickOnce(opts = {}) {
   for (const m of S.crew) {
     progressMemberStatuts(m);
   }
-  // Incidents — taux réduit en mode silencieux
+  // Incidents — taux réduit en mode silencieux, et flag silent propagé
+  // pour que les incidents à décision ne se déclenchent pas hors-ligne
   if (S.crew.length > 0 && S.modules.habitat) {
-    if (Math.random() < incidentRate) rollColonyIncident();
+    if (Math.random() < incidentRate) rollColonyIncident(silent);
   }
   // Scan toutes les 60 min jeu
   if (S.modules.antenne && tickCount % 60 === 0) {
@@ -807,21 +812,15 @@ export function tickOnce(opts = {}) {
   }
 
   // 0.28 : déclenchement différé d'incidents en chaîne
+  // Le ré-enfilement se fait TOUJOURS (même en catch-up silencieux), sinon
+  // les incidents chaînés dont l'échéance tombe hors-ligne sont perdus.
   if (Array.isArray(S.pendingChainIncidents) && S.pendingChainIncidents.length > 0) {
     const now = S.meta.gameMin || 0;
     const toTrigger = S.pendingChainIncidents.filter(p => p.triggerAt <= now);
     if (toTrigger.length > 0) {
       S.pendingChainIncidents = S.pendingChainIncidents.filter(p => p.triggerAt > now);
-      if (!silent) {
-        for (const t of toTrigger) {
-          try {
-            // Déclenche immédiatement l'incident — la fonction triggerIncident est dans app.js
-            // mais on n'a pas d'accès direct ici. On marque pour le prochain tick d'incidents.
-            S.queuedIncidents = S.queuedIncidents || [];
-            S.queuedIncidents.push(t.incidentId);
-          } catch(e) {}
-        }
-      }
+      S.queuedIncidents = S.queuedIncidents || [];
+      for (const t of toTrigger) S.queuedIncidents.push(t.incidentId);
     }
   }
 
@@ -962,6 +961,12 @@ export function load() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
+    // Ressources : backfill des clés manquantes ou corrompues (NaN sérialisé
+    // en null, ressource ajoutée après la création de la save…)
+    if (!data.res) data.res = {};
+    for (const k of RESOURCES) {
+      if (typeof data.res[k] !== 'number' || Number.isNaN(data.res[k])) data.res[k] = 0;
+    }
     // Migration douce : champs ajoutés en 0.2.0 / 0.3.0 / 0.4.0 / 0.5.0
     if (!data.crew) data.crew = [];
     if (!data.candidates) data.candidates = [];
@@ -1089,11 +1094,12 @@ export function importSave(file) {
     try {
       const data = JSON.parse(e.target.result);
       if (!data?.meta || !data?.res) throw new Error('Format invalide');
-      S = data;
-      save();
-      render();
-      toast('Sauvegarde restaurée');
-      log('neutral', 'Mémoire restaurée depuis archive externe.');
+      // On écrit la save brute puis on recharge la page : le boot repasse
+      // par load() et TOUTES ses migrations (champs ajoutés depuis la
+      // version d'origine du fichier). Assigner S directement les sautait.
+      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+      toast('Sauvegarde restaurée — rechargement…');
+      setTimeout(() => window.location.reload(), 600);
     } catch (err) {
       toast('Échec import : ' + err.message);
     }

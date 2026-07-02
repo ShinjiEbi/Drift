@@ -2,7 +2,7 @@
 // Stratégie : cache-first pour les assets statiques, network-first pour le reste.
 // La version doit être bumpée à chaque release pour invalider le cache.
 
-const VERSION = 'drift-v0.34.1';
+const VERSION = 'drift-v0.35.0';
 const CACHE_NAME = VERSION + '-cache';
 
 // Liste des assets à mettre en cache au démarrage
@@ -48,18 +48,23 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activation : nettoyer les vieux caches puis signaler la mise à jour aux clients
+// Activation : nettoyer les vieux caches puis signaler la mise à jour aux clients.
+// On ne notifie (→ reload côté client) QUE si d'anciens caches ont été remplacés :
+// à la toute première installation il n'y a rien à mettre à jour, recharger
+// la page fraîchement ouverte serait inutile et perturbant.
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
-      .then(() => self.clients.matchAll({ type: 'window' }))
-      .then((clients) => {
-        clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED', version: VERSION }));
+    caches.keys().then((keys) => {
+      const oldKeys = keys.filter((k) => k !== CACHE_NAME);
+      return Promise.all(oldKeys.map((k) => caches.delete(k))).then(() => oldKeys.length);
+    }).then((deletedCount) =>
+      self.clients.claim().then(() => {
+        if (deletedCount === 0) return;
+        return self.clients.matchAll({ type: 'window' }).then((clients) => {
+          clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED', version: VERSION }));
+        });
       })
+    )
   );
 });
 

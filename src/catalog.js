@@ -797,7 +797,7 @@ export const ITEMS = {
     nom: "Grenade IEM",
     type: 'weapon', origin: 'humain',
     desc: "Impulsion électromagnétique focalisée. Inutile contre la faune organique, devastatrice contre les machines et drones.",
-    combat: { aoe: true, damage: 2, machineBonus: 8, label: "+2 dégâts zone (+10 vs machines/drones)" }
+    combat: { aoe: true, damage: 2, machineBonus: 10, label: "+2 dégâts zone (+10 vs machines/drones)" }
   },
 
   // — Boucliers & armures —
@@ -877,7 +877,7 @@ export const BLUEPRINTS = {
   bp_voilure_cristal: {
     nom: "Schéma : Voilure cristalline",
     origin: 'alien_a', rarity: 3,
-    unlocks: { kind: 'tech', target: 'tech_solar_xeno', label: 'Générateur solaire VI' },
+    unlocks: { kind: 'tech', target: 'tech_voilure_cristal', label: 'Générateur solaire VI' },
     desc: "Géométrie de panneaux cristallins captant la lumière sous angles inconnus. Doublerait l'efficacité solaire."
   },
   bp_arme_resonance: {
@@ -903,7 +903,7 @@ export const BLUEPRINTS = {
   bp_culture_xeno: {
     nom: "Schéma : Culture xeno",
     origin: 'alien_b', rarity: 3,
-    unlocks: { kind: 'tech', target: 'tech_hydro_xeno', label: 'Hydroponie xeno' },
+    unlocks: { kind: 'tech', target: 'tech_culture_xeno', label: 'Hydroponie xeno' },
     desc: "Souches biologiques alien comestibles. Triple le rendement biomasse."
   },
 
@@ -2268,7 +2268,9 @@ export const SCENES = [
       { label: "Tenter de dégager à la chaleur", consume: { energie: 8 },
         risky: { stat: 'sangfroid', dc: 7,
           success: { loot: { datacubes: 12 }, log: "La chaleur révèle des détails troublants." },
-          fail:    { status: 'trauma_psy', target: 'random', log: "Sous la glace, quelque chose a bougé." } } }
+          fail:    { status: 'trauma_psy', target: 'random', log: "Sous la glace, quelque chose a bougé." } } },
+      { label: "Laisser la silhouette à sa glace",
+        outcome: { log: "L'équipe s'éloigne. Certaines choses méritent de rester enfouies." } }
     ]
   },
   {
@@ -2372,7 +2374,9 @@ export const SCENES = [
       { label: "Scanner au capteur xeno", req: { item: 'capteur_xeno' },
         outcome: { blueprint: 'alien_a', loot: { datacubes: 16, cristal: 20 }, log: "Vestige technologique fossilisé. Capté." } },
       { label: "Extraire avec précaution", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { cristal: 40, datacubes: 10 }, log: "Échantillons préservés." } }
+        outcome: { loot: { cristal: 40, datacubes: 10 }, log: "Échantillons préservés." } },
+      { label: "Prélever quelques éclats en surface",
+        outcome: { loot: { cristal: 12 }, log: "Sans expertise, l'équipe se contente des fragments accessibles." } }
     ]
   },
 
@@ -2834,7 +2838,9 @@ export const SCENES = [
       { label: "Prélever une poche entière", req: { skill: { key: 'medecine', min: 1 } },
         risky: { stat: 'dexterite', dc: 6,
           success: { blueprint: 'alien_b', loot: { biomasse: 20 }, log: "Prélèvement clinique." },
-          fail:    { status: 'pathogene_alien', target: 'random', log: "La poche s'est rompue au mauvais moment." } } }
+          fail:    { status: 'pathogene_alien', target: 'random', log: "La poche s'est rompue au mauvais moment." } } },
+      { label: "Reculer sans rien toucher",
+        outcome: { log: "Les spirales continuent de pulser doucement derrière l'équipe qui s'éloigne." } }
     ]
   },
   {
