@@ -142,6 +142,38 @@ try {
     try { app.startTreatment(pat.id, 0); } catch { threw = true; }
     return { refused: r.ok === false && /médecin/i.test(r.reason), noThrow: !threw, notCharged: S.res.biomasse === bio, noTreatment: S.treatments.length === 0 };
   });
+
+  // M9 — la contagion ne touche que les colons présents au même endroit
+  await scenario('M9 : contagion limitée au même lieu', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    const sick = mk({ statut: 'libre' });
+    sick.statuts = [{ key: 'infection', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    const diplo = mk({ statut: 'diplomatie' });
+    const exp1 = mk({ statut: 'expedition' });
+    const exp2 = mk({ statut: 'expedition' });
+    S.expeditions = [{ id: 'e_t', crewIds: [exp1.id, exp2.id], phase: 'aller', elapsedMin: 0, oneWayMin: 1e9, awaitingChoice: false }];
+    // Colons créés avant de figer Math.random (genCandidate en dépend)
+    const local = mk({ statut: 'mort' });
+    const other = mk({ statut: 'mort' });
+    const orig = Math.random;
+    Math.random = () => 0;                      // la contagion se déclenche à coup sûr
+    let r;
+    try {
+      app.progressMemberStatuts(sick);          // seuls des absents : personne n'est contaminé
+      const absentsSafe = diplo.statuts.length === 0 && exp1.statuts.length === 0 && exp2.statuts.length === 0;
+      local.statut = 'travail';
+      app.progressMemberStatuts(sick);
+      const localHit = local.statuts.some(s => s.key === 'infection');
+      // Porteur en expédition : seul son coéquipier peut être touché
+      sick.statuts = []; exp1.statuts = [{ key: 'infection', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+      other.statut = 'libre';
+      app.progressMemberStatuts(exp1);
+      r = { absentsSafe, localHit, teammateHit: exp2.statuts.some(s => s.key === 'infection'), baseSafe: other.statuts.length === 0 };
+    } finally { Math.random = orig; }
+    S.expeditions = [];
+    return r;
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

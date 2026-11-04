@@ -2007,6 +2007,22 @@ function memberDies(member, cause = 'cause inconnue') {
   triggerGriefOnFriends(member);
 }
 
+// Où se trouve physiquement un colon (pour la contagion) :
+// 'base', 'exp:<id>' pour l'équipage d'une même expédition, null s'il est isolé
+// (mission diplomatique) ou mort.
+function memberLocation(member) {
+  switch (member.statut) {
+    case 'libre': case 'travail': case 'infirmerie': case 'formation':
+      return 'base';
+    case 'expedition': {
+      const exp = (S.expeditions || []).find(e => (e.crewIds || []).includes(member.id));
+      return exp ? 'exp:' + exp.id : null;
+    }
+    default:
+      return null;
+  }
+}
+
 // Fait évoluer les statuts d'un membre (appelé chaque tick)
 export function progressMemberStatuts(member) {
   if (member.statut === 'mort') return;
@@ -2073,12 +2089,14 @@ export function progressMemberStatuts(member) {
     // Convertir taux/jour en taux/min
     const ratePerMin = rate / (24 * 60);
     if (Math.random() < ratePerMin * MIN_PER_TICK) {
-      // Tire une victime parmi les autres membres sains
-      const pool = S.crew.filter(m =>
+      // Tire une victime parmi les autres membres sains présents au même endroit
+      const here = memberLocation(member);
+      const pool = here ? S.crew.filter(m =>
         m.id !== member.id &&
         m.statut !== 'mort' &&
-        !m.statuts.some(ss => ss.key === s.key)
-      );
+        !(m.statuts || []).some(ss => ss.key === s.key) &&
+        memberLocation(m) === here
+      ) : [];
       if (pool.length > 0) {
         const victim = pool[Math.floor(Math.random() * pool.length)];
         inflictStatus(victim, s.key, `contagion depuis ${member.name}`);
