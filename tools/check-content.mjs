@@ -162,7 +162,7 @@ function verifierChaine(s, ctx, cadre, { label = false } = {}) {
     if (/\n/.test(s)) err(ctx, 'libellé sur plusieurs lignes');
   } else {
     for (const p of s.split(/\n[ \t]*\n/)) if (p.length > 900) err(ctx, `paragraphe trop long (${p.length} > 900 caractères) : couper en plusieurs paragraphes`);
-    if (/\*\*?\s/.test(s.replace(/\s\*\*?\s/g, ' ')) && /(^|\s)\*\s/.test(s)) avert(ctx, 'astérisque isolé : *italique* s\'écrit sans espace intérieure');
+    if ((s.match(/\*/g) || []).length % 2) avert(ctx, "astérisque isolé : l'italique s'écrit *ainsi* et le gras **ainsi**");
   }
 }
 

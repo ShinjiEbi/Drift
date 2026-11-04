@@ -402,7 +402,7 @@ export function meilleurPourTest(equipe, test) {
     const b = bonusTest(m, test);
     if (b > bonus) { best = m; bonus = b; }
   }
-  return { colon: best, bonus: best ? bonus : (test.carac ? 0 : 0) };
+  return { colon: best, bonus: best ? bonus : 0 };
 }
 
 // Probabilité de réussite d'un jet 1d10 + bonus ≥ difficulté

@@ -180,9 +180,9 @@ export default histoire({
       titre: 'Hadrien',
       texte: [
         "Hadrien parle lentement, comme s'il devait emprunter sa propre voix à quelqu'un d'autre :",
-        "*« Beta-4. Crash. Onze morts. Je suis le seul. Elle m'a... pris... pas mal. Doucement. Elle apprend. Elle est très lente. Très très lente.",
-        "Ne la nourrissez pas. Vous ne savez pas ce qu'elle deviendra.",
-        "Ne me sauvez pas. Je suis bien. C'est tard. »*",
+        "*« Beta-4. Crash. Onze morts. Je suis le seul. Elle m'a... pris... pas mal. Doucement. Elle apprend. Elle est très lente. Très très lente.*",
+        "*Ne la nourrissez pas. Vous ne savez pas ce qu'elle deviendra.*",
+        "*Ne me sauvez pas. Je suis bien. C'est tard. »*",
       ],
       choix: [
         {
