@@ -344,18 +344,39 @@ async function installBot(cfg) {
     }).filter(Boolean).sort((a, b) => a[1] - b[1]).map(([id]) => id);
     return [...new Set([...pick, ...rest])];
   }
+  // Avant une longue absence (fin de session), le joueur remplit la file avec les
+  // chantiers les plus longs qu'il peut payer, pour que le chantier tourne en son absence.
+  function awayAhead() {
+    if (!B.present(B.t + 300)) {
+      let a = 300;
+      while (a < 24 * H && !B.present(B.t + a)) a += 600;
+      return a;
+    }
+    return 0;
+  }
   function build() {
     const s = S();
     let guard = 0;
+    if (awayAhead() >= 3 * H) {
+      while (guard++ < 4 && (!s.build || (s.buildQueue || []).length < (st.BUILD_QUEUE_MAX || 3))) {
+        const ok = nextBuildCandidates().map(id => [id, st.canBuild(id)]).filter(([, r]) => r.ok).sort((a, b) => b[1].time - a[1].time);
+        if (!ok.length) break;
+        st.enqueueBuild(ok[0][0]); act('build', `${ok[0][0]}:${ok[0][1].nextLevel} (absence)`);
+      }
+      return;
+    }
     while (guard++ < 4 && (!s.build || (s.buildQueue || []).length < (st.BUILD_QUEUE_MAX || 3))) {
       let done = false;
       for (const id of nextBuildCandidates()) {
         const r = st.canBuild(id);
         if (r.ok) { st.enqueueBuild(id); act('build', `${id}:${r.nextLevel}`); done = true; break; }
         if (/Requiert|Niveau max|File|alien/.test(r.why)) continue;   // prérequis, ou datacubes alien (rapportés par l'exploration)
+        // Coût au-dessus du stockage actuel : il faut d'abord agrandir le stockage
+        const cost = cat.MODULES[id]?.cost(st.plannedLevel(id) + 1) || {};
+        const caps = st.capsAll();
+        if (Object.entries(cost).some(([k, v]) => caps[k] !== undefined && v > caps[k])) { inc('above_cap:' + id); continue; }
         // ressources insuffisantes : le joueur économise pour ce chantier
         inc('build_wait:' + r.why);
-        if (/biomasse|Biomasse/.test(r.why) && cat.MODULES[id]?.cost(st.plannedLevel(id) + 1)?.biomasse > st.capOf('biomasse')) { inc('wall:' + id); continue; }
         return;
       }
       if (!done) return;
