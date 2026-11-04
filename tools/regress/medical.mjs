@@ -120,6 +120,20 @@ try {
       canTreatSays: app.canTreat(pat.id, 0).reason === 'Traitement déjà en cours'
     };
   });
+
+  // M4 — sans médecin, un soin bénin est refusé sans rien débiter
+  await scenario('M4 : soin refusé sans médecin, biomasse intacte', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 1 };
+    const pat = mk({ statut: 'infirmerie' });
+    pat.statuts = [{ key: 'blessure_legere', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    const bio = S.res.biomasse;
+    const r = app.canTreat(pat.id, 0);
+    let threw = false;
+    try { app.startTreatment(pat.id, 0); } catch { threw = true; }
+    return { refused: r.ok === false && /médecin/i.test(r.reason), noThrow: !threw, notCharged: S.res.biomasse === bio, noTreatment: S.treatments.length === 0 };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

@@ -1847,7 +1847,9 @@ export function canTreat(memberId, statusRef) {
   const tdef = TREATMENTS[status.key]?.[0];
   if (!tdef) return { ok:false, reason:"Aucun traitement disponible" };
   const doctor = bestAvailableDoctor();
-  if ((doctor?.skills.medecine || 0) < tdef.requiresMedSkill) {
+  // Même un soin bénin (requiresMedSkill 0) demande quelqu'un pour le prodiguer
+  if (!doctor) return { ok:false, reason:"Aucun médecin disponible" };
+  if ((doctor.skills.medecine || 0) < tdef.requiresMedSkill) {
     return { ok:false, reason:`Médecin avec Médecine ≥ ${tdef.requiresMedSkill} requis` };
   }
   for (const k in tdef.cost) {
@@ -1861,20 +1863,20 @@ export function startTreatment(memberId, statusRef) {
   const r = canTreat(memberId, statusRef);
   if (!r.ok) { toast(r.reason); return; }
   const member = S.crew.find(m => m.id === memberId);
-  // Débite ressources
-  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   // Modifie durée selon skill du médecin et trait Médecin né
   let duration = r.treatment.durationMin;
   const medSkill = r.doctor.skills.medecine || 0;
   duration *= Math.max(0.5, 1 - (medSkill - r.treatment.requiresMedSkill) * 0.1);
-  if (r.doctor.traits.includes('medic_ne')) duration *= 0.75;
+  if ((r.doctor.traits || []).includes('medic_ne')) duration *= 0.75;
   // Bonus du staff de l'infirmerie (Spécialiste, Infirmier, etc.)
   const bonuses = infirmaryBonuses();
   duration *= bonuses.speedMult;
-  if (bonuses.traitMedecinNe && !r.doctor.traits.includes('medic_ne')) duration *= 0.85;
+  if (bonuses.traitMedecinNe && !(r.doctor.traits || []).includes('medic_ne')) duration *= 0.85;
   // Bonus de tech (pharmacopée)
   duration *= techEffectsAccumulated().treatmentSpeedMult;
   duration = Math.round(duration);
+  // Débite les ressources une fois tous les calculs faits (rien n'est perdu en cas d'erreur)
+  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   S.treatments.push({
     id: 'tr_' + Date.now().toString(36),
     memberId,
