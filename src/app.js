@@ -477,9 +477,12 @@ export function addBlueprintToInventory(bpId, source) {
 // origins: 'humain' | 'alien_a' | 'alien_b' | 'fusion'
 // rng: PRNG seedé
 function rollBlueprint(originPool, rng = Math.random) {
+  const pool = [].concat(originPool || []);
+  // Les schémas légendaires et les récompenses d'arc ne tombent jamais au hasard
+  const arcRewards = new Set(Object.values(ARCS).filter(a => a.reward?.kind === 'blueprint').map(a => a.reward.value));
   const candidates = Object.keys(BLUEPRINTS).filter(id => {
     const bp = BLUEPRINTS[id];
-    return originPool.includes(bp.origin);
+    return pool.includes(bp.origin) && !bp.legendary && !arcRewards.has(id);
   });
   if (candidates.length === 0) return null;
   // Pondération par rareté inverse : commun = poids 4, peu commun = 3, rare = 2, très rare = 1
