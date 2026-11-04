@@ -66,10 +66,10 @@ const flushErrors = label => {
 };
 
 async function clickAllTabs() {
-  for (const t of ['overview', 'modules', 'crew', 'galaxy', 'stocks', 'arcs', 'journal']) {
+  for (const t of ['base', 'equipage', 'expeditions', 'recits', 'labo']) {
     await page.click(`nav.tabs button[data-tab="${t}"]`, { force: true });
     await page.waitForTimeout(150);
-    const subs = await page.$$(`#view-${t} [data-subtab], #view-${t} [data-subtab-mod], #view-${t} [data-subtab-galaxy], #view-${t} [data-subtab-stocks]`);
+    const subs = await page.$$(`#view-${t} [data-subtab]`);
     for (const s of subs) {
       if (await s.isDisabled()) continue;
       await s.click({ force: true });
