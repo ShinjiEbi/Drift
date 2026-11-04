@@ -28,7 +28,7 @@
 
 // @generated-start — tools/sw-version.mjs (npm run sw:write)
 const APP_VERSION = '0.33.0';
-const CONTENT_HASH = 'ec48de45a78d';
+const CONTENT_HASH = '84963b38c27e';
 const PRECACHE_URLS = [
   './index.html',
   './favicon.ico',
@@ -62,6 +62,12 @@ const PRECACHE_URLS = [
   './src/chronicles.js',
   './src/constants.js',
   './src/content/dsl.js',
+  './src/content/histoires/anneau-trace.js',
+  './src/content/histoires/couvee-dormante.js',
+  './src/content/histoires/marche-etrange.js',
+  './src/content/histoires/pulsar-silencieux.js',
+  './src/content/histoires/sanctuaire-vert.js',
+  './src/content/histoires/veilleurs-beth.js',
   './src/content/index.js',
   './src/content/scenes/anomalies-signaux.js',
   './src/content/scenes/arrivees-departs.js',

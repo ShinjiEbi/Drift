@@ -4,6 +4,14 @@
 // tools/check-content.mjs signale un fichier de src/content/ oublié.
 // Données pures : ce module n'importe que des fichiers de contenu.
 
+// ---- Histoires (chroniques planétaires), un fichier par histoire ----
+import pulsarSilencieux from './histoires/pulsar-silencieux.js';
+import sanctuaireVert from './histoires/sanctuaire-vert.js';
+import couveeDormante from './histoires/couvee-dormante.js';
+import anneauTrace from './histoires/anneau-trace.js';
+import veilleursBeth from './histoires/veilleurs-beth.js';
+import marcheEtrange from './histoires/marche-etrange.js';
+
 // ---- Scènes d'expédition génériques, par lieu ou thème ----
 import arriveesDeparts from './scenes/arrivees-departs.js';
 import ruinesHumaines from './scenes/ruines-humaines.js';
@@ -21,7 +29,7 @@ import haltes from './scenes/haltes.js';
 const parId = list => Object.fromEntries(list.map(x => [x.id, x]));
 
 // Histoires par id (l'ordre de la liste est l'ordre d'affichage par défaut)
-export const HISTOIRES = parId([]);
+export const HISTOIRES = parId([pulsarSilencieux, sanctuaireVert, couveeDormante, anneauTrace, veilleursBeth, marcheEtrange]);
 
 // Scènes d'expédition (tableau : catalog.js le réexporte sous le nom SCENES)
 export const SCENES = [
