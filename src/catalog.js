@@ -791,7 +791,7 @@ export const ITEMS = {
     nom: "Grenade à concussion",
     type: 'weapon', origin: 'humain',
     desc: "Onde de choc concentrée. Étourdit plusieurs cibles simultanément, les rendant moins réactives pendant un round.",
-    combat: { aoe: true, damage: 3, stun: 1, label: "+3 dégâts zone, étourdit (−1 PA round suivant)" }
+    combat: { aoe: true, damage: 3, stun: 1, label: "+3 dégâts zone, étourdit (saute sa prochaine attaque)" }
   },
   grenade_iem: {
     nom: "Grenade IEM",
@@ -3007,36 +3007,39 @@ export const TRAITS = {
 //   TYPES D'ENNEMIS — COMBAT AU TOUR PAR TOUR (0.31)
 // ============================================================
 // hp: points de vie | armor: réduction dégâts | damage: [min, max] | accuracy: % touché
-// pa: points d'action par tour (usage interne) | loot: récompense si victoire
+// pa: indicatif, non utilisé (chaque ennemi attaque une fois par round)
+// loot: ressources (metal, cristal, energie, biomasse, datacubes) si victoire
+// 0.32.1 — Équilibrage : PV relevés, dégâts/précision légèrement abaissés, pour des
+// combats de 3–4 rounds en moyenne (équipe de 3) sans hausse de la létalité.
 
 export const ENEMY_TYPES = {
   // — Faune —
-  predateur_lunaire:  { nom: "Prédateur lunaire",    category: 'faune',   hp: 14, armor: 1, damage: [2, 5], accuracy: 65, pa: 2, loot: { biomasse: 8 } },
-  meute_rapaces:      { nom: "Meute de rapaces",      category: 'faune',   hp:  8, armor: 0, damage: [1, 3], accuracy: 70, pa: 3, loot: { biomasse: 4 } },
-  predateur_alpha:    { nom: "Prédateur alpha",        category: 'faune',   hp: 22, armor: 2, damage: [3, 7], accuracy: 60, pa: 2, loot: { biomasse: 18 } },
-  drone_bio:          { nom: "Drone biologique",       category: 'faune',   hp: 12, armor: 1, damage: [2, 5], accuracy: 72, pa: 3, loot: { biomasse: 10 } },
+  predateur_lunaire:  { nom: "Prédateur lunaire",    category: 'faune',   hp: 26, armor: 1, damage: [2, 4], accuracy: 60, pa: 2, loot: { biomasse: 8 } },
+  meute_rapaces:      { nom: "Meute de rapaces",      category: 'faune',   hp: 13, armor: 0, damage: [1, 3], accuracy: 62, pa: 3, loot: { biomasse: 4 } },
+  predateur_alpha:    { nom: "Prédateur alpha",        category: 'faune',   hp: 32, armor: 2, damage: [3, 6], accuracy: 58, pa: 2, loot: { biomasse: 18 } },
+  drone_bio:          { nom: "Drone biologique",       category: 'faune',   hp: 18, armor: 1, damage: [2, 4], accuracy: 66, pa: 3, loot: { biomasse: 10 } },
 
   // — Machines / Gardiens —
-  drone_gardien:      { nom: "Drone gardien",          category: 'machine', hp: 16, armor: 4, damage: [2, 6], accuracy: 75, pa: 2,
-    loot: { metal: 12, composants: 5 }, itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }] },
-  gardien_antique:    { nom: "Gardien antique",         category: 'machine', hp: 26, armor: 6, damage: [3, 8], accuracy: 65, pa: 2,
+  drone_gardien:      { nom: "Drone gardien",          category: 'machine', hp: 22, armor: 3, damage: [2, 5], accuracy: 68, pa: 2,
+    loot: { metal: 15, cristal: 2 }, itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }] },
+  gardien_antique:    { nom: "Gardien antique",         category: 'machine', hp: 30, armor: 6, damage: [3, 7], accuracy: 62, pa: 2,
     loot: { metal: 25, cristal: 10 }, itemLoot: [{ item: 'grenade_iem', chance: 0.30 }, { item: 'bouclier_cinetique', chance: 0.15 }] },
-  sentinelle_alien:   { nom: "Sentinelle alien",        category: 'machine', hp: 18, armor: 3, damage: [3, 7], accuracy: 70, pa: 2,
+  sentinelle_alien:   { nom: "Sentinelle alien",        category: 'machine', hp: 20, armor: 3, damage: [2, 6], accuracy: 64, pa: 2,
     loot: { cristal: 8, datacubes: 4 }, itemLoot: [{ item: 'canon_ionique', chance: 0.10 }] },
 
   // — Xénoformes —
-  xenoforme_alpha:    { nom: "Xénoforme α",            category: 'alien',   hp: 18, armor: 2, damage: [2, 6], accuracy: 65, pa: 2,
+  xenoforme_alpha:    { nom: "Xénoforme α",            category: 'alien',   hp: 28, armor: 2, damage: [2, 5], accuracy: 62, pa: 2,
     loot: { cristal: 10, datacubes: 4 }, itemLoot: [{ item: 'bouclier_refractant', chance: 0.08 }] },
-  xenoforme_reine:    { nom: "Reine xénoforme",         category: 'alien',   hp: 32, armor: 3, damage: [4,10], accuracy: 60, pa: 2,
+  xenoforme_reine:    { nom: "Reine xénoforme",         category: 'alien',   hp: 36, armor: 3, damage: [3, 7], accuracy: 60, pa: 2,
     loot: { cristal: 20, datacubes: 10 }, itemLoot: [{ item: 'bouclier_refractant', chance: 0.25 }, { item: 'canon_ionique', chance: 0.12 }] },
-  spore_toxique:      { nom: "Spore toxique",           category: 'alien',   hp:  6, armor: 0, damage: [1, 2], accuracy: 80, pa: 3, loot: { biomasse: 6 } },
+  spore_toxique:      { nom: "Spore toxique",           category: 'alien',   hp:  7, armor: 0, damage: [1, 2], accuracy: 75, pa: 3, loot: { biomasse: 6 } },
 
   // — Humains hostiles —
-  pillard:            { nom: "Pillard",                 category: 'humain',  hp: 10, armor: 2, damage: [2, 5], accuracy: 70, pa: 2,
+  pillard:            { nom: "Pillard",                 category: 'humain',  hp: 16, armor: 2, damage: [2, 4], accuracy: 64, pa: 2,
     loot: { metal: 8, biomasse: 5 }, itemLoot: [{ item: 'matraque_securite', chance: 0.25 }, { item: 'pistolet_plasma', chance: 0.15 }] },
-  mercenaire:         { nom: "Mercenaire",              category: 'humain',  hp: 14, armor: 3, damage: [3, 6], accuracy: 75, pa: 2,
+  mercenaire:         { nom: "Mercenaire",              category: 'humain',  hp: 18, armor: 3, damage: [2, 5], accuracy: 68, pa: 2,
     loot: { metal: 15, biomasse: 3 }, itemLoot: [{ item: 'fusil_assault', chance: 0.20 }, { item: 'bouclier_cinetique', chance: 0.18 }] },
-  garde_elite:        { nom: "Garde d'élite",           category: 'humain',  hp: 18, armor: 4, damage: [3, 7], accuracy: 80, pa: 2,
+  garde_elite:        { nom: "Garde d'élite",           category: 'humain',  hp: 22, armor: 4, damage: [3, 6], accuracy: 70, pa: 2,
     loot: { metal: 20 }, itemLoot: [{ item: 'fusil_precision', chance: 0.15 }, { item: 'armure_exo', chance: 0.12 }, { item: 'bouclier_energetique', chance: 0.12 }] },
 };
 
@@ -3065,9 +3068,9 @@ const COMBAT_SCENES = [
     weight: 3,
     text: "Une sphère métallique descend du plafond en ronronnant. Son œil rouge balaie la salle. Protocole de sécurité encore actif après des siècles.",
     choices: [
-      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 15, composants: 8 }, onDefeat: 'retreat' } } },
+      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 20, cristal: 3 }, onDefeat: 'retreat' } } },
       { label: "Pirater le protocole", req: { skill: { key: 'ingenierie', min: 3 } },
-        outcome: { loot: { metal: 20, composants: 10 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
+        outcome: { loot: { metal: 25, cristal: 5 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
       { label: "Contourner en silence", risky: { stat: 'dexterite', dc: 6,
           success: { log: "Le drone ne détecte rien. Passage libre." },
           fail:    { combat: { enemies: ['drone_gardien', 'drone_gardien'], lootOnWin: { metal: 20 }, onDefeat: 'retreat' } } } }
@@ -3075,7 +3078,7 @@ const COMBAT_SCENES = [
   },
   {
     id: 'combat_xenoforme',
-    tags: ['alien', 'faune'],
+    tags: ['ruines_alien_a', 'ruines_alien_b'],
     weight: 2,
     text: "Quelque chose surgit des parois cristallines — pas une créature familière. Des appendices translucides, une bioluminescence pulsante, et une agressivité immédiate.",
     choices: [
@@ -3096,7 +3099,79 @@ const COMBAT_SCENES = [
         outcome: { loot: { biomasse: 30 }, log: "Les flammes forment un mur. La meute recule et se disperse." } },
       { label: "Se replier en courant", risky: { stat: 'dexterite', dc: 5,
           success: { log: "L'équipe distance la meute. Course serrée." },
-          fail:    { status: 'blessure_legere', morale: -2, log: "Un membre est rattrapé et mordu avant de s'échapper." } } }
+          fail:    { combat: { enemies: ['predateur_alpha'], lootOnWin: { biomasse: 20 }, onDefeat: 'retreat' },
+                     log: "Le chef de meute coupe la retraite. Il faudra passer sur lui." } } }
+    ]
+  },
+  // 0.32.1 — Scènes de combat pour les ennemis jusqu'ici jamais rencontrés
+  {
+    id: 'combat_sentinelles',
+    tags: ['ruines_alien_a', 'ia_hostile'],
+    weight: 2,
+    text: "Une colonne de cristal se déplie en silence au milieu du couloir. Des faisceaux violets balaient le sol à hauteur de cheville : une sentinelle, toujours fidèle à un ordre vieux de plusieurs millénaires. Une seconde dort encore dans l'alcôve d'en face.",
+    choices: [
+      { label: "Abattre la sentinelle éveillée", outcome: { combat: { enemies: ['sentinelle_alien'], lootOnWin: { cristal: 10, datacubes: 4 }, onDefeat: 'retreat' } } },
+      { label: "Accorder le résonateur harmonique", req: { item: 'resonateur_harmonique' },
+        outcome: { loot: { cristal: 12, datacubes: 6 }, log: "Les faisceaux vacillent puis s'éteignent. La sentinelle se replie dans sa gangue." } },
+      { label: "Se glisser entre les faisceaux", risky: { stat: 'dexterite', dc: 7,
+          success: { log: "Un pas, puis un autre. Les faisceaux passent à un souffle des combinaisons." },
+          fail:    { combat: { enemies: ['sentinelle_alien', 'sentinelle_alien'], lootOnWin: { cristal: 16, datacubes: 6 }, onDefeat: 'retreat' },
+                     log: "Un faisceau accroche une épaule. L'alcôve d'en face s'illumine à son tour." } } }
+    ]
+  },
+  {
+    id: 'combat_gardien_antique',
+    tags: ['station', 'epave', 'ia_hostile'],
+    weight: 2,
+    text: "Au fond de la soute, une masse de métal piquée de rouille se déplie en grinçant : un automate de sécurité d'avant l'Effondrement. Trois mètres de blindage, et un protocole d'alerte que personne n'a jamais levé.",
+    choices: [
+      { label: "Affronter le gardien", outcome: { combat: { enemies: ['gardien_antique'], lootOnWin: { metal: 20, datacubes: 4 }, onDefeat: 'retreat' } } },
+      { label: "Couper son alimentation", req: { skill: { key: 'ingenierie', min: 4 } },
+        outcome: { loot: { metal: 30, energie: 10 }, log: "Un panneau d'accès, deux câbles sectionnés. Le colosse se fige en plein geste." } },
+      { label: "Rebrousser chemin", outcome: { log: "L'équipe recule. L'automate ne franchit pas le seuil de la soute." } }
+    ]
+  },
+  {
+    id: 'combat_nid_xenoforme',
+    tags: ['ruines_alien_b', 'pathogene'],
+    weight: 1,
+    text: "La galerie débouche sur une chambre tiède, tapissée de membranes. Des sacs translucides palpitent au plafond. Au centre, quelque chose de grand se redresse lentement — la reine du nid, entourée de spores qui flottent comme une neige lourde.",
+    choices: [
+      { label: "Attaquer la reine", outcome: { combat: { enemies: ['xenoforme_reine', 'spore_toxique', 'spore_toxique'], lootOnWin: { cristal: 15, datacubes: 8, biomasse: 15 }, onDefeat: 'retreat' } } },
+      { label: "Incendier le nid", req: { item: 'lance_flammes' },
+        outcome: { loot: { biomasse: 25, datacubes: 4 }, log: "Les membranes s'embrasent d'un coup. Ce qui reste du nid se rétracte en sifflant." } },
+      { label: "Reculer sans un bruit", risky: { stat: 'dexterite', dc: 6,
+          success: { log: "Pas à pas, l'équipe regagne la galerie. Rien ne la suit." },
+          fail:    { combat: { enemies: ['spore_toxique', 'spore_toxique', 'xenoforme_alpha'], lootOnWin: { biomasse: 10, cristal: 6 }, onDefeat: 'retreat' },
+                     log: "Une botte glisse sur une membrane. Les gardiens du nid se jettent sur l'équipe." } } }
+    ]
+  },
+  {
+    id: 'combat_drones_bio',
+    tags: ['ruines_alien_b', 'flore_agressive'],
+    weight: 2,
+    text: "Un bourdonnement grave monte des frondaisons. Deux formes ailées, mi-insectes mi-graines, se détachent de la canopée et piquent droit sur l'équipe : des drones biologiques, cultivés pour défendre ce lieu.",
+    choices: [
+      { label: "Les abattre en vol", outcome: { combat: { enemies: ['drone_bio', 'drone_bio'], lootOnWin: { biomasse: 15, datacubes: 3 }, onDefeat: 'retreat' } } },
+      { label: "Les dissoudre aux enzymes", consume: { item: 'enzymes_dissolution' },
+        outcome: { loot: { biomasse: 20, datacubes: 4 }, log: "Le nuage d'enzymes les prend de plein fouet. Ils retombent en pluie de fibres." } },
+      { label: "Se fondre dans la végétation", risky: { stat: 'dexterite', dc: 6,
+          success: { log: "Immobiles sous les feuilles, les colons laissent passer l'essaim." },
+          fail:    { status: 'blessure_legere', log: "Un dard traverse une combinaison avant que l'équipe ne disparaisse sous le couvert." } } }
+    ]
+  },
+  {
+    id: 'combat_signal_piege',
+    tags: ['signal_sos'],
+    weight: 2,
+    text: "La balise de détresse émet toujours, mais le site autour d'elle est trop propre. Une silhouette en armure lourde émerge des abris, arme levée ; d'autres bougent plus loin. Le signal était un appât, et l'équipe vient d'y mordre.",
+    choices: [
+      { label: "Forcer le passage", outcome: { combat: { enemies: ['garde_elite'], lootOnWin: { metal: 20, energie: 10 }, onDefeat: 'retreat' } } },
+      { label: "Parlementer", risky: { stat: 'charisme', dc: 7,
+          success: { log: "Le chef de bande hésite, puis abaisse son arme : un équipage qui ne cherche pas d'ennuis vaut mieux vivant." },
+          fail:    { combat: { enemies: ['garde_elite', 'mercenaire'], lootOnWin: { metal: 25, energie: 10 }, onDefeat: 'retreat' },
+                     log: "Les négociations tournent court." } } },
+      { label: "Battre en retraite", outcome: { retreat: true, log: "Demi-tour immédiat vers le vaisseau. Le piège se referme sur du vide." } }
     ]
   }
 ];

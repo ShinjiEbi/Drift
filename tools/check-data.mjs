@@ -129,6 +129,23 @@ for (const [id, e] of Object.entries(ENEMY_TYPES)) {
   checkRes(e.loot, `ENEMY_TYPES.${id}.loot`);
   for (const l of e.itemLoot || []) if (!ALL_ITEMS.has(l.item)) err(`ENEMY_TYPES.${id}.itemLoot`, `item inconnu « ${l.item} »`);
 }
+{
+  // Chaque ennemi doit pouvoir être rencontré : au moins une scène le fait combattre
+  const met = new Set();
+  const collect = o => { for (const e of (o && o.combat?.enemies) || []) met.add(e); };
+  for (const s of [...SCENES, ...CHRONICLE_SCENES]) for (const c of s.choices || []) { collect(c.outcome); collect(c.risky?.success); collect(c.risky?.fail); }
+  for (const id of Object.keys(ENEMY_TYPES)) if (!met.has(id)) err(`ENEMY_TYPES.${id}`, 'jamais rencontré (aucune scène ne lance de combat contre lui)');
+}
+
+// ---- Types de factions ----
+for (const [id, ft] of Object.entries(DAF.FACTION_TYPES)) {
+  for (const k of ['missionSkill', 'missionReqSkill']) if (ft[k] && !SKILLS.has(ft[k])) err(`FACTION_TYPES.${id}.${k}`, `compétence inconnue « ${ft[k]} »`);
+  if (ft.missionReqAlt && !SKILLS.has(ft.missionReqAlt.skill)) err(`FACTION_TYPES.${id}.missionReqAlt`, `compétence inconnue « ${ft.missionReqAlt.skill} »`);
+  checkRes(ft.tradeOffer, `FACTION_TYPES.${id}.tradeOffer`);
+  checkRes(ft.tradeAsk, `FACTION_TYPES.${id}.tradeAsk`);
+  for (const g of ft.giftOptions || []) if (!RESOURCES.has(g.resource)) err(`FACTION_TYPES.${id}.giftOptions`, `ressource inconnue « ${g.resource} »`);
+  if (ft.allianceGift && !RESOURCES.has(ft.allianceGift.resource)) err(`FACTION_TYPES.${id}.allianceGift`, `ressource inconnue « ${ft.allianceGift.resource} »`);
+}
 
 // ---- Scènes d'expédition et de chronique ----
 const allScenes = [...SCENES.map(s => ['SCENES', s]), ...CHRONICLE_SCENES.map(s => ['CHRONICLE_SCENES', s])];
