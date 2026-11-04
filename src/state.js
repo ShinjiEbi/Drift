@@ -6,7 +6,7 @@
 import { VERSION, SAVE_KEY, SAVE_SCHEMA_VERSION, SAVE_BACKUP_MAX, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
 import { MODULES, MODULE_JOBS, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE } from './catalog.js';
 import { rngFor, rPick, rWeighted, rInt, fmtMin, esc } from './util.js';
-import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember } from './app.js';
+import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
 import { notif } from './notifications.js';
 
@@ -1314,6 +1314,9 @@ function normalizePerson(p) {
 }
 
 function normalizeCrew(d) {
+  // Personnages de chronique créés par une version ≤ 0.32 : leur origine vient de
+  // leur chronique. À faire avant normalizePerson, qui poserait une origine générique.
+  try { normalizeChronicleRecruits(d); } catch (e) { console.warn('[MIGRATION] Recrues de chronique :', e); }
   d.crew = d.crew.filter(normalizePerson);
   d.candidates = d.candidates.filter(normalizePerson);
   const gm = d.meta.gameMin;

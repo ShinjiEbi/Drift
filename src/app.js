@@ -4986,7 +4986,9 @@ export function normalizeChronicleRecruits(state = S) {
     if (!p.origin || typeof p.origin !== 'object' || !p.origin.label) {
       const chronId = p.chronicleOrigin;
       const def = chronId ? CHRONICLES[chronId]?.characters?.[p.chronicleCharacter] : null;
-      p.origin = chronId ? chronicleOriginOf(chronId, def) : { id: 'inconnue', label: 'Origine inconnue', notes: '' };
+      // Un faux trait « chronique_x » suffit à reconnaître un personnage de chronique,
+      // même si sa chronique d'origine n'a pas été enregistrée.
+      p.origin = (chronId || p.chronicleCharacter) ? chronicleOriginOf(chronId, def) : { id: 'inconnue', label: 'Origine inconnue', notes: '' };
       delete p.origine;
     }
     if (!p.stats) p.stats = { vigueur: 5, dexterite: 5, intellect: 5, sangfroid: 5, charisme: 5 };
