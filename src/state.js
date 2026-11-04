@@ -110,6 +110,11 @@ export function freshState() {
     fabrication: [],        // [{ id, fabId, totalMin, doneMin, startedAt }]
     // 0.18 — relations sociales : { "id1|id2": affinity }
     relations: {},
+    // V1 — mémoire du moteur narratif : scènes vues, compteurs et faits du monde
+    // (conditions « compteur.x », « monde.x » du contenu)
+    scenesVues: {},
+    compteurs: {},
+    monde: {},
     // 0.19 — cooldowns événements de colonie
     nextEventMin: PACING.EVENT_FIRST,
     lastHommageMin: -99999,
@@ -789,6 +794,25 @@ export function gaussInt(mean=5, sd=1.5, min=1, max=10) {
   return Math.max(min, Math.min(max, Math.round(mean + z * sd)));
 }
 
+// Pronoms d'après le prénom : le contenu narratif accorde ses textes
+// ({acteur|il|elle}, {acteur.e}). Prénom mixte : tirage ; prénom inconnu
+// (renommé, personnage importé) : rien, le texte prend la forme neutre.
+const PRENOMS_FEMININS = new Set(['Faustine','Garance','Iris','Léa','Noémie','Pauline','Romane','Violette','Zoé','Adèle','Bérénice','Diane','Élodie','Margaux','Salomé',
+  'Anastasia','Daria','Elena','Galina','Larissa','Marina','Natasha','Polina','Svetlana','Tatiana',
+  'Aiko','Mei','Naoko','Saya','Yui','Dalia','Layla','Mariam','Nadia','Rania','Yasmin',
+  'Adwoa','Chiamaka','Folake','Makena','Nkechi','Sade','Wanjiru','Zola','Aïssata',
+  'Astrid','Elin','Freya','Inger','Ragnhild','Tove','Ulla','Linnea',
+  'Adriana','Camila','Inés','Renata','Soledad','Valeria','Anjali','Devika','Indira','Kavita','Priya','Tara']);
+const PRENOMS_MIXTES = new Set(['Camille','Ren','Yuki','Akira','Sora','Mirai','Noor']);
+export const PRONOMS = ['il', 'elle', 'iel'];
+export function pronomsPour(name) {
+  const first = String(name || '').trim().split(/\s+/)[0];
+  if (PRENOMS_MIXTES.has(first)) return Math.random() < 0.5 ? 'il' : 'elle';
+  if (PRENOMS_FEMININS.has(first)) return 'elle';
+  if (Object.values(FIRST_NAMES).some(list => list.includes(first))) return 'il';
+  return null;
+}
+
 export function genName() {
   const groups = Object.keys(FIRST_NAMES);
   const first = rollPick(FIRST_NAMES[rollPick(groups)]);
@@ -841,9 +865,12 @@ export function genCandidate() {
   if (traits.includes('cynique'))   salary += 1;
   if (traits.includes('curieux'))   salary -= 1;  // ils veulent juste partir
   salary = Math.max(1, salary);
+  const name = genName();
+  const pronoms = pronomsPour(name);
   return {
     id: 'c_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
-    name: genName(),
+    name,
+    ...(pronoms ? { pronoms } : {}),
     age: 22 + Math.floor(Math.random() * 36),
     origin: rollPick(ORIGINS),
     stats, skills, traits,
@@ -1484,7 +1511,7 @@ function normalizeContainers(d) {
     if (!Array.isArray(d[k])) d[k] = [];
   }
   for (const k of ['flags', 'modules', 'assignments', 'discoveries', 'techCompleted', 'relations', 'arcs',
-    'unlockedLegendaryTechs', 'permanentBonuses', 'factions']) {
+    'unlockedLegendaryTechs', 'permanentBonuses', 'factions', 'scenesVues', 'compteurs', 'monde']) {
     if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
   }
   for (const k of RESOURCES) {
@@ -1546,6 +1573,13 @@ function normalizeCrew(d) {
   try { normalizeChronicleRecruits(d); } catch (e) { console.warn('[MIGRATION] Recrues de chronique :', e); }
   d.crew = d.crew.filter(normalizePerson);
   d.candidates = d.candidates.filter(normalizePerson);
+  // V1 : pronoms (accords du contenu narratif), déduits du prénom si absents
+  for (const p of [...d.crew, ...d.candidates]) {
+    if (PRONOMS.includes(p.pronoms)) continue;
+    delete p.pronoms;
+    const pr = pronomsPour(p.name);
+    if (pr) p.pronoms = pr;
+  }
   const gm = d.meta.gameMin;
   for (const m of d.crew) {
     if (typeof m.sante !== 'number') m.sante = 100;

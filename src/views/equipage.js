@@ -11,7 +11,7 @@ import {
   SEQUELS, ROLES, STATUTS, TRAINING_PROGRAMS, jobsForModule, jobKey, memberAssignment, ancienneteBonus,
   currentAge, maxHealthOf, significantRelations, relationType, infirmaryBeds, bedsInUse,
   bestAvailableDoctor, infirmaryBonuses, canDiagnose, canTreat, canTrain, startTraining, cancelTraining,
-  admitToInfirmary, dischargeMember, startDiagnostic, startTreatment,
+  admitToInfirmary, dischargeMember, startDiagnostic, startTreatment, salaryPerDay,
 } from '../app.js';
 import {
   hasApp, esc, fmtDuree, setHTML, emptyState, isOpen, nomOf, dayOf, accord, plur,
@@ -146,7 +146,7 @@ export function renderPersonCard(p, opts = {}) {
   if (cand) {
     const cap = crewUsage();
     const full = cap.used >= cap.total;
-    actions = `<div class="salary">Prétention : <b>${esc(p.salary)} biomasse par jour</b></div>
+    actions = `<div class="salary">Prétention : <b>${esc(Math.round(salaryPerDay(p)))} biomasse par jour</b></div>
       <div class="actions-row">
         <button class="refuse" data-action="refuse" data-id="${esc(p.id)}">Écarter</button>
         <button class="accept" data-action="accept" data-id="${esc(p.id)}" ${full ? 'disabled' : ''}>${full ? 'Habitat plein' : 'Engager'}</button>

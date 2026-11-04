@@ -66,7 +66,9 @@ async function prepare() {
         const c = st.genCandidate();
         const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * window.__YEAR,
           statut: 'libre', sante: 100, moral: 70, loyaute: 60, statuts: [], sequels: [], ...over };
-        m.skills = { ...c.skills, ...(over.skills || {}) };
+        // Compétences précisées par le scénario : les autres à 0 (sinon un tirage
+        // rend le colon éligible à un poste imprévu)
+        m.skills = over.skills ? { ...Object.fromEntries(Object.keys(c.skills).map(k => [k, 0])), ...over.skills } : { ...c.skills };
         st.S.crew.push(m);
         return m;
       },

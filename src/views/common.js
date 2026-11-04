@@ -250,7 +250,7 @@ export function setOpen(key, on) {
 // Accord en genre si la donnée existe (pronoms ajoutés par le moteur narratif),
 // sinon formulation neutre fournie par l'appelant.
 export function genreOf(m) {
-  const g = m?.genre ?? m?.gender ?? m?.pronoms?.genre ?? m?.pronoms?.sujet ?? m?.pronom;
+  const g = m?.genre ?? m?.gender ?? (typeof m?.pronoms === 'string' ? m.pronoms : m?.pronoms?.genre ?? m?.pronoms?.sujet) ?? m?.pronom;
   if (typeof g !== 'string') return null;
   const s = g.toLowerCase();
   if (s === 'f' || s === 'elle' || s.startsWith('fem') || s.startsWith('fém')) return 'f';

@@ -57,15 +57,20 @@ try {
     app.startResearch('tech_metallurgie');
     app.startFabrication('fab_kit_reparation');
     app.unassignMember(a.id);
+    a.skills.combat = 0;   // formation toujours possible (tirage aléatoire sinon)
     app.startTraining(a.id, 'combat');
     bb.statuts = [{ key: 'infection', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
     c.skills.medecine = 3; app.unassignMember(c.id);
     app.admitToInfirmary(bb.id);
     app.startTreatment(bb.id, 'infection');
     S.fleet.push({ id: 'v_old', type: 'vedette', name: 'Vieille', available: true });
-    const sys = S.galaxy.systems.find(s => s.distance > 1);
-    sys.scanned = true;
-    app.launchExpedition({ vesselId: 'v_old', bodyId: sys.bodies[0].id, crewIds: [d.id] });
+    // Galaxie tirée au hasard : premier corps assez proche pour que le départ soit payable
+    S.res.energie = Math.max(S.res.energie, 300); S.res.biomasse = Math.max(S.res.biomasse, 250);
+    for (const sys of S.galaxy.systems.filter(s => s.distance > 1).sort((x, y) => x.distance - y.distance)) {
+      sys.scanned = true;
+      app.launchExpedition({ vesselId: 'v_old', bodyId: sys.bodies[0].id, crewIds: [d.id] });
+      if (S.expeditions.length) break;
+    }
     app.startVesselBuild('vedette');
     // avance d'un tiers des travaux
     for (let i = 0; i < 40; i++) st.tickOnce({ silent: true });
@@ -76,6 +81,7 @@ try {
       raw: localStorage.getItem('drift_save_v1'),
       fr: { build: frac(S.build), research: frac(S.research[0]), fab: frac(S.fabrication[0]), training: frac(S.training[0]),
         treatment: frac(S.treatments[0]), vessel: frac(S.vesselBuild), exp: exp ? exp.elapsedMin / exp.oneWayMin : null },
+      tot: { training: S.training[0]?.totalMin, treatment: S.treatments[0]?.totalMin },
       ages: Object.fromEntries(S.crew.map(m => [m.id, app.currentAge(m)])),
       vet: { id: vet.id, label: app.ancienneteBonus(vet).label },
       schema: S.meta.schemaVersion
@@ -90,7 +96,7 @@ try {
   const page = await b.page(ctx);
   await page.goto(b.base);
   await b.waitGame(page);
-  const now = await page.evaluate(async () => {
+  const now = await page.evaluate(async (oldTot) => {
     const st = await import('./src/state.js');
     const app = await import('./src/app.js');
     const cat = await import('./src/catalog.js');
@@ -104,12 +110,12 @@ try {
         treatment: frac(S.treatments[0]), vessel: frac(S.vesselBuild), exp: exp ? exp.elapsedMin / exp.oneWayMin : null },
       totals: { build: S.build?.totalMin === st.buildTime(S.build.id, S.build.targetLevel), research: S.research[0]?.totalMin === app.researchDuration(S.research[0].techId),
         vessel: S.vesselBuild?.totalMin === app.vesselBuildDuration(S.vesselBuild.type), fab: S.fabrication[0]?.totalMin === cat.FABRICATIONS[S.fabrication[0].fabId].time * 12,
-        exp: exp?.oneWayMin >= 420 && exp?.oneWayMin <= 6000, training: S.training[0]?.totalMin >= 3600, treatment: S.treatments[0]?.totalMin >= 3600 },
+        exp: exp?.oneWayMin >= 420 && exp?.oneWayMin <= 6000, training: S.training[0]?.totalMin >= 4 * oldTot.training, treatment: S.treatments[0]?.totalMin >= 4 * oldTot.treatment },
       ages: Object.fromEntries(S.crew.map(m => [m.id, app.currentAge(m)])),
       crew: S.crew.map(m => ({ id: m.id, label: app.ancienneteBonus(m).label })),
       timers: S.nextIncidentMin > S.meta.gameMin && S.nextEventMin > S.meta.gameMin
     };
-  });
+  }, old.tot);
   check(now.schema === 2 && now.queues, `schéma 2, files de chantiers et de recherche créées`);
   const sameFrac = Object.keys(old.fr).filter(k => Math.abs((now.fr[k] ?? -1) - old.fr[k]) < 0.01);
   check(sameFrac.length === Object.keys(old.fr).length, `avancement conservé (${sameFrac.join(', ')})`);
@@ -117,6 +123,17 @@ try {
   check(Object.entries(old.ages).every(([id, a]) => now.ages[id] === a), 'âges des colons conservés');
   check(now.crew.find(m => m.id === old.vet.id)?.label === old.vet.label && old.vet.label === 'Vétéran', `ancienneté conservée (${old.vet.label})`);
   check(now.timers, 'minuteries d\'incidents et d\'événements replacées dans le futur');
+  // Moteur narratif : mémoire et pronoms (accords des textes)
+  const narr = await page.evaluate(async () => {
+    const { S } = await import('./src/state.js');
+    const obj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+    const people = [...S.crew, ...S.candidates];
+    return { mem: obj(S.scenesVues) && obj(S.compteurs) && obj(S.monde),
+      pron: people.filter(p => p.pronoms).length, n: people.length,
+      ok: people.every(p => p.pronoms === undefined || ['il', 'elle', 'iel'].includes(p.pronoms)) };
+  });
+  check(narr.mem, 'mémoire narrative créée (scenesVues, compteurs, monde)');
+  check(narr.ok && narr.pron > 0, `pronoms déduits des prénoms (${narr.pron}/${narr.n})`);
   // La partie tourne ensuite normalement
   const run = await page.evaluate(async () => {
     const st = await import('./src/state.js');
