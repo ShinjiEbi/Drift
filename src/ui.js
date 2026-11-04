@@ -977,7 +977,7 @@ function openAssignPicker(modKey, slotIdx) {
 function renderAssignPickerContent() {
   const { modKey, slotIdx } = _pickerCtx;
   const job = jobsForModule(modKey)[slotIdx];
-  if (!job) return '<h3>Erreur</h3><p>Poste introuvable.</p>';
+  if (!job) return '<h3>Erreur</h3><p>Poste introuvable.</p><div class="btn-row"><button id="pickerCancel">Fermer</button></div>';
   const role = ROLES[job.role];
   const def = MODULES[modKey];
   const currentOccupant = memberAt(modKey, slotIdx);
@@ -2566,9 +2566,22 @@ function openSceneOverlay(expId) {
   const exp = S.expeditions.find(e => e.id === expId);
   if (!exp || exp.phase !== 'sur_place' || !exp.awaitingChoice) return;
   _activeSceneExpId = expId;
+  const active = document.activeElement;
+  _sceneOpener = active && active !== document.body ? active : null;
   $('#sceneOverlay').classList.add('show');
+  $('#sceneOverlay').scrollTop = 0;
   document.body.style.overflow = 'hidden';
+  syncInert();
   renderSceneOverlay();
+}
+let _sceneOpener = null;
+
+// Garde le focus clavier dans l'overlay après chaque ré-affichage
+function focusSceneOverlay() {
+  const inner = $('#sceneInner');
+  if (inner && overlayShown() && !modalShown() && !inner.contains(document.activeElement)) {
+    inner.focus({ preventScroll: true });
+  }
 }
 
 // ============================================================
@@ -2690,6 +2703,7 @@ function renderCombatOverlay(exp) {
   `;
 
   hookCombatOverlay(exp.id);
+  focusSceneOverlay();
 }
 
 function hookCombatOverlay(expId) {
@@ -2781,7 +2795,12 @@ function closeSceneOverlay() {
   _activeSceneExpId = null;
   $('#sceneOverlay').classList.remove('show');
   document.body.style.overflow = '';
+  syncInert();
   render();
+  // Retour du focus sur le bouton « Reprendre » (ou l'élément d'origine)
+  const back = _sceneOpener;
+  _sceneOpener = null;
+  if (back?.isConnected && back.getClientRects().length && !modalShown()) back.focus({ preventScroll: true });
 }
 
 function renderSceneOverlay() {
@@ -2952,6 +2971,7 @@ function renderSceneOverlay() {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.choice, 10);
       playChoice(_activeSceneExpId, idx);
+      $('#sceneOverlay').scrollTop = 0;   // nouvelle scène : on repart du haut
       // Rafraîchit l'overlay (la scène a changé) ou ferme s'il a fini
       const exp = S.expeditions.find(e => e.id === _activeSceneExpId);
       if (!exp || exp.phase !== 'sur_place') {
@@ -2974,6 +2994,7 @@ function renderSceneOverlay() {
       }
     });
   });
+  focusSceneOverlay();
 }
 
 // ============================================================
@@ -3144,9 +3165,9 @@ function renderLaunchModal() {
             <div class="er-detail">${typeLabel} · stock ${esc(n - taken)}/${esc(n)}</div>
           </div>
           <div class="er-controls">
-            <button class="er-btn" data-equip-minus="${id}" ${taken === 0 ? 'disabled' : ''}>−</button>
-            <span class="er-count">${taken}</span>
-            <button class="er-btn" data-equip-plus="${id}" ${taken >= n || used >= slots ? 'disabled' : ''}>+</button>
+            <button class="er-btn" data-equip-minus="${id}" aria-label="Retirer : ${esc(itDef.nom)}" ${taken === 0 ? 'disabled' : ''}>−</button>
+            <span class="er-count" aria-live="polite">${taken}</span>
+            <button class="er-btn" data-equip-plus="${id}" aria-label="Ajouter : ${esc(itDef.nom)}" ${taken >= n || used >= slots ? 'disabled' : ''}>+</button>
           </div>
         </div>`;
       }).join('');
@@ -3220,8 +3241,7 @@ function hookLaunchModal() {
         const last = Array.from(_launchPick.crewIds).pop();
         _launchPick.crewIds.delete(last);
       }
-      m.innerHTML = renderLaunchModal();
-      hookLaunchModal();
+      rerenderModal(renderLaunchModal(), hookLaunchModal);
     });
   });
   m.querySelectorAll('[data-pick-crew]').forEach(el => {
@@ -3230,8 +3250,7 @@ function hookLaunchModal() {
       const id = el.dataset.pickCrew;
       if (_launchPick.crewIds.has(id)) _launchPick.crewIds.delete(id);
       else _launchPick.crewIds.add(id);
-      m.innerHTML = renderLaunchModal();
-      hookLaunchModal();
+      rerenderModal(renderLaunchModal(), hookLaunchModal);
     });
   });
   // Hooks +/- équipement
@@ -3240,8 +3259,7 @@ function hookLaunchModal() {
     btn.addEventListener('click', () => {
       const id = btn.dataset.equipPlus;
       _launchPick.equipment[id] = (_launchPick.equipment[id] || 0) + 1;
-      m.innerHTML = renderLaunchModal();
-      hookLaunchModal();
+      rerenderModal(renderLaunchModal(), hookLaunchModal);
     });
   });
   m.querySelectorAll('[data-equip-minus]').forEach(btn => {
@@ -3251,8 +3269,7 @@ function hookLaunchModal() {
       if (!_launchPick.equipment[id]) return;
       _launchPick.equipment[id]--;
       if (_launchPick.equipment[id] <= 0) delete _launchPick.equipment[id];
-      m.innerHTML = renderLaunchModal();
-      hookLaunchModal();
+      rerenderModal(renderLaunchModal(), hookLaunchModal);
     });
   });
   $('#launchClose')?.addEventListener('click', () => {
@@ -3635,16 +3652,14 @@ function hookTrainingModal() {
           _trainPick.skill = null;
         }
       }
-      m.innerHTML = renderTrainingModalContent();
-      hookTrainingModal();
+      rerenderModal(renderTrainingModalContent(), hookTrainingModal);
     });
   });
   m.querySelectorAll('[data-pick-skill]').forEach(el => {
     if (el.classList.contains('disabled')) return;
     el.addEventListener('click', () => {
       _trainPick.skill = el.dataset.pickSkill;
-      m.innerHTML = renderTrainingModalContent();
-      hookTrainingModal();
+      rerenderModal(renderTrainingModalContent(), hookTrainingModal);
     });
   });
   $('#trainCancel')?.addEventListener('click', () => {
@@ -4175,12 +4190,13 @@ export function showModal({ title, body, primaryLabel='OK', primaryClass='primar
   // title et body sont du texte (échappé) ; body n'est inséré tel quel que si
   // l'appelant le déclare explicitement HTML (bodyIsHTML: true).
   const bodyHTML = bodyIsHTML ? `<div class="modal-body">${body}</div>` : `<p>${esc(body)}</p>`;
+  m.className = 'modal';   // pas de classe héritée d'une modale précédente
   m.innerHTML = `
     <h3>${esc(title)}</h3>
     ${bodyHTML}
-    ${withInput ? `<input type="text" id="modalInput" value="${esc(inputValue)}" placeholder="${esc(inputPlaceholder)}" aria-label="${esc(title)}">` : ''}
+    ${withInput ? `<input type="text" id="modalInput" value="${esc(inputValue)}" placeholder="${esc(inputPlaceholder)}" aria-label="${esc(title)}" enterkeyhint="done">` : ''}
     <div class="btn-row">
-      ${hideCancel ? '' : `<button id="modalCancel">Annuler</button>`}
+      ${hideCancel ? '' : `<button id="modalCancel" data-modal-cancel>Annuler</button>`}
       <button class="${esc(primaryClass)}" id="modalOk">${esc(primaryLabel)}</button>
     </div>
   `;
@@ -4192,7 +4208,149 @@ export function showModal({ title, body, primaryLabel='OK', primaryClass='primar
     close();
     onPrimary?.(v);
   });
-  if (withInput) setTimeout(() => $('#modalInput').focus(), 50);
+  if (withInput) {
+    // Entrée dans le champ = valider
+    $('#modalInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#modalOk')?.click(); }
+    });
+    setTimeout(() => { const i = $('#modalInput'); i?.focus(); i?.select(); }, 50);
+  }
+}
+
+// ============================================================
+//   MODALE ET OVERLAY — accessibilité commune
+// ============================================================
+// #modal est rempli par de nombreuses fonctions (ici et dans app.js) qui
+// ajoutent ou retirent .show sur #modalBg. Un MutationObserver applique les
+// comportements communs à chaque ouverture/fermeture, sans toucher aux appelants :
+//  - titre du dialogue (aria-labelledby → premier h3), focus initial ;
+//  - Tab / Maj+Tab restent dans la modale (ou dans l'overlay de scène) ;
+//  - Échap ferme SEULEMENT si la modale propose une sortie (Annuler, Fermer,
+//    Continuer) ; jamais pour une décision obligatoire (incident, événement) ;
+//  - l'arrière-plan est rendu inerte, le focus revient ensuite sur
+//    l'élément qui avait ouvert la modale.
+// Boutons reconnus comme « sortie » : attribut data-modal-cancel, ou l'un
+// des identifiants ci-dessous (modales existantes, dont celles d'app.js).
+const MODAL_CANCEL = '[data-modal-cancel], #modalCancel, #pickerCancel, #diploCancel, #researchCancel, #fabCancel, #launchClose, #trainCancel, #alertsClose, #synClose, #consContinue';
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let _modalOpener = null;
+
+const modalShown = () => !!$('#modalBg')?.classList.contains('show');
+const overlayShown = () => !!$('#sceneOverlay')?.classList.contains('show');
+function focusablesIn(root) {
+  return Array.from(root.querySelectorAll(FOCUSABLE)).filter(el => el.getClientRects().length && el.getAttribute('aria-disabled') !== 'true');
+}
+function setInert(el, on) {
+  if (!el) return;
+  if (on) el.setAttribute('inert', ''); else el.removeAttribute('inert');
+}
+// Arrière-plan inerte : #app sous l'overlay, #app et l'overlay sous la modale
+function syncInert() {
+  const modal = modalShown();
+  setInert($('#app'), modal || overlayShown());
+  setInert($('#sceneOverlay'), modal);
+}
+function labelModal() {
+  const m = $('#modal');
+  const h = m?.querySelector('h3, .incident-title');
+  if (!h) { m?.removeAttribute('aria-labelledby'); return; }
+  if (!h.id) h.id = 'modalTitle';
+  m.setAttribute('aria-labelledby', h.id);
+}
+function onModalOpen() {
+  const m = $('#modal');
+  const active = document.activeElement;
+  if (active && active !== document.body && !m.contains(active)) _modalOpener = active;
+  labelModal();
+  syncInert();
+  // Focus initial : le champ s'il y en a un (showModal s'en charge), sinon le dialogue
+  if (!m.contains(document.activeElement)) {
+    (m.querySelector('input[type="text"]') || m).focus({ preventScroll: true });
+  }
+}
+function onModalClose() {
+  syncInert();
+  const back = _modalOpener;
+  _modalOpener = null;
+  if (overlayShown()) {
+    const inner = $('#sceneInner');
+    if (!inner.contains(document.activeElement)) (focusablesIn(inner)[0] || inner).focus?.({ preventScroll: true });
+    return;
+  }
+  if (back && back.isConnected && back.getClientRects().length && !back.closest('[inert]')) {
+    back.focus({ preventScroll: true });
+  }
+}
+{
+  const bg = $('#modalBg');
+  const m = $('#modal');
+  if (bg && m && typeof MutationObserver !== 'undefined') {
+    let wasShown = bg.classList.contains('show');
+    new MutationObserver(() => {
+      const shown = bg.classList.contains('show');
+      if (shown === wasShown) return;
+      wasShown = shown;
+      if (shown) onModalOpen(); else onModalClose();
+    }).observe(bg, { attributes: true, attributeFilter: ['class'] });
+    // Contenu remplacé pendant que la modale est ouverte : titre et focus
+    new MutationObserver(() => {
+      if (!bg.classList.contains('show')) return;
+      labelModal();
+      if (!m.contains(document.activeElement)) m.focus({ preventScroll: true });
+    }).observe(m, { childList: true });
+  }
+}
+
+document.addEventListener('keydown', e => {
+  const inModal = modalShown();
+  const container = inModal ? $('#modal') : overlayShown() ? $('#sceneInner') : null;
+  if (!container) return;
+  if (e.key === 'Escape') {
+    const exit = inModal
+      ? container.querySelector(MODAL_CANCEL)
+      : container.querySelector('[data-action-scene="close"]');
+    if (exit && !exit.disabled) { e.preventDefault(); exit.click(); }
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  // Piège du focus : Tab et Maj+Tab bouclent à l'intérieur du dialogue
+  const items = focusablesIn(container);
+  if (!items.length) { e.preventDefault(); container.focus?.(); return; }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const cur = document.activeElement;
+  if (!container.contains(cur) || cur === container) {
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+  } else if (e.shiftKey && cur === first) {
+    e.preventDefault(); last.focus();
+  } else if (!e.shiftKey && cur === last) {
+    e.preventDefault(); first.focus();
+  }
+});
+
+// Ré-affiche le contenu d'une modale ouverte (sélecteurs de lancement et de
+// formation) en conservant le défilement et l'élément qui avait le focus.
+function rerenderModal(html, hook) {
+  const m = $('#modal');
+  const scrolls = [m.scrollTop, ...Array.from(m.querySelectorAll('.crew-picker, .tpicker, .equip-picker, .assign-picker-list')).map(el => el.scrollTop)];
+  const active = document.activeElement;
+  let focusSel = null;
+  if (active && m.contains(active)) {
+    if (active.id) focusSel = '#' + CSS.escape(active.id);
+    else {
+      const attr = Array.from(active.attributes).find(a => a.name.startsWith('data-pick-') || a.name.startsWith('data-equip-'));
+      if (attr) focusSel = `[${attr.name}="${CSS.escape(attr.value)}"]`;
+    }
+  }
+  m.innerHTML = html;
+  hook();
+  m.scrollTop = scrolls[0];
+  Array.from(m.querySelectorAll('.crew-picker, .tpicker, .equip-picker, .assign-picker-list')).forEach((el, i) => {
+    if (scrolls[i + 1] !== undefined) el.scrollTop = scrolls[i + 1];
+  });
+  const target = focusSel && m.querySelector(focusSel);
+  if (target && !target.disabled) target.focus({ preventScroll: true });
 }
 
 export function log(kind, txt) {

@@ -103,7 +103,7 @@
 
   <main>
     <!-- VUE D'ENSEMBLE -->
-    <section class="view active" id="view-overview">
+    <section class="view active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
       <h2 class="eyebrow">État de la colonie</h2>
       <h1 class="head" id="overviewName">Avant-poste</h1>
       <div class="subhead" id="overviewSub">Cycle de fondation</div>
@@ -114,13 +114,13 @@
     </section>
 
     <!-- MODULES (hub avec sous-onglets) -->
-    <section class="view" id="view-modules">
-      <nav class="subtabs">
-        <button data-subtab-mod="construction" class="active">Construction</button>
-        <button data-subtab-mod="assignments">Affectations<span class="tab-badge" id="assignBadge"></span></button>
+    <section class="view" id="view-modules" role="tabpanel" aria-labelledby="tab-modules">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab-mod="construction" class="active" role="tab" aria-controls="subview-construction" aria-selected="true">Construction</button>
+        <button data-subtab-mod="assignments" role="tab" aria-controls="subview-assignments" aria-selected="false" tabindex="-1">Affectations<span class="tab-badge" id="assignBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-construction">
+      <div class="subview active" id="subview-construction" role="tabpanel">
         <h2 class="eyebrow">Infrastructures disponibles</h2>
         <h1 class="head">Modules</h1>
         <div class="subhead">Construction séquentielle, un chantier à la fois</div>
@@ -136,7 +136,7 @@
         </div>
       </div>
 
-      <div class="subview" id="subview-assignments">
+      <div class="subview" id="subview-assignments" role="tabpanel">
         <h2 class="eyebrow">Vie de la base</h2>
         <h1 class="head">Affectations</h1>
         <div class="subhead" id="assignSub">Assigne ton équipage aux postes des bâtiments</div>
@@ -146,29 +146,29 @@
     </section>
 
     <!-- ÉQUIPAGE (hub avec sous-onglets) -->
-    <section class="view" id="view-crew">
-      <nav class="subtabs">
-        <button data-subtab="personnel" class="active">Personnel</button>
-        <button data-subtab="recruit" id="subtab-recruit">Recrut.<span class="tab-badge" id="recruitBadge"></span></button>
-        <button data-subtab="formation" id="subtab-formation">Formation</button>
-        <button data-subtab="soins" id="subtab-soins" disabled>Soins</button>
+    <section class="view" id="view-crew" role="tabpanel" aria-labelledby="tab-crew">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab="personnel" class="active" role="tab" aria-controls="subview-personnel" aria-selected="true">Personnel</button>
+        <button data-subtab="recruit" id="subtab-recruit" role="tab" aria-controls="subview-recruit" aria-selected="false" tabindex="-1">Recrut.<span class="tab-badge" id="recruitBadge"></span></button>
+        <button data-subtab="formation" id="subtab-formation" role="tab" aria-controls="subview-formation" aria-selected="false" tabindex="-1">Formation</button>
+        <button data-subtab="soins" id="subtab-soins" disabled role="tab" aria-controls="subview-soins" aria-selected="false" tabindex="-1">Soins</button>
       </nav>
 
-      <div class="subview active" id="subview-personnel">
+      <div class="subview active" id="subview-personnel" role="tabpanel">
         <h2 class="eyebrow">Personnel actif</h2>
         <h1 class="head" id="crewTitle">Équipage</h1>
         <div class="subhead" id="crewSub">Personne à bord pour l'instant</div>
         <div id="crewList"></div>
       </div>
 
-      <div class="subview" id="subview-recruit">
+      <div class="subview" id="subview-recruit" role="tabpanel">
         <h2 class="eyebrow">Candidatures reçues</h2>
         <h1 class="head">Recrutement</h1>
         <div class="subhead" id="recruitSub">Construis une <em>Balise de recrutement</em> pour recevoir des candidats</div>
         <div id="candidateList"></div>
       </div>
 
-      <div class="subview" id="subview-formation">
+      <div class="subview" id="subview-formation" role="tabpanel">
         <h2 class="eyebrow">Centre de formation</h2>
         <h1 class="head">Formation</h1>
         <div class="subhead" id="formationSub">Construis un Centre de formation</div>
@@ -177,7 +177,7 @@
         <button id="btnNewTraining" class="cta-btn" style="display:none;">Lancer une formation</button>
       </div>
 
-      <div class="subview" id="subview-soins">
+      <div class="subview" id="subview-soins" role="tabpanel">
         <h2 class="eyebrow">Infirmerie</h2>
         <h1 class="head">Soins</h1>
         <div class="subhead" id="soinsSub">Construis une Infirmerie</div>
@@ -191,19 +191,19 @@
     </section>
 
     <!-- GALAXIE (hub avec sous-onglets) -->
-    <section class="view" id="view-galaxy">
-      <nav class="subtabs">
-        <button data-subtab-galaxy="cartographie" class="active">Cartographie</button>
-        <button data-subtab-galaxy="fleet" id="subtab-fleet">Vaisseaux</button>
-        <button data-subtab-galaxy="expeditions" id="subtab-expeditions">Expéd.<span class="tab-badge" id="expBadge"></span></button>
-        <button data-subtab-galaxy="diplomatie" id="subtab-diplomatie">Diplomatie<span class="tab-badge" id="diploBadge"></span></button>
+    <section class="view" id="view-galaxy" role="tabpanel" aria-labelledby="tab-galaxy">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab-galaxy="cartographie" class="active" role="tab" aria-controls="subview-cartographie" aria-selected="true">Cartographie</button>
+        <button data-subtab-galaxy="fleet" id="subtab-fleet" role="tab" aria-controls="subview-fleet" aria-selected="false" tabindex="-1">Vaisseaux</button>
+        <button data-subtab-galaxy="expeditions" id="subtab-expeditions" role="tab" aria-controls="subview-expeditions" aria-selected="false" tabindex="-1">Expéd.<span class="tab-badge" id="expBadge"></span></button>
+        <button data-subtab-galaxy="diplomatie" id="subtab-diplomatie" role="tab" aria-controls="subview-diplomatie" aria-selected="false" tabindex="-1">Diplomatie<span class="tab-badge" id="diploBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-cartographie">
+      <div class="subview active" id="subview-cartographie" role="tabpanel">
         <div id="galaxyContent"></div>
       </div>
 
-      <div class="subview" id="subview-fleet">
+      <div class="subview" id="subview-fleet" role="tabpanel">
         <h2 class="eyebrow">Flotte stationnée</h2>
         <h1 class="head">Vaisseaux</h1>
         <div class="subhead" id="fleetSub">Construis un Hangar pour entreposer des vaisseaux</div>
@@ -213,7 +213,7 @@
         <div id="fleetCatalog"></div>
       </div>
 
-      <div class="subview" id="subview-expeditions">
+      <div class="subview" id="subview-expeditions" role="tabpanel">
         <h2 class="eyebrow">Missions actives & passées</h2>
         <h1 class="head">Expéditions</h1>
         <div class="subhead" id="expSub">Aucune expédition pour l'instant</div>
@@ -222,7 +222,7 @@
         <div id="expHistoryList"></div>
       </div>
 
-      <div class="subview" id="subview-diplomatie">
+      <div class="subview" id="subview-diplomatie" role="tabpanel">
         <h2 class="eyebrow">Relations interstellaires</h2>
         <h1 class="head">Diplomatie</h1>
         <div class="subhead" id="diploSub">Factions rencontrées au fil des expéditions</div>
@@ -231,36 +231,36 @@
     </section>
 
     <!-- STOCKS (hub avec sous-onglets : Inventaire / Bibliothèque / Recherche) -->
-    <section class="view" id="view-stocks">
-      <nav class="subtabs">
-        <button data-subtab-stocks="inventory" class="active">Inventaire</button>
-        <button data-subtab-stocks="library">Bibliothèque<span class="tab-badge" id="libBadge"></span></button>
-        <button data-subtab-stocks="research">Recherche<span class="tab-badge" id="researchBadge"></span></button>
-        <button data-subtab-stocks="workshop">Atelier<span class="tab-badge" id="workshopBadge"></span></button>
+    <section class="view" id="view-stocks" role="tabpanel" aria-labelledby="tab-stocks">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab-stocks="inventory" class="active" role="tab" aria-controls="subview-inventory" aria-selected="true">Inventaire</button>
+        <button data-subtab-stocks="library" role="tab" aria-controls="subview-library" aria-selected="false" tabindex="-1">Bibliothèque<span class="tab-badge" id="libBadge"></span></button>
+        <button data-subtab-stocks="research" role="tab" aria-controls="subview-research" aria-selected="false" tabindex="-1">Recherche<span class="tab-badge" id="researchBadge"></span></button>
+        <button data-subtab-stocks="workshop" role="tab" aria-controls="subview-workshop" aria-selected="false" tabindex="-1">Atelier<span class="tab-badge" id="workshopBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-inventory">
+      <div class="subview active" id="subview-inventory" role="tabpanel">
         <h2 class="eyebrow">Stocks de la colonie</h2>
         <h1 class="head">Inventaire</h1>
         <div class="subhead" id="invSub">Items, artefacts et équipements</div>
         <div id="invContent"></div>
       </div>
 
-      <div class="subview" id="subview-library">
+      <div class="subview" id="subview-library" role="tabpanel">
         <h2 class="eyebrow">Schémas découverts</h2>
         <h1 class="head">Bibliothèque</h1>
         <div class="subhead" id="libSub">Plans techniques exploitables</div>
         <div id="libContent"></div>
       </div>
 
-      <div class="subview" id="subview-research">
+      <div class="subview" id="subview-research" role="tabpanel">
         <h2 class="eyebrow">Programme de recherche</h2>
         <h1 class="head">Recherche</h1>
         <div class="subhead" id="researchSub">Tech tree et progression long terme</div>
         <div id="researchContent"></div>
       </div>
 
-      <div class="subview" id="subview-workshop">
+      <div class="subview" id="subview-workshop" role="tabpanel">
         <h2 class="eyebrow">Production d'équipement</h2>
         <h1 class="head">Atelier</h1>
         <div class="subhead" id="workshopSub">Fabrique consommables, outils et armement</div>
@@ -270,7 +270,7 @@
     </section>
 
     <!-- CHRONIQUES (arcs narratifs) -->
-    <section class="view" id="view-arcs">
+    <section class="view" id="view-arcs" role="tabpanel" aria-labelledby="tab-arcs">
       <h2 class="eyebrow">Chroniques de la colonie</h2>
       <h1 class="head">Arcs narratifs</h1>
       <div class="subhead" id="arcsSub">Les fils rouges qui se tissent au fil du temps</div>
@@ -278,7 +278,7 @@
     </section>
 
     <!-- JOURNAL -->
-    <section class="view" id="view-journal">
+    <section class="view" id="view-journal" role="tabpanel" aria-labelledby="tab-journal">
       <h2 class="eyebrow">Journal de bord</h2>
       <h1 class="head" id="journalTitle">Carnet de fondation</h1>
       <div class="subhead">Tenu par le commandement local</div>
@@ -295,16 +295,16 @@
   </footer>
 </div>
 
-<input type="file" id="fileInput" accept="application/json" style="display:none">
-<div id="toast"></div>
+<input type="file" id="fileInput" accept="application/json" style="display:none" aria-label="Fichier de sauvegarde à importer">
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <div class="modal-bg" id="modalBg">
-  <div class="modal" id="modal"></div>
+  <div class="modal" id="modal" role="dialog" aria-modal="true" tabindex="-1"></div>
 </div>
 
 <!-- Overlay plein écran pour les scènes d'expédition -->
-<div class="scene-overlay" id="sceneOverlay">
-  <div class="scene-inner" id="sceneInner"></div>
+<div class="scene-overlay" id="sceneOverlay" role="dialog" aria-modal="true" aria-label="Scène d'expédition">
+  <div class="scene-inner" id="sceneInner" tabindex="-1"></div>
 </div>
 
 <script type="module" src="./src/app.js"></script>
