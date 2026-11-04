@@ -706,9 +706,9 @@ export const CHRONICLE_SCENES = [
     choices: [
       {
         label: "Embarquer tout le monde sur le vaisseau",
+        consume: { biomasse: 30 },
         outcome: {
           log: "Adèle et Tomas montent à bord. La biomasse pour le voyage de retour est lourde mais gérable.",
-          loot: { biomasse: -30 },
           setFlags: { survivors_fate: 'sauves' },
           // Plus tard, on ajoutera les colons à l'avant-poste lors de l'arrivée
           endChronicleEpisode: true
@@ -716,9 +716,10 @@ export const CHRONICLE_SCENES = [
       },
       {
         label: "Partager des provisions, revenir plus tard",
+        consume: { biomasse: 15 },
         outcome: {
           log: "Vous laissez ce que vous pouvez. Adèle, presque touchée : « Vous reviendrez ? » Vous promettez. En échange, elle vous remet un disque mémoire.",
-          loot: { biomasse: -15, datacubes: 20 },
+          loot: { datacubes: 20 },
           item: 'disque_memoire',
           setFlags: { survivors_fate: 'partages' },
           endChronicleEpisode: true
@@ -2397,10 +2398,10 @@ export const CHRONICLE_SCENES = [
       },
       {
         label: "Donner une ration à Voln sans rien demander en retour",
+        consume: { biomasse: 5 },
         outcome: {
           log: "Voln pleure. Pas de joie, juste de fatigue. Il te dit : « Si tu trouves la Tisseuse, ne lui promets rien. Si tu rencontres le Patron, ne le défie pas. Ce sont mes seuls cadeaux pour toi. » Il s'éloigne.",
           setFlags: { voln_aide: '+2' },
-          loot: { biomasse: -5 },
           next: 'chron_marche_ep1_premiere_offre'
         }
       }
@@ -2414,10 +2415,11 @@ export const CHRONICLE_SCENES = [
     choices: [
       {
         label: "Payer en biomasse immédiatement",
+        consume: { biomasse: 50 },
         outcome: {
           log: "Khêr-Da acquiesce et te remet le coffret. « Tu paies cash. C'est honnête. La plupart préfèrent le service — mais c'est leur problème, pas le mien. »",
           setFlags: { reputation_marche: '+1', kherda_lien: '+1' },
-          loot: { biomasse: -50, datacubes: 10 },
+          loot: { datacubes: 10 },
           endChronicleEpisode: true
         }
       },
@@ -2466,10 +2468,11 @@ export const CHRONICLE_SCENES = [
       },
       {
         label: "Proposer une marchandise à Khêr-Da : du minerai raffiné",
+        consume: { metal: 30 },
         outcome: {
           log: "Khêr-Da analyse ton minerai avec une lentille hybride. Il te propose un échange équitable : 30 metal raffinés contre 8 datacubes alien et une information sur le marché. Tu acceptes. Tu apprends que d'autres marchés existent ailleurs — il faut un sceau pour y entrer.",
           setFlags: { reputation_marche: '+1' },
-          loot: { metal: -30, datacubes: 8 },
+          loot: { datacubes: 8 },
           next: 'chron_marche_ep2_tisseuse'
         }
       }

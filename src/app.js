@@ -4582,11 +4582,13 @@ export function playChoice(expId, choiceIdx) {
     const isAlienRuins = body && (body.ruines === 'alien_a' || body.ruines === 'alien_b' || body.ruines === 'fusion');
     const alienMult = isAlienRuins ? techEffectsAccumulated().expeditionAlienLootMult : 1;
     for (const k in outcome.loot) {
+      // Les montants négatifs ne sont pas des gains (un coût s'exprime avec consume)
+      if (!(outcome.loot[k] > 0)) continue;
       const amount = Math.floor(outcome.loot[k] * alienMult);
       exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + amount;
     }
     // Sur ruines alien, une fraction des datacubes obtenus est aussi crédité en datacubes_alien
-    if (isAlienRuins && outcome.loot.datacubes) {
+    if (isAlienRuins && outcome.loot.datacubes > 0) {
       const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * 0.4);
       exp.accumulatedAlienDatacubes = (exp.accumulatedAlienDatacubes || 0) + alienShare;
     }
