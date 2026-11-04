@@ -258,6 +258,7 @@ export function autoAssignMember(memberId) {
 
 // Lance l'auto-affectation pour tous les colons libres (utilisé au démarrage et à la construction)
 export function autoAssignAllFreeMembers() {
+  ensureCrewIntegrity();
   if (!S.autoAssign) return;
   // Trie les colons libres par "force" décroissante (somme skills) pour donner
   // les meilleurs postes aux meilleurs colons
@@ -266,6 +267,37 @@ export function autoAssignAllFreeMembers() {
     .map(m => ({ m, score: SKILL_LIST.reduce((s, k) => s + (m.skills[k] || 0), 0) }))
     .sort((a, b) => b.score - a.score);
   for (const { m } of free) autoAssignMember(m.id);
+}
+
+// ---- Réparation des sauvegardes ----
+// Remet en cohérence l'équipage d'une sauvegarde abîmée par d'anciens bugs
+// (0.32 et avant). Idempotente : sans effet sur un état sain.
+// Appelée automatiquement une fois par objet d'état (ensureCrewIntegrity, depuis
+// le tick et l'auto-affectation) ; peut aussi être appelée juste après load().
+export function repairCrewState() {
+  if (!S || !Array.isArray(S.crew)) return;
+  const byId = new Map(S.crew.map(m => [m.id, m]));
+  const alive = id => { const m = byId.get(id); return !!m && m.statut !== 'mort'; };
+  // Traitements : statut visé identifié par sa clé, index recalé, orphelins et doublons retirés
+  if (Array.isArray(S.treatments)) {
+    S.treatments = S.treatments.filter(t => alive(t.memberId));
+    for (const m of S.crew) syncTreatmentIndexes(m);
+    const seen = new Set();
+    S.treatments = S.treatments.filter(t => {
+      const k = t.memberId + '|' + t.statutKey;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+}
+
+const _checkedStates = new WeakSet();
+// Lance repairCrewState une seule fois par objet d'état (chargement, import, reset)
+export function ensureCrewIntegrity() {
+  if (!S || typeof S !== 'object' || _checkedStates.has(S)) return;
+  _checkedStates.add(S);
+  try { repairCrewState(); } catch (e) { console.error('[repairCrewState]', e); }
 }
 
 // Calcule le coefficient d'efficacité d'un bâtiment selon ses postes pourvus
@@ -1601,6 +1633,42 @@ export function bedsInUse() {
   return S.crew.filter(m => m.statut === 'infirmerie').length;
 }
 
+// ---- Référencement des statuts traités ----
+// Un traitement vise un statut par sa clé (`statutKey`), unique par colon
+// puisque inflictStatus dédoublonne. `statusIdx` (index dans member.statuts)
+// est conservé pour l'UI, mais il est recalé après chaque retrait de statut :
+// une auto-guérison ou une éclosion décale les index suivants.
+
+// Retrouve un statut par son index (API historique de l'UI) ou par sa clé.
+// Renvoie { status, idx } ou null.
+function findMemberStatus(member, ref) {
+  if (!member || !Array.isArray(member.statuts)) return null;
+  const idx = typeof ref === 'string'
+    ? member.statuts.findIndex(s => s.key === ref)
+    : (Number.isInteger(ref) ? ref : -1);
+  const status = idx >= 0 ? member.statuts[idx] : null;
+  return status ? { status, idx } : null;
+}
+
+// Traitement en cours sur le statut `statutKey` d'un colon (ou null)
+export function treatmentOf(memberId, statutKey) {
+  return (S.treatments || []).find(t => t.memberId === memberId && t.statutKey === statutKey) || null;
+}
+
+// Recale statusIdx des traitements d'un colon sur l'état actuel de member.statuts.
+// À appeler après tout retrait de statut. Un traitement dont le statut a disparu est retiré.
+export function syncTreatmentIndexes(member) {
+  if (!member || !Array.isArray(S.treatments) || !Array.isArray(member.statuts)) return;
+  for (let i = S.treatments.length - 1; i >= 0; i--) {
+    const t = S.treatments[i];
+    if (t.memberId !== member.id) continue;
+    if (!t.statutKey) t.statutKey = member.statuts[t.statusIdx]?.key;  // sauvegarde antérieure
+    const idx = t.statutKey ? member.statuts.findIndex(s => s.key === t.statutKey) : -1;
+    if (idx < 0) S.treatments.splice(i, 1);
+    else t.statusIdx = idx;
+  }
+}
+
 // Trouve le meilleur médecin disponible.
 // Priorité 1 : staff de l'infirmerie avec skill Médecine > 0 (en `travail`)
 // Priorité 2 : tout colon libre avec skill Médecine > 0 (fallback si pas de staff)
@@ -1756,19 +1824,22 @@ export function startDiagnostic(memberId, statusIdx) {
   render();
 }
 
-// Vérifie qu'un traitement est lançable
-export function canTreat(memberId, statusIdx) {
+// Vérifie qu'un traitement est lançable.
+// statusRef : index dans member.statuts (UI) ou clé du statut.
+export function canTreat(memberId, statusRef) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Patient introuvable" };
   if (member.statut !== 'infirmerie') return { ok:false, reason:"Patient non admis" };
-  const status = member.statuts[statusIdx];
-  if (!status) return { ok:false, reason:"Statut introuvable" };
+  const found = findMemberStatus(member, statusRef);
+  if (!found) return { ok:false, reason:"Statut introuvable" };
+  const { status, idx: statusIdx } = found;
   if (!status.diagnosed) return { ok:false, reason:"Diagnostic requis avant traitement" };
-  // Déjà en cours ?
-  if (S.treatments.some(t => t.memberId === memberId && t.statusIdx === statusIdx)) {
+  // Déjà en cours ? (par clé : l'index d'un statut peut changer)
+  if (treatmentOf(memberId, status.key)) {
     return { ok:false, reason:"Traitement déjà en cours" };
   }
   const def = STATUTS[status.key];
+  if (!def) return { ok:false, reason:"Statut inconnu" };
   const infLvl = S.modules.infirmerie?.level || 0;
   if (infLvl < def.medLvlReq) {
     return { ok:false, reason:`Infirmerie niv ${def.medLvlReq} requise (actuelle : ${infLvl})` };
@@ -1782,11 +1853,12 @@ export function canTreat(memberId, statusIdx) {
   for (const k in tdef.cost) {
     if (S.res[k] < tdef.cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
   }
-  return { ok:true, treatment:tdef, doctor, def };
+  return { ok:true, treatment:tdef, doctor, def, status, statusIdx };
 }
 
-export function startTreatment(memberId, statusIdx) {
-  const r = canTreat(memberId, statusIdx);
+// statusRef : index dans member.statuts (UI) ou clé du statut
+export function startTreatment(memberId, statusRef) {
+  const r = canTreat(memberId, statusRef);
   if (!r.ok) { toast(r.reason); return; }
   const member = S.crew.find(m => m.id === memberId);
   // Débite ressources
@@ -1806,8 +1878,8 @@ export function startTreatment(memberId, statusIdx) {
   S.treatments.push({
     id: 'tr_' + Date.now().toString(36),
     memberId,
-    statusIdx,
-    statutKey: member.statuts[statusIdx].key,
+    statusIdx: r.statusIdx,      // pour l'UI ; recalé par syncTreatmentIndexes
+    statutKey: r.status.key,     // référence fiable du statut traité
     doctorId: r.doctor.id,
     totalMin: duration,
     doneMin: 0,
@@ -1819,10 +1891,13 @@ export function startTreatment(memberId, statusIdx) {
 
 export function finishTreatment(treatment) {
   const member = S.crew.find(m => m.id === treatment.memberId);
-  if (!member) return;
-  const status = member.statuts[treatment.statusIdx];
-  if (!status) return;
+  if (!member || member.statut === 'mort') return;
+  // Le statut traité est retrouvé par sa clé (son index a pu changer depuis le début du soin)
+  const found = findMemberStatus(member, treatment.statutKey || treatment.statusIdx);
+  if (!found) return;
+  const { status, idx: statusIdx } = found;
   const def = STATUTS[status.key];
+  if (!def) return;
   // Tirage de séquelle
   let sequelMsg = '';
   if (def.onCured && def.onCured.sequelChance > 0 && Math.random() < def.onCured.sequelChance * techEffectsAccumulated().sequelChanceMult) {
@@ -1837,14 +1912,9 @@ export function finishTreatment(treatment) {
   }
   // Cas spécial mutation : "soigner" = annuler la mutation, mais peut laisser une séquelle
   // Retire le statut
-  member.statuts.splice(treatment.statusIdx, 1);
-  // Retire les autres traitements pointant vers cet index ou réajuste
-  // (par sécurité, on ré-indexe les traitements restants)
-  for (const t of S.treatments) {
-    if (t.memberId === member.id && t.statusIdx > treatment.statusIdx) {
-      t.statusIdx--;
-    }
-  }
+  member.statuts.splice(statusIdx, 1);
+  // Recale les index des autres traitements de ce colon (et retire celui-ci)
+  syncTreatmentIndexes(member);
   // Récupération de santé partielle
   member.sante = Math.min(100, member.sante + def.severity * 8);
   log('success', `<em>${member.name}</em> est rétabli(e) de ${def.nom.toLowerCase()}.${sequelMsg}`);
@@ -1893,21 +1963,22 @@ export function progressMemberStatuts(member) {
     if (!s.revealed && s.revealAt && S.meta.gameMin >= s.revealAt) {
       s.revealed = true;
       s.diagnosed = true;
-      log('warn', `<em>${member.name}</em> : <em>${STATUTS[s.key].nom}</em> apparente.`);
+      log('warn', `<em>${member.name}</em> : <em>${STATUTS[s.key]?.nom || s.key}</em> apparente.`);
     }
   }
   // Auto-guérison & complications
   for (let i = member.statuts.length - 1; i >= 0; i--) {
     const s = member.statuts[i];
     const def = STATUTS[s.key];
-    if (!def.untreated) continue;
+    if (!def?.untreated) continue;
     const elapsed = S.meta.gameMin - s.since;
     // En traitement actif → on ne déclenche pas la complication
-    const inTreatment = S.treatments.some(t => t.memberId === member.id && t.statusIdx === i);
-    if (inTreatment) continue;
+    // (recherche par clé : l'index d'un statut change quand un autre est retiré)
+    if (treatmentOf(member.id, s.key)) continue;
 
     if (def.untreated.selfCure && elapsed >= def.untreated.afterMin) {
       member.statuts.splice(i, 1);
+      syncTreatmentIndexes(member);
       log('neutral', `<em>${member.name}</em> guérit naturellement (${def.nom.toLowerCase()}).`);
       if (member.statut === 'infirmerie' && member.statuts.length === 0) {
         returnToBase(member);
@@ -1929,14 +2000,15 @@ export function progressMemberStatuts(member) {
         // Convertit en pathogene_alien
         member.statuts.splice(i, 1);
         inflictStatus(member, 'pathogene_alien', "éclosion parasitaire");
+        syncTreatmentIndexes(member);
       }
     }
   }
   // Contagion : si statut contagieux non traité, propage à un autre membre proche
   for (const s of member.statuts) {
     const def = STATUTS[s.key];
-    if (!def.contagion) continue;
-    const inTreatment = S.treatments.some(t => t.memberId === member.id && t.statutKey === s.key);
+    if (!def?.contagion) continue;
+    const inTreatment = !!treatmentOf(member.id, s.key);
     // Diviseur : si en quarantaine (en infirmerie + statut contagieux), contagion ÷ 4
     let rate = def.contagion.perDay;
     if (member.statut === 'infirmerie') rate /= 4;
@@ -2391,6 +2463,7 @@ export function maxHealthOf(member) {
 // - Élève/Instructeur en formation : +0.05/tick
 // La désaffectation et les ruptures n'érodent pas naturellement (pour l'instant)
 export function tickRelations() {
+  ensureCrewIntegrity();   // répare une fois les sauvegardes chargées (cf. repairCrewState)
   if (!S.crew || S.crew.length < 2) return;
   // Même bâtiment
   for (const modKey in MODULE_JOBS) {
