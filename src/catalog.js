@@ -32,7 +32,10 @@ export const MODULES = {
     // ouverture ne peut plus bloquer la partie faute de mine. Pas d'entretien.
     // prodFixed : unités par HEURE RÉELLE (non indexées sur PROD_MULT, sans personnel).
     prodFixed: () => ({ metal: 250, cristal: 150 }),
-    effect: () => `+250 métal · +150 cristal /h (récupération) · débloque les autres modules`
+    // V1 : les couchettes de la capsule d'atterrissage logent l'équipage de départ
+    // (3 colons) et un premier renfort ; l'Habitat prend le relais.
+    capCrew: () => 4,
+    effect: () => `+250 métal · +150 cristal /h (récupération) · 4 couchettes · débloque les autres modules`
   },
   generateur_solaire: {
     nom: 'Générateur solaire',
