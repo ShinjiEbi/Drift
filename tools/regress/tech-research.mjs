@@ -161,6 +161,26 @@ try {
     };
   });
 
+  // M1 — le cache des effets de techs suit les techs terminées et le remplacement de l'état
+  await scenario('M1 : cache des effets de techs invalidé à bon escient', () => {
+    const { st, app, fresh } = window.__t;
+    const S = fresh();
+    S.modules.laboratoire = { level: 2 };
+    const a = app.techEffectsAccumulated();
+    const same = app.techEffectsAccumulated() === a;
+    // Fin de recherche normale
+    S.research = [{ id: 'r_t', techId: 'tech_silos_basiques', startedAt: 0, totalMin: 0.1, doneMin: 0 }];
+    app.tickResearch();
+    const afterResearch = app.techEffectsAccumulated().capacityMult.metal === 1.25;
+    // Chargement d'un autre état (même nombre de techs, autre objet)
+    const S2 = fresh();
+    S2.techCompleted = { tech_stockage_quantique: { at: 0 } };
+    const afterLoad = app.techEffectsAccumulated().capacityMult.metal === 2;
+    st.setS({ ...S2, techCompleted: {} });
+    const afterReset = app.techEffectsAccumulated().capacityMult.metal === 1;
+    return { cached: same, afterResearch, afterLoad, afterReset };
+  });
+
   // E9 — cohérence des paliers : une tech ne dépend jamais d'une tech de palier supérieur
   await scenario('E9 : paliers de l\'arbre cohérents', async () => {
     const { TECH_TREE } = await import('./src/catalog.js');

@@ -790,8 +790,24 @@ export function tickResearch() {
 // Toutes les fonctions du jeu qui veulent connaître un bonus appellent
 // techEffectsAccumulated() ou des helpers spécifiques.
 
-// Renvoie un objet agrégé de tous les effets actifs des techs complétées
+// Renvoie un objet agrégé de tous les effets actifs des techs complétées.
+// Appelée plusieurs fois par tick (capOf, computeRates, contagion…) : le
+// résultat est mis en cache et recalculé seulement quand l'ensemble des techs
+// terminées change (nouvelle tech) ou que l'objet d'état est remplacé
+// (chargement, import, reset). L'objet renvoyé est partagé : ne pas le modifier.
+let _techFx = null, _techFxState = null, _techFxDone = null, _techFxCount = -1;
 export function techEffectsAccumulated() {
+  const done = S?.techCompleted;
+  const n = done ? Object.keys(done).length : 0;
+  if (_techFx && _techFxState === S && _techFxDone === done && _techFxCount === n) return _techFx;
+  _techFx = computeTechEffects();
+  _techFxState = S;
+  _techFxDone = done;
+  _techFxCount = n;
+  return _techFx;
+}
+
+function computeTechEffects() {
   const acc = {
     resourceMult:        { metal:1, cristal:1, energie:1, biomasse:1, datacubes:1 },
     moduleProdMult:      {},   // par modKey
@@ -2587,13 +2603,11 @@ export function tickRelations() {
       }
     }
   }
-  // Soin : patient ↔ médecin staff
+  // Soin : patient ↔ médecin qui le soigne (celui du traitement, sans
+  // recalculer bestAvailableDoctor() pour chaque traitement à chaque tick)
   for (const t of S.treatments || []) {
-    if (!living.has(t.memberId)) continue;
-    const doc = bestAvailableDoctor();
-    if (doc && doc.id !== t.memberId) {
-      adjustAffinity(doc.id, t.memberId, 0.10 * MIN_PER_TICK);
-    }
+    if (!living.has(t.memberId) || !living.has(t.doctorId) || t.doctorId === t.memberId) continue;
+    adjustAffinity(t.doctorId, t.memberId, 0.10 * MIN_PER_TICK);
   }
   // Formation : élève ↔ instructeur
   for (const tr of S.training || []) {
