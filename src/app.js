@@ -44,6 +44,11 @@ import { notif } from './notifications.js';
    - flag        : effet débloqué (laboratoire, atelier, etc.)
 */
 
+// Identifiants uniques des recherches, fabrications, formations et traitements
+// (import séparé et renommé pour ne pas entrer en conflit avec la ligne d'import
+// principale de util.js).
+import { uid as makeId } from './util.js';
+
 // ============================================================
 //   POSTES & RÔLES — la vie de la base
 // ============================================================
@@ -115,31 +120,49 @@ export function memberAt(modKey, slotIdx) {
   return S.crew.find(m => m.id === id) || null;
 }
 
+// Motifs de refus d'affectation selon le statut du colon
+const UNAVAILABLE_REASONS = {
+  mort: 'Décédé',
+  expedition: 'En expédition',
+  formation: 'En formation',
+  infirmerie: 'À l\'infirmerie',
+  diplomatie: 'En mission diplomatique'
+};
+
 // Affecte un membre à un poste (gère désaffectation préalable)
 export function assignMember(memberId, modKey, slotIdx) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok: false, reason: 'Colon introuvable' };
-  if (member.statut === 'mort') return { ok: false, reason: 'Décédé' };
-  if (member.statut === 'expedition') return { ok: false, reason: 'En expédition' };
-  if (member.statut === 'formation') return { ok: false, reason: 'En formation' };
-  if (member.statut === 'infirmerie') return { ok: false, reason: 'À l\'infirmerie' };
+  // Seul un colon présent et disponible (libre ou déjà en poste) peut être affecté
+  if (member.statut !== 'libre' && member.statut !== 'travail') {
+    return { ok: false, reason: UNAVAILABLE_REASONS[member.statut] || `Indisponible (${member.statut})` };
+  }
 
   const jobs = jobsForModule(modKey);
   const job = jobs[slotIdx];
   if (!job) return { ok: false, reason: 'Poste inexistant' };
+
+  const prev = memberAssignment(memberId);
+  // Déjà à ce poste : rien à changer (l'ancienneté n'est pas remise à zéro
+  // et l'historique de carrière ne reçoit pas d'entrée en double)
+  if (prev && prev.modKey === modKey && prev.slotIdx === slotIdx) {
+    member.statut = 'travail';
+    return { ok: true };
+  }
   if (!isEligibleForJob(member, job)) return { ok: false, reason: 'Prérequis non remplis' };
 
-  // Désaffecte le membre de son poste précédent (s'il en avait un)
-  const prev = memberAssignment(memberId);
-  if (prev) {
-    // Archive career history before leaving previous post
-    if (member.posteInfo) {
-      if (!member.posteHistorique) member.posteHistorique = [];
-      member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
-      delete member.posteInfo;
-    }
-    delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
+  // Reprise du poste décrit par posteInfo (ex. après une remise à plat de
+  // toutes les affectations) : l'ancienneté continue.
+  const keepTenure = member.posteInfo?.modKey === modKey && member.posteInfo?.slotIdx === slotIdx
+    && typeof member.posteInfo.depuis === 'number';
+  // Archive le poste précédent dans l'historique de carrière
+  if (member.posteInfo && !keepTenure) {
+    if (!member.posteHistorique) member.posteHistorique = [];
+    member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
+    delete member.posteInfo;
   }
+  // Désaffecte le membre de son poste précédent (s'il en avait un)
+  if (prev) delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
 
   // Si un autre colon occupait ce poste, le désaffecter
   const occupant = memberAt(modKey, slotIdx);
@@ -149,19 +172,25 @@ export function assignMember(memberId, modKey, slotIdx) {
       occupant.posteHistorique.push({ ...occupant.posteInfo, jusqua: S.meta?.gameMin || 0 });
       delete occupant.posteInfo;
     }
-    occupant.statut = 'libre';
+    delete S.assignments[jobKey(modKey, slotIdx)];
+    // Seul un occupant présent au poste redevient libre. Un occupant absent
+    // (expédition, soins, formation, mission) garde son statut : il perd
+    // seulement la réservation et sera « libre » à son retour (returnToBase).
+    if (occupant.statut === 'travail') occupant.statut = 'libre';
   }
 
   // Affecte et enregistre le poste actuel
   S.assignments[jobKey(modKey, slotIdx)] = memberId;
   member.statut = 'travail';
-  member.posteInfo = {
-    modKey,
-    slotIdx,
-    titre: job.label,
-    role: job.role,
-    depuis: S.meta?.gameMin || 0
-  };
+  if (!keepTenure) {
+    member.posteInfo = {
+      modKey,
+      slotIdx,
+      titre: job.label,
+      role: job.role,
+      depuis: S.meta?.gameMin || 0
+    };
+  }
   return { ok: true };
 }
 
@@ -197,8 +226,9 @@ export function unassignSlot(modKey, slotIdx) {
 
 // Bonus de production lié à l'ancienneté dans le poste actuel.
 // Un colon qui reste longtemps sur son poste devient plus efficace.
+// posteInfo peut manquer (colon affecté avant 0.32) : pas de bonus, pas d'erreur.
 export function ancienneteBonus(member) {
-  if (!member?.posteInfo) return { mult: 1.0, label: null, annees: 0 };
+  if (!member?.posteInfo || typeof member.posteInfo.depuis !== 'number') return { mult: 1.0, label: null, annees: 0 };
   const dureeMin = (S.meta?.gameMin || 0) - (member.posteInfo.depuis || 0);
   const annees = dureeMin / YEAR_IN_GAME_MIN;
   if (annees < 1)  return { mult: 1.0,  label: null,          annees };
@@ -258,6 +288,7 @@ export function autoAssignMember(memberId) {
 
 // Lance l'auto-affectation pour tous les colons libres (utilisé au démarrage et à la construction)
 export function autoAssignAllFreeMembers() {
+  ensureCrewIntegrity();
   if (!S.autoAssign) return;
   // Trie les colons libres par "force" décroissante (somme skills) pour donner
   // les meilleurs postes aux meilleurs colons
@@ -266,6 +297,67 @@ export function autoAssignAllFreeMembers() {
     .map(m => ({ m, score: SKILL_LIST.reduce((s, k) => s + (m.skills[k] || 0), 0) }))
     .sort((a, b) => b.score - a.score);
   for (const { m } of free) autoAssignMember(m.id);
+}
+
+// ---- Réparation des sauvegardes ----
+// Remet en cohérence l'équipage d'une sauvegarde abîmée par d'anciens bugs
+// (0.32 et avant). Idempotente : sans effet sur un état sain.
+// Appelée automatiquement une fois par objet d'état (ensureCrewIntegrity, depuis
+// le tick et l'auto-affectation) ; peut aussi être appelée juste après load().
+export function repairCrewState() {
+  if (!S || !Array.isArray(S.crew)) return;
+  const byId = new Map(S.crew.map(m => [m.id, m]));
+  const alive = id => { const m = byId.get(id); return !!m && m.statut !== 'mort'; };
+  // Affectations vers un colon disparu ou mort
+  if (S.assignments) {
+    for (const k of Object.keys(S.assignments)) {
+      if (!alive(S.assignments[k])) delete S.assignments[k];
+    }
+  }
+  // Statut de présence : un colon embarqué dans une expédition ou une mission
+  // diplomatique en cours doit en porter le statut (anciens bugs : remplacement
+  // d'un occupant absent, diagnostic qui « libérait » le médecin…).
+  const inExpedition = new Set();
+  for (const exp of S.expeditions || []) for (const id of exp.crewIds || []) inExpedition.add(id);
+  const inMission = new Set((S.diplomaticMissions || []).map(d => d.memberId));
+  const inTraining = new Set((S.training || []).map(t => t.memberId));
+  for (const m of S.crew) {
+    if (m.statut === 'mort') continue;
+    const present = m.statut === 'libre' || m.statut === 'travail';
+    if (inExpedition.has(m.id)) { if (present) m.statut = 'expedition'; continue; }
+    if (inMission.has(m.id)) { if (present) m.statut = 'diplomatie'; continue; }
+    const hasPost = !!memberAssignment(m.id);
+    // Absence qui n'existe plus (expédition/mission/formation disparue) : retour à la base
+    const stuck = m.statut === 'expedition' || m.statut === 'diplomatie'
+      || (m.statut === 'formation' && !inTraining.has(m.id));
+    if (stuck || present) m.statut = hasPost ? 'travail' : 'libre';
+  }
+  // Traitements : statut visé identifié par sa clé, index recalé, orphelins et doublons retirés
+  if (Array.isArray(S.treatments)) {
+    S.treatments = S.treatments.filter(t => alive(t.memberId));
+    for (const m of S.crew) syncTreatmentIndexes(m);
+    const seen = new Set();
+    S.treatments = S.treatments.filter(t => {
+      const k = t.memberId + '|' + t.statutKey;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+}
+
+const _checkedStates = new WeakSet();
+// Lance repairCrewState une seule fois par objet d'état (chargement, import, reset)
+export function ensureCrewIntegrity() {
+  if (!S || typeof S !== 'object' || _checkedStates.has(S)) return;
+  _checkedStates.add(S);
+  try { repairCrewState(); } catch (e) { console.error('[repairCrewState]', e); }
+}
+
+// Plancher de rendement d'un poste vacant (mode automatisé) : JOB_BASE_FRACTION,
+// relevé par les techs (baseFractionDelta : Automatisation, Relais unifié), borné à 1.
+export function automationFloor() {
+  return Math.min(1, JOB_BASE_FRACTION + (techEffectsAccumulated().baseFractionDelta || 0));
 }
 
 // Calcule le coefficient d'efficacité d'un bâtiment selon ses postes pourvus
@@ -318,15 +410,16 @@ export function moduleEfficiency(modKey) {
   }
 
   const fillFraction = filled / jobs.length;
-  // Production : mode automatisé à JOB_BASE_FRACTION, ou
+  // Production : mode automatisé au plancher (JOB_BASE_FRACTION + techs), ou
   //   (prodFilled / prodCount) × 1.0 si tous les postes prod sont pourvus, +qualité/ancienneté
+  const floor = automationFloor();
   let prodMult;
   if (prodCount === 0) {
     // pas de poste prod → fillFraction comme proxy
-    prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * fillFraction;
+    prodMult = floor + (1 - floor) * fillFraction;
   } else {
     const prodRatio = prodFilled / prodCount;
-    prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * prodRatio;
+    prodMult = floor + (1 - floor) * prodRatio;
     prodMult += qualityFilled * 0.20;   // chaque qualité = +20%
     prodMult += cmdFilled * 0.05;       // commandement bonus modeste
     prodMult += tenureBonus;            // ancienneté des producteurs
@@ -342,17 +435,25 @@ export function moduleEfficiency(modKey) {
   return { fillFraction, prodMult, qualityBonus, upkeepMult, securityBonus, supportBonus, jobsTotal: jobs.length, jobsFilled: filled };
 }
 
-// Bonus global de la colonie : somme des cmd partout
+// Bonus global de la colonie : somme des cmd partout.
+// Comme staffOf, ne compte que les postes ouverts au niveau actuel du module
+// (cf. jobsForModule) : un officier resté sur un poste supprimé (module
+// endommagé/rétrogradé) ne compte plus.
 export function globalCommandBonus() {
   let n = 0;
   for (const k in S.assignments) {
     const [modKey, idxStr] = k.split(':');
-    const job = MODULE_JOBS[modKey]?.[parseInt(idxStr, 10)];
+    const idx = parseInt(idxStr, 10);
+    if (!(idx < (S.modules[modKey]?.level || 0))) continue;
+    const job = MODULE_JOBS[modKey]?.[idx];
     if (!job || job.role !== 'commandement') continue;
     const m = S.crew.find(c => c.id === S.assignments[k]);
     if (m && m.statut === 'travail') n++;
   }
-  return n;
+  // Le Centre de commandement ne produit rien : son multiplicateur de tech
+  // (moduleProdMult.commandement, Relais unifié) renforce le poids de tous les
+  // postes de commandement de la colonie.
+  return n * (techEffectsAccumulated().moduleProdMult.commandement || 1);
 }
 
 // Récupère tous les colons affectés à un bâtiment (en travail effectif).
@@ -592,7 +693,7 @@ export function startResearch(techId) {
   }
   if (!S.research) S.research = [];
   S.research.push({
-    id: 'r_' + Date.now().toString(36),
+    id: makeId('r'),
     techId,
     startedAt: S.meta.gameMin,
     totalMin: r.cost.time * BUILD_TIME_MULT,
@@ -600,6 +701,13 @@ export function startResearch(techId) {
   });
   log('neutral', `Recherche engagée : <em>${r.tech.nom}</em>. Durée : ${fmtMin(r.cost.time * BUILD_TIME_MULT)}.`);
   render();
+}
+
+// Rembourse `amount` d'une ressource dans la limite de la capacité réelle
+// (capOf : techs et modules compris). Ne réduit jamais un stock existant.
+function refundRes(k, amount) {
+  const cur = S.res[k] || 0;
+  S.res[k] = Math.max(cur, Math.min(capOf(k), cur + amount));
 }
 
 export function cancelResearch(researchId) {
@@ -610,7 +718,7 @@ export function cancelResearch(researchId) {
   const tech = TECH_TREE[r.techId];
   // Rembourse 50% des datacubes
   if (tech) {
-    S.res.datacubes = Math.min(CAP.datacubes || Infinity, S.res.datacubes + Math.floor(tech.cost.datacubes * 0.5));
+    refundRes('datacubes', Math.floor(tech.cost.datacubes * 0.5));
     if (tech.cost.datacubes_alien) {
       S.alienDatacubes = (S.alienDatacubes || 0) + Math.floor(tech.cost.datacubes_alien * 0.5);
     }
@@ -659,8 +767,8 @@ export function laboratoryBonuses() {
 export function tickResearch() {
   if (!S.research || S.research.length === 0) return;
   const lb = laboratoryBonuses();
-  // Mode automatisé sans Chercheur : 30% de la vitesse normale
-  const autoMult = lb.activeProd ? 1.0 : JOB_BASE_FRACTION;
+  // Mode automatisé sans Chercheur : plancher d'automatisation (30% + techs)
+  const autoMult = lb.activeProd ? 1.0 : automationFloor();
   
   // 0.25 : bonus de vitesse depuis modules avec researchSpeedBonus (mémoire cristalline)
   let modBonus = 1.0;
@@ -687,8 +795,24 @@ export function tickResearch() {
 // Toutes les fonctions du jeu qui veulent connaître un bonus appellent
 // techEffectsAccumulated() ou des helpers spécifiques.
 
-// Renvoie un objet agrégé de tous les effets actifs des techs complétées
+// Renvoie un objet agrégé de tous les effets actifs des techs complétées.
+// Appelée plusieurs fois par tick (capOf, computeRates, contagion…) : le
+// résultat est mis en cache et recalculé seulement quand l'ensemble des techs
+// terminées change (nouvelle tech) ou que l'objet d'état est remplacé
+// (chargement, import, reset). L'objet renvoyé est partagé : ne pas le modifier.
+let _techFx = null, _techFxState = null, _techFxDone = null, _techFxCount = -1;
 export function techEffectsAccumulated() {
+  const done = S?.techCompleted;
+  const n = done ? Object.keys(done).length : 0;
+  if (_techFx && _techFxState === S && _techFxDone === done && _techFxCount === n) return _techFx;
+  _techFx = computeTechEffects();
+  _techFxState = S;
+  _techFxDone = done;
+  _techFxCount = n;
+  return _techFx;
+}
+
+function computeTechEffects() {
   const acc = {
     resourceMult:        { metal:1, cristal:1, energie:1, biomasse:1, datacubes:1 },
     moduleProdMult:      {},   // par modKey
@@ -848,7 +972,7 @@ export function startFabrication(fabId) {
   for (const k in fab.cost) S.res[k] -= fab.cost[k];
   if (!S.fabrication) S.fabrication = [];
   S.fabrication.push({
-    id: 'f_' + Date.now().toString(36),
+    id: makeId('f'),
     fabId,
     startedAt: S.meta.gameMin,
     totalMin: fab.time * BUILD_TIME_MULT,
@@ -866,9 +990,7 @@ export function cancelFabrication(fId) {
   const fab = FABRICATIONS[f.fabId];
   // Rembourse 50% des ressources
   if (fab) {
-    for (const k in fab.cost) {
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + Math.floor(fab.cost[k] * 0.5));
-    }
+    for (const k in fab.cost) refundRes(k, Math.floor(fab.cost[k] * 0.5));
   }
   S.fabrication.splice(idx, 1);
   log('warn', `Fabrication interrompue : <em>${fab?.nom || '?'}</em>. 50% des ressources récupérées.`);
@@ -899,8 +1021,8 @@ function finishFabrication(fId) {
 export function tickFabrication() {
   if (!S.fabrication || S.fabrication.length === 0) return;
   const bonuses = workshopBonuses();
-  // Mode automatisé sans Artisan : 30% de la vitesse
-  const autoMult = bonuses.hasArtisan ? 1.0 : JOB_BASE_FRACTION;
+  // Mode automatisé sans Artisan : plancher d'automatisation (30% + techs)
+  const autoMult = bonuses.hasArtisan ? 1.0 : automationFloor();
   const finished = [];
   for (const f of S.fabrication) {
     f.doneMin += MIN_PER_TICK * autoMult / bonuses.speedMult;
@@ -1512,7 +1634,7 @@ export function startTraining(memberId, skill) {
   for (const k in r.cost) S.res[k] -= r.cost[k];
   // Ouvre la session
   const session = {
-    id: 't_' + Date.now().toString(36),
+    id: makeId('t'),
     memberId,
     skill,
     targetLvl: r.target,
@@ -1574,10 +1696,7 @@ export function cancelTraining(sessionId) {
   const s = S.training[idx];
   const member = S.crew.find(m => m.id === s.memberId);
   // Rembourse 50% des ressources
-  for (const k in s.cost) {
-    const refund = Math.floor(s.cost[k] / 2);
-    S.res[k] = Math.min(capOf(k), S.res[k] + refund);
-  }
+  for (const k in s.cost) refundRes(k, Math.floor(s.cost[k] / 2));
   S.training.splice(idx, 1);
   if (member) {
     returnToBase(member);
@@ -1599,6 +1718,42 @@ export function infirmaryBeds() {
 export function bedsInUse() {
   // un patient en infirmerie occupe un lit dès qu'il y est admis
   return S.crew.filter(m => m.statut === 'infirmerie').length;
+}
+
+// ---- Référencement des statuts traités ----
+// Un traitement vise un statut par sa clé (`statutKey`), unique par colon
+// puisque inflictStatus dédoublonne. `statusIdx` (index dans member.statuts)
+// est conservé pour l'UI, mais il est recalé après chaque retrait de statut :
+// une auto-guérison ou une éclosion décale les index suivants.
+
+// Retrouve un statut par son index (API historique de l'UI) ou par sa clé.
+// Renvoie { status, idx } ou null.
+function findMemberStatus(member, ref) {
+  if (!member || !Array.isArray(member.statuts)) return null;
+  const idx = typeof ref === 'string'
+    ? member.statuts.findIndex(s => s.key === ref)
+    : (Number.isInteger(ref) ? ref : -1);
+  const status = idx >= 0 ? member.statuts[idx] : null;
+  return status ? { status, idx } : null;
+}
+
+// Traitement en cours sur le statut `statutKey` d'un colon (ou null)
+export function treatmentOf(memberId, statutKey) {
+  return (S.treatments || []).find(t => t.memberId === memberId && t.statutKey === statutKey) || null;
+}
+
+// Recale statusIdx des traitements d'un colon sur l'état actuel de member.statuts.
+// À appeler après tout retrait de statut. Un traitement dont le statut a disparu est retiré.
+export function syncTreatmentIndexes(member) {
+  if (!member || !Array.isArray(S.treatments) || !Array.isArray(member.statuts)) return;
+  for (let i = S.treatments.length - 1; i >= 0; i--) {
+    const t = S.treatments[i];
+    if (t.memberId !== member.id) continue;
+    if (!t.statutKey) t.statutKey = member.statuts[t.statusIdx]?.key;  // sauvegarde antérieure
+    const idx = t.statutKey ? member.statuts.findIndex(s => s.key === t.statutKey) : -1;
+    if (idx < 0) S.treatments.splice(i, 1);
+    else t.statusIdx = idx;
+  }
 }
 
 // Trouve le meilleur médecin disponible.
@@ -1640,24 +1795,41 @@ export function infirmaryBonuses() {
   return { speedMult, diagBonus, traitMedecinNe };
 }
 
+// Statuts « contaminants » bloqués en expédition par tech_membrane_adaptive
+const EXPEDITION_CONTAMINANTS = ['pathogene_alien', 'infection', 'parasite'];
+
 // Inflige un statut à un membre. Si caché, pose "Anomalie suspecte" jusqu'au diagnostic.
-export function inflictStatus(member, statutKey, source = '') {
+// opts.internal : évolution d'un mal déjà présent (ex. éclosion d'un parasite),
+// et non une exposition : ni l'instinct du Survivant ni les membranes ne l'évitent.
+export function inflictStatus(member, statutKey, source = '', opts = {}) {
   if (!member || member.statut === 'mort') return;
   const def = STATUTS[statutKey];
   if (!def) return;
+  if (!Array.isArray(member.statuts)) member.statuts = [];
   // Évite les doublons exacts
   if (member.statuts.some(s => s.key === statutKey)) return;
+  // Membranes adaptives (expeditionToxicImmune) : l'équipe d'expédition est
+  // immunisée contre les contaminations biologiques du terrain
+  if (!opts.internal && EXPEDITION_CONTAMINANTS.includes(statutKey)
+      && (member.statut === 'expedition' || /^exp[ée]dition/i.test(source))
+      && techEffectsAccumulated().expeditionToxicImmune) {
+    log('neutral', `La membrane adaptive de <em>${member.name}</em> bloque la contamination.`);
+    return;
+  }
   // Survivant résiste 50% du temps
-  if (member.traits.includes('survivant') && Math.random() < 0.5) {
+  if (!opts.internal && (member.traits || []).includes('survivant') && Math.random() < 0.5) {
     log('neutral', `<em>${member.name}</em> évite ${def.nom.toLowerCase()} grâce à son instinct.`);
     return;
   }
+  // Un statut à révélation différée (revealAfter, ex. mutation) reste une
+  // « anomalie » jusqu'à son apparition (progressMemberStatuts) ou un diagnostic
+  const visible = !def.hidden && !def.revealAfter;
   const status = {
     key: statutKey,
     since: S.meta.gameMin,
-    revealed: !def.hidden,        // visible direct si pas hidden
+    revealed: visible,
     revealAt: def.revealAfter ? S.meta.gameMin + def.revealAfter : null,
-    diagnosed: !def.hidden,
+    diagnosed: visible,
     statMod: def.statMod || {}
   };
   // Cas mutation : déterminer le mod (50/50 positif / négatif)
@@ -1672,7 +1844,7 @@ export function inflictStatus(member, statutKey, source = '') {
   }
   member.statuts.push(status);
   member.sante = Math.max(0, member.sante - def.severity * 5);
-  const noun = def.hidden ? "un état suspect" : `<em>${def.nom}</em>`;
+  const noun = visible ? `<em>${def.nom}</em>` : "un état suspect";
   log('warn', `<em>${member.name}</em> présente ${noun}${source ? ' — ' + source : ''}.`);
 }
 
@@ -1680,7 +1852,12 @@ export function inflictStatus(member, statutKey, source = '') {
 export function admitToInfirmary(memberId) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return;
-  if (member.statut === 'mort') return;
+  if (member.statut === 'mort' || member.statut === 'infirmerie') return;
+  // Seul un colon présent à la base peut être admis (pas en expédition ni en mission)
+  if (!['libre', 'travail', 'formation'].includes(member.statut)) {
+    toast(`${member.name} n'est pas à la base.`);
+    return;
+  }
   if (infirmaryBeds() <= bedsInUse()) {
     toast("Infirmerie pleine — choisir un triage.");
     return;
@@ -1698,14 +1875,13 @@ export function admitToInfirmary(memberId) {
 
 export function dischargeMember(memberId) {
   const member = S.crew.find(m => m.id === memberId);
-  if (!member) return;
+  // Ne concerne qu'un patient admis : ne « rapatrie » pas un colon absent
+  if (!member || member.statut !== 'infirmerie') return;
   // Annule traitements en cours
   S.treatments = S.treatments.filter(t => {
     if (t.memberId === memberId) {
       // rembourse 30%
-      for (const k in t.cost) {
-        S.res[k] = Math.min(capOf(k), S.res[k] + Math.floor(t.cost[k] * 0.3));
-      }
+      for (const k in t.cost) refundRes(k, Math.floor(t.cost[k] * 0.3));
       return false;
     }
     return true;
@@ -1715,60 +1891,76 @@ export function dischargeMember(memberId) {
   render();
 }
 
-// Lance un diagnostic actif sur un statut caché
-export function startDiagnostic(memberId, statusIdx) {
-  const member = S.crew.find(m => m.id === memberId);
-  if (!member) return;
-  if (member.statut !== 'infirmerie') {
-    toast("Le patient doit être admis avant.");
-    return;
-  }
-  const status = member.statuts[statusIdx];
-  if (!status || status.diagnosed) return;
-  const def = STATUTS[status.key];
-  // Conditions
-  if (def.detect.needLab && !S.flags.recherche) {
-    toast("Laboratoire requis pour ce diagnostic.");
-    return;
-  }
-  const doctor = bestAvailableDoctor();
-  if (!doctor) {
-    toast("Aucun médecin disponible.");
-    return;
-  }
-  // Coût simple : 2 datacubes pour usage labo, sinon 0
-  const cost = def.detect.needLab ? { datacubes: 2 } : {};
-  for (const k in cost) {
-    if (S.res[k] < cost[k]) { toast(`Ressources insuffisantes (${RES_LABELS[k]})`); return; }
-  }
-  for (const k in cost) S.res[k] -= cost[k];
-  doctor.statut = 'expedition';   // bloqué temporaire (réutilise le statut, géré dans render)
-  doctor.statut = 'libre';        // simplification : diagnostic instantané narratif
+// Délai minimal entre deux examens d'un même statut après un échec (minutes de jeu)
+export const DIAG_RETRY_MIN = 60;
 
-  const success = rollDiagnostic(memberId, status.key, doctor);
+// Vérifie qu'un diagnostic est lançable. statusRef : index (UI) ou clé du statut.
+// Renvoie { ok, reason, cost, doctor, waitMin? } — utilisable par l'UI pour le bouton.
+export function canDiagnose(memberId, statusRef) {
+  const member = S.crew.find(m => m.id === memberId);
+  if (!member) return { ok:false, reason:"Patient introuvable" };
+  if (member.statut !== 'infirmerie') return { ok:false, reason:"Le patient doit être admis avant." };
+  const found = findMemberStatus(member, statusRef);
+  if (!found) return { ok:false, reason:"Statut introuvable" };
+  const { status, idx: statusIdx } = found;
+  if (status.diagnosed) return { ok:false, reason:"Déjà diagnostiqué" };
+  const def = STATUTS[status.key];
+  if (!def) return { ok:false, reason:"Statut inconnu" };
+  const det = (def.detect && typeof def.detect === 'object') ? def.detect : {};
+  if (det.needLab && !S.flags.recherche) return { ok:false, reason:"Laboratoire requis pour ce diagnostic." };
+  const doctor = bestAvailableDoctor();
+  if (!doctor) return { ok:false, reason:"Aucun médecin disponible." };
+  // Un examen non concluant ne peut être refait qu'après un délai
+  const waitMin = typeof status.lastDiagAt === 'number' ? status.lastDiagAt + DIAG_RETRY_MIN - S.meta.gameMin : 0;
+  if (waitMin > 0) return { ok:false, reason:`Nouvel examen possible dans ${fmtMin(waitMin)}`, waitMin };
+  // Coût simple : 2 datacubes pour usage labo, sinon 0
+  const cost = det.needLab ? { datacubes: 2 } : {};
+  for (const k in cost) {
+    if ((S.res[k] || 0) < cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+  }
+  return { ok:true, member, status, statusIdx, def, doctor, cost };
+}
+
+// Lance un diagnostic actif sur un statut caché (statusRef : index ou clé)
+export function startDiagnostic(memberId, statusRef) {
+  const r = canDiagnose(memberId, statusRef);
+  if (!r.ok) {
+    if (r.reason !== "Déjà diagnostiqué") toast(r.reason);
+    return;
+  }
+  const { member, status, def, doctor, cost } = r;
+  for (const k in cost) S.res[k] -= cost[k];
+  // Diagnostic instantané : le médecin garde son statut (et son poste)
+  const success = rollDiagnostic(member.id, status.key, doctor);
   if (success) {
     status.diagnosed = true;
     status.revealed = true;
+    delete status.lastDiagAt;
     log('success', `Diagnostic posé par <em>${doctor.name}</em> : <em>${member.name}</em> souffre de <em>${def.nom}</em>.`);
   } else {
-    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. À retenter.`);
+    // Échec : nouvel examen possible seulement après DIAG_RETRY_MIN
+    status.lastDiagAt = S.meta.gameMin;
+    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. Nouvel examen possible dans ${fmtMin(DIAG_RETRY_MIN)}.`);
   }
   render();
 }
 
-// Vérifie qu'un traitement est lançable
-export function canTreat(memberId, statusIdx) {
+// Vérifie qu'un traitement est lançable.
+// statusRef : index dans member.statuts (UI) ou clé du statut.
+export function canTreat(memberId, statusRef) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Patient introuvable" };
   if (member.statut !== 'infirmerie') return { ok:false, reason:"Patient non admis" };
-  const status = member.statuts[statusIdx];
-  if (!status) return { ok:false, reason:"Statut introuvable" };
+  const found = findMemberStatus(member, statusRef);
+  if (!found) return { ok:false, reason:"Statut introuvable" };
+  const { status, idx: statusIdx } = found;
   if (!status.diagnosed) return { ok:false, reason:"Diagnostic requis avant traitement" };
-  // Déjà en cours ?
-  if (S.treatments.some(t => t.memberId === memberId && t.statusIdx === statusIdx)) {
+  // Déjà en cours ? (par clé : l'index d'un statut peut changer)
+  if (treatmentOf(memberId, status.key)) {
     return { ok:false, reason:"Traitement déjà en cours" };
   }
   const def = STATUTS[status.key];
+  if (!def) return { ok:false, reason:"Statut inconnu" };
   const infLvl = S.modules.infirmerie?.level || 0;
   if (infLvl < def.medLvlReq) {
     return { ok:false, reason:`Infirmerie niv ${def.medLvlReq} requise (actuelle : ${infLvl})` };
@@ -1776,38 +1968,41 @@ export function canTreat(memberId, statusIdx) {
   const tdef = TREATMENTS[status.key]?.[0];
   if (!tdef) return { ok:false, reason:"Aucun traitement disponible" };
   const doctor = bestAvailableDoctor();
-  if ((doctor?.skills.medecine || 0) < tdef.requiresMedSkill) {
+  // Même un soin bénin (requiresMedSkill 0) demande quelqu'un pour le prodiguer
+  if (!doctor) return { ok:false, reason:"Aucun médecin disponible" };
+  if ((doctor.skills.medecine || 0) < tdef.requiresMedSkill) {
     return { ok:false, reason:`Médecin avec Médecine ≥ ${tdef.requiresMedSkill} requis` };
   }
   for (const k in tdef.cost) {
     if (S.res[k] < tdef.cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
   }
-  return { ok:true, treatment:tdef, doctor, def };
+  return { ok:true, treatment:tdef, doctor, def, status, statusIdx };
 }
 
-export function startTreatment(memberId, statusIdx) {
-  const r = canTreat(memberId, statusIdx);
+// statusRef : index dans member.statuts (UI) ou clé du statut
+export function startTreatment(memberId, statusRef) {
+  const r = canTreat(memberId, statusRef);
   if (!r.ok) { toast(r.reason); return; }
   const member = S.crew.find(m => m.id === memberId);
-  // Débite ressources
-  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   // Modifie durée selon skill du médecin et trait Médecin né
   let duration = r.treatment.durationMin;
   const medSkill = r.doctor.skills.medecine || 0;
   duration *= Math.max(0.5, 1 - (medSkill - r.treatment.requiresMedSkill) * 0.1);
-  if (r.doctor.traits.includes('medic_ne')) duration *= 0.75;
+  if ((r.doctor.traits || []).includes('medic_ne')) duration *= 0.75;
   // Bonus du staff de l'infirmerie (Spécialiste, Infirmier, etc.)
   const bonuses = infirmaryBonuses();
   duration *= bonuses.speedMult;
-  if (bonuses.traitMedecinNe && !r.doctor.traits.includes('medic_ne')) duration *= 0.85;
+  if (bonuses.traitMedecinNe && !(r.doctor.traits || []).includes('medic_ne')) duration *= 0.85;
   // Bonus de tech (pharmacopée)
   duration *= techEffectsAccumulated().treatmentSpeedMult;
   duration = Math.round(duration);
+  // Débite les ressources une fois tous les calculs faits (rien n'est perdu en cas d'erreur)
+  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   S.treatments.push({
-    id: 'tr_' + Date.now().toString(36),
+    id: makeId('tr'),
     memberId,
-    statusIdx,
-    statutKey: member.statuts[statusIdx].key,
+    statusIdx: r.statusIdx,      // pour l'UI ; recalé par syncTreatmentIndexes
+    statutKey: r.status.key,     // référence fiable du statut traité
     doctorId: r.doctor.id,
     totalMin: duration,
     doneMin: 0,
@@ -1819,10 +2014,13 @@ export function startTreatment(memberId, statusIdx) {
 
 export function finishTreatment(treatment) {
   const member = S.crew.find(m => m.id === treatment.memberId);
-  if (!member) return;
-  const status = member.statuts[treatment.statusIdx];
-  if (!status) return;
+  if (!member || member.statut === 'mort') return;
+  // Le statut traité est retrouvé par sa clé (son index a pu changer depuis le début du soin)
+  const found = findMemberStatus(member, treatment.statutKey || treatment.statusIdx);
+  if (!found) return;
+  const { status, idx: statusIdx } = found;
   const def = STATUTS[status.key];
+  if (!def) return;
   // Tirage de séquelle
   let sequelMsg = '';
   if (def.onCured && def.onCured.sequelChance > 0 && Math.random() < def.onCured.sequelChance * techEffectsAccumulated().sequelChanceMult) {
@@ -1837,14 +2035,9 @@ export function finishTreatment(treatment) {
   }
   // Cas spécial mutation : "soigner" = annuler la mutation, mais peut laisser une séquelle
   // Retire le statut
-  member.statuts.splice(treatment.statusIdx, 1);
-  // Retire les autres traitements pointant vers cet index ou réajuste
-  // (par sécurité, on ré-indexe les traitements restants)
-  for (const t of S.treatments) {
-    if (t.memberId === member.id && t.statusIdx > treatment.statusIdx) {
-      t.statusIdx--;
-    }
-  }
+  member.statuts.splice(statusIdx, 1);
+  // Recale les index des autres traitements de ce colon (et retire celui-ci)
+  syncTreatmentIndexes(member);
   // Récupération de santé partielle
   member.sante = Math.min(100, member.sante + def.severity * 8);
   log('success', `<em>${member.name}</em> est rétabli(e) de ${def.nom.toLowerCase()}.${sequelMsg}`);
@@ -1860,15 +2053,20 @@ export function finishTreatment(treatment) {
 // Mort d'un membre
 function memberDies(member, cause = 'cause inconnue') {
   if (member.statut === 'mort') return;
-  // Libère le poste s'il en avait un
+  // Libère le poste s'il en avait un (archive la carrière), puis toute
+  // affectation résiduelle qui pointerait encore vers lui
   unassignMember(member.id);
+  for (const k of Object.keys(S.assignments || {})) {
+    if (S.assignments[k] === member.id) delete S.assignments[k];
+  }
   member.statut = 'mort';
   member.diedAt = S.meta.gameMin;
   // Retire les traitements en cours
-  S.treatments = S.treatments.filter(t => t.memberId !== member.id);
-  // Retire les sessions de formation
-  const tIdx = S.training.findIndex(t => t.memberId === member.id);
-  if (tIdx >= 0) S.training.splice(tIdx, 1);
+  S.treatments = (S.treatments || []).filter(t => t.memberId !== member.id);
+  // Retire ses sessions de formation (en place : la boucle de tick garde la référence)
+  for (let i = (S.training || []).length - 1; i >= 0; i--) {
+    if (S.training[i].memberId === member.id) S.training.splice(i, 1);
+  }
   // Impact moral collectif
   for (const m of S.crew) {
     if (m.id !== member.id && m.statut !== 'mort') {
@@ -1882,6 +2080,22 @@ function memberDies(member, cause = 'cause inconnue') {
   triggerGriefOnFriends(member);
 }
 
+// Où se trouve physiquement un colon (pour la contagion) :
+// 'base', 'exp:<id>' pour l'équipage d'une même expédition, null s'il est isolé
+// (mission diplomatique) ou mort.
+function memberLocation(member) {
+  switch (member.statut) {
+    case 'libre': case 'travail': case 'infirmerie': case 'formation':
+      return 'base';
+    case 'expedition': {
+      const exp = (S.expeditions || []).find(e => (e.crewIds || []).includes(member.id));
+      return exp ? 'exp:' + exp.id : null;
+    }
+    default:
+      return null;
+  }
+}
+
 // Fait évoluer les statuts d'un membre (appelé chaque tick)
 export function progressMemberStatuts(member) {
   if (member.statut === 'mort') return;
@@ -1893,21 +2107,22 @@ export function progressMemberStatuts(member) {
     if (!s.revealed && s.revealAt && S.meta.gameMin >= s.revealAt) {
       s.revealed = true;
       s.diagnosed = true;
-      log('warn', `<em>${member.name}</em> : <em>${STATUTS[s.key].nom}</em> apparente.`);
+      log('warn', `<em>${member.name}</em> : <em>${STATUTS[s.key]?.nom || s.key}</em> apparente.`);
     }
   }
   // Auto-guérison & complications
   for (let i = member.statuts.length - 1; i >= 0; i--) {
     const s = member.statuts[i];
     const def = STATUTS[s.key];
-    if (!def.untreated) continue;
+    if (!def?.untreated) continue;
     const elapsed = S.meta.gameMin - s.since;
     // En traitement actif → on ne déclenche pas la complication
-    const inTreatment = S.treatments.some(t => t.memberId === member.id && t.statusIdx === i);
-    if (inTreatment) continue;
+    // (recherche par clé : l'index d'un statut change quand un autre est retiré)
+    if (treatmentOf(member.id, s.key)) continue;
 
     if (def.untreated.selfCure && elapsed >= def.untreated.afterMin) {
       member.statuts.splice(i, 1);
+      syncTreatmentIndexes(member);
       log('neutral', `<em>${member.name}</em> guérit naturellement (${def.nom.toLowerCase()}).`);
       if (member.statut === 'infirmerie' && member.statuts.length === 0) {
         returnToBase(member);
@@ -1928,15 +2143,16 @@ export function progressMemberStatuts(member) {
       if (become === 'eclosion') {
         // Convertit en pathogene_alien
         member.statuts.splice(i, 1);
-        inflictStatus(member, 'pathogene_alien', "éclosion parasitaire");
+        inflictStatus(member, 'pathogene_alien', "éclosion parasitaire", { internal: true });
+        syncTreatmentIndexes(member);
       }
     }
   }
   // Contagion : si statut contagieux non traité, propage à un autre membre proche
   for (const s of member.statuts) {
     const def = STATUTS[s.key];
-    if (!def.contagion) continue;
-    const inTreatment = S.treatments.some(t => t.memberId === member.id && t.statutKey === s.key);
+    if (!def?.contagion) continue;
+    const inTreatment = !!treatmentOf(member.id, s.key);
     // Diviseur : si en quarantaine (en infirmerie + statut contagieux), contagion ÷ 4
     let rate = def.contagion.perDay;
     if (member.statut === 'infirmerie') rate /= 4;
@@ -1946,12 +2162,14 @@ export function progressMemberStatuts(member) {
     // Convertir taux/jour en taux/min
     const ratePerMin = rate / (24 * 60);
     if (Math.random() < ratePerMin * MIN_PER_TICK) {
-      // Tire une victime parmi les autres membres sains
-      const pool = S.crew.filter(m =>
+      // Tire une victime parmi les autres membres sains présents au même endroit
+      const here = memberLocation(member);
+      const pool = here ? S.crew.filter(m =>
         m.id !== member.id &&
         m.statut !== 'mort' &&
-        !m.statuts.some(ss => ss.key === s.key)
-      );
+        !(m.statuts || []).some(ss => ss.key === s.key) &&
+        memberLocation(m) === here
+      ) : [];
       if (pool.length > 0) {
         const victim = pool[Math.floor(Math.random() * pool.length)];
         inflictStatus(victim, s.key, `contagion depuis ${member.name}`);
@@ -2391,7 +2609,11 @@ export function maxHealthOf(member) {
 // - Élève/Instructeur en formation : +0.05/tick
 // La désaffectation et les ruptures n'érodent pas naturellement (pour l'instant)
 export function tickRelations() {
+  ensureCrewIntegrity();   // répare une fois les sauvegardes chargées (cf. repairCrewState)
   if (!S.crew || S.crew.length < 2) return;
+  // Les morts ne tissent plus de liens
+  const living = new Set();
+  for (const m of S.crew) if (m.statut !== 'mort') living.add(m.id);
   // Même bâtiment
   for (const modKey in MODULE_JOBS) {
     const staff = staffOf(modKey);
@@ -2404,22 +2626,23 @@ export function tickRelations() {
   }
   // Même expédition
   for (const exp of S.expeditions || []) {
-    if (exp.crewIds.length < 2) continue;
-    for (let i = 0; i < exp.crewIds.length; i++) {
-      for (let j = i+1; j < exp.crewIds.length; j++) {
-        adjustAffinity(exp.crewIds[i], exp.crewIds[j], 0.06 * MIN_PER_TICK);
+    const ids = (exp.crewIds || []).filter(id => living.has(id));
+    if (ids.length < 2) continue;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i+1; j < ids.length; j++) {
+        adjustAffinity(ids[i], ids[j], 0.06 * MIN_PER_TICK);
       }
     }
   }
-  // Soin : patient ↔ médecin staff
+  // Soin : patient ↔ médecin qui le soigne (celui du traitement, sans
+  // recalculer bestAvailableDoctor() pour chaque traitement à chaque tick)
   for (const t of S.treatments || []) {
-    const doc = bestAvailableDoctor();
-    if (doc && doc.id !== t.memberId) {
-      adjustAffinity(doc.id, t.memberId, 0.10 * MIN_PER_TICK);
-    }
+    if (!living.has(t.memberId) || !living.has(t.doctorId) || t.doctorId === t.memberId) continue;
+    adjustAffinity(t.doctorId, t.memberId, 0.10 * MIN_PER_TICK);
   }
   // Formation : élève ↔ instructeur
   for (const tr of S.training || []) {
+    if (!living.has(tr.memberId) || !living.has(tr.instructorId)) continue;
     if (tr.instructorId && tr.instructorId !== tr.memberId) {
       adjustAffinity(tr.instructorId, tr.memberId, 0.05 * MIN_PER_TICK);
     }
@@ -2438,7 +2661,7 @@ export function tickRelationMoraleEffects() {
         if (Math.abs(aff) < REL_FRIEND) continue;
         const m1 = S.crew.find(c => c.id === exp.crewIds[i]);
         const m2 = S.crew.find(c => c.id === exp.crewIds[j]);
-        if (!m1 || !m2) continue;
+        if (!m1 || !m2 || m1.statut === 'mort' || m2.statut === 'mort') continue;
         // Effet par tick : très petit, mais cumulatif
         const moralDelta = aff > 0 ? 0.005 : -0.008;
         const factor = MIN_PER_TICK;
@@ -2463,11 +2686,8 @@ export function tickAging() {
       const yearlyDeathProb = (age - 70) * 0.01 + 0.01;  // 1% à 70, 2% à 71...
       const tickProb = yearlyDeathProb * MIN_PER_TICK / YEAR_IN_GAME_MIN;
       if (Math.random() < tickProb) {
-        // Mort de cause naturelle
-        memberDies(m, "vieillesse");
-        log('warn', `<em>${m.name}</em> s'est éteint(e) paisiblement, à ${age} ans.`);
-        // Trauma sur les amis proches
-        triggerGriefOnFriends(m);
+        // Mort de cause naturelle (memberDies journalise et déclenche le deuil des proches)
+        memberDies(m, `Mort naturelle, paisible, à ${age} ans.`);
       }
     }
   }
@@ -2502,7 +2722,8 @@ export function significantRelations(memberId) {
   if (!S.relations) return { friends: [], rivals: [] };
   const out = [];
   for (const m of (S.crew || [])) {
-    if (m.id === memberId) continue;
+    // Les défunts ne « réagissent » plus aux événements et ne sont plus listés
+    if (m.id === memberId || m.statut === 'mort') continue;
     const aff = affinityBetween(memberId, m.id);
     if (Math.abs(aff) >= REL_FRIEND) {
       out.push({ memberId: m.id, member: m, affinity: aff });
