@@ -4776,7 +4776,7 @@ h2.eyebrow { margin-top: 22px; }
 .obj-card.urgence { border-left-color: var(--rust-text); }
 .obj-card.done { opacity: 0.6; }
 .obj-text { flex: 1; min-width: 0; }
-.obj-kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); margin-bottom: 2px; }
+.obj-kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .obj-kicker.crit { color: var(--rust-text); }
 .obj-title { font-family: var(--serif); font-size: 16px; line-height: 1.3; color: var(--text); }
 .obj-detail { font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
@@ -4966,6 +4966,15 @@ h2.eyebrow { margin-top: 22px; }
 .module .disabled-badge { display: inline-block; margin-bottom: 6px; }
 
 /* ----- Postes : plus compact ----- */
+/* « vacant » et non « empty » : la classe générique .empty (états vides) centrait
+   et gonflait les postes vacants */
+.module-assign-card .mac-fill .v.none { color: var(--rust-text); }
+.slot-row.vacant:hover { background: rgba(212,160,86,0.05); }
+.slot-occupant.vacant { font-family: var(--mono); font-size: 11px; color: var(--text-mute); letter-spacing: 0.1em; text-transform: uppercase; }
+.staff-row.vacant { color: var(--text-mute); font-style: italic; }
+.staff-row.vacant .sr-name { color: var(--rust-text); }
+.module-assign-card .mac-fill { font-size: 12px; }
+.module-assign-card .mac-fill .v { font-family: var(--mono); font-style: normal; }
 .module-assign-card { margin-bottom: 10px; }
 .module-assign-card .mac-head { padding: 8px 12px; }
 .module-assign-card .mac-name { font-size: 16px; }

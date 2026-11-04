@@ -406,8 +406,33 @@ function withoutStaff(id) {
 }
 const diff = (a, b) => Object.fromEntries(RESOURCES.map(k => [k, (a[k] || 0) - (b[k] || 0)]));
 
+// Les productions ne changent qu'avec les bâtiments, les postes, les techs ou
+// les effets temporaires : on ne les recalcule que si cette empreinte change
+// (sinon la vue Construction coûterait des dizaines de computeRates par tick).
+let _yieldCache = { sig: '', map: new Map() };
+function yieldSig() {
+  const gm = S.meta.gameMin || 0;
+  const mods = Object.entries(S.modules || {}).map(([k, m]) => `${k}${m?.level}${m?.disabledUntil > gm ? 'x' : ''}`).sort().join();
+  const asg = Object.entries(S.assignments || {}).map(([k, v]) => k + v).sort().join();   // trié : withoutStaff() réordonne les clés
+  const work = (S.crew || []).filter(m => m.statut === 'travail').length;
+  return [mods, asg, work, Object.keys(S.techCompleted || {}).length,
+    (S.activeBuffs || []).filter(b => b.expiresAt > gm).length, Math.floor(gm / 600)].join('|');
+}
+
 // Contribution d'un module : maintenant, sans personnel, au niveau suivant
+// À appeler une fois par rendu (renderConstruction) : vide le cache si l'état a changé
+export function refreshYieldCache() {
+  const sig = yieldSig();
+  if (sig !== _yieldCache.sig || _yieldCache.s !== S) _yieldCache = { sig, s: S, map: new Map() };
+}
 export function moduleYield(id, nextLevel) {
+  if (_yieldCache.s !== S) refreshYieldCache();
+  const key = id + ':' + nextLevel;
+  let v = _yieldCache.map.get(key);
+  if (!v) { v = computeYield(id, nextLevel); _yieldCache.map.set(key, v); }
+  return v;
+}
+function computeYield(id, nextLevel) {
   const cur = S.modules[id]?.level || 0;
   const without = ratesWith(withLevel(id, 0));
   const now = cur > 0 ? diff(computeRates(), without) : null;
@@ -473,6 +498,7 @@ function matchFilter(st, f) {
 }
 
 export function renderConstruction() {
+  refreshYieldCache();
   renderBuildPanel();
   const ids = Object.keys(MODULES);
   const stats = Object.fromEntries(ids.map(id => [id, moduleStatus(id)]));
@@ -747,7 +773,7 @@ export function renderAssignments() {
 function renderAssignCard(modKey, jobs) {
   const def = MODULES[modKey];
   const eff = moduleEfficiency(modKey);
-  const fillCls = eff.jobsFilled === eff.jobsTotal ? 'full' : eff.jobsFilled === 0 ? 'empty' : 'partial';
+  const fillCls = eff.jobsFilled === eff.jobsTotal ? 'full' : eff.jobsFilled === 0 ? 'none' : 'partial';
   const prodPct = Math.round(eff.prodMult * 100);
   return `<div class="module-assign-card" data-mod="${esc(modKey)}">
     <div class="mac-head">
@@ -776,9 +802,9 @@ function renderSlotRow(modKey, slotIdx, job) {
     } else status = `<span class="occ-status">${esc(m.statut)}</span>`;
     occHTML = `<div class="slot-occupant"><span class="occ-name${unfit}">${esc(m.name)}</span>${status}</div>`;
   } else {
-    occHTML = '<div class="slot-occupant empty">vacant</div>';
+    occHTML = '<div class="slot-occupant vacant">vacant</div>';
   }
-  return `<div class="slot-row ${m ? '' : 'empty'} ${m && !onPost ? 'away' : ''}" data-mod="${esc(modKey)}" data-slot="${slotIdx}" role="button" tabindex="0" aria-label="${esc(job.label)} : ${m ? esc(m.name) : 'vacant'}">
+  return `<div class="slot-row ${m ? '' : 'vacant'} ${m && !onPost ? 'away' : ''}" data-mod="${esc(modKey)}" data-slot="${slotIdx}" role="button" tabindex="0" aria-label="${esc(job.label)} : ${m ? esc(m.name) : 'vacant'}">
     <div class="slot-role" style="background:${role.color}"></div>
     <div class="slot-info">
       <div class="slot-label">${job.label}</div>

@@ -264,7 +264,7 @@ export function renderStaffPanel(modKey, opts = {}) {
     const role = ROLES[job.role] || { nom: job.role, color: 'var(--text-mute)' };
     const onPost = m && m.statut === 'travail';
     const who = onPost ? esc(m.name) : m ? `${esc(m.name)} · ${esc(statutLabel(m.statut).toLowerCase())}` : 'vacant';
-    return `<div class="staff-row${onPost ? '' : ' empty'}" style="border-left-color:${role.color}">
+    return `<div class="staff-row${onPost ? '' : ' vacant'}" style="border-left-color:${role.color}">
       <div class="sr-info"><span class="role-mini" style="color:${role.color}">${role.nom}</span>${job.label}</div>
       <div class="sr-name">${who}</div>
     </div>`;
