@@ -203,6 +203,13 @@ header.top {
   background: var(--border);
   flex-shrink: 0;
 }
+/* Petits écrans : les 6 valeurs (stocks à 4 chiffres compris) doivent tenir sans défilement */
+@media (max-width: 480px) {
+  .res-bar { gap: 4px; justify-content: space-between; }
+  .res-bar-cell { padding: 2px 1px; gap: 3px; }
+  .res-bar-cell .rb-label { letter-spacing: 0.02em; }
+  .res-bar-cell .rb-value { letter-spacing: 0; }
+}
 
 /* Bandeau alertes contextuelles : apparaît seulement s'il y a quelque chose */
 .alert-bar {
