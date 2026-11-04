@@ -28,7 +28,7 @@
 
 // @generated-start — tools/sw-version.mjs (npm run sw:write)
 const APP_VERSION = '0.33.0';
-const CONTENT_HASH = 'c7e28f778de7';
+const CONTENT_HASH = 'd304090696a2';
 const PRECACHE_URLS = [
   './index.html',
   './favicon.ico',
@@ -63,10 +63,17 @@ const PRECACHE_URLS = [
   './src/constants.js',
   './src/data-arcs-factions.js',
   './src/notifications.js',
+  './src/objectives.js',
   './src/pwa.js',
   './src/state.js',
   './src/ui.js',
   './src/util.js',
+  './src/views/base.js',
+  './src/views/common.js',
+  './src/views/equipage.js',
+  './src/views/expeditions.js',
+  './src/views/labo.js',
+  './src/views/recits.js',
   './styles.css'
 ];
 // @generated-end
