@@ -43,59 +43,63 @@
 <div id="app">
 
   <header class="top">
-    <div class="brand">DRIFT<span class="dot"></span><span id="colonyName">Avant-poste</span></div>
+    <div class="brand">DRIFT<span class="dot" aria-hidden="true"></span><span id="colonyName">Avant-poste</span></div>
     <div class="session-clock">
       <b id="gameTime">J1 · 00:00</b>
       <span id="realTime">session 0:00</span>
     </div>
-    <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil">⤓</button>
+    <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil" aria-label="Installer DRIFT sur ton appareil"><span aria-hidden="true">⤓</span></button>
   </header>
 
-  <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
-  <div class="res-bar" id="resBar">
-    <div class="res-bar-cell" data-res="metal">
-      <span class="rb-label">Me</span>
-      <span class="rb-value" id="rbMetal">0</span>
+  <!-- Barres collantes (un seul bloc : elles ne se chevauchent plus au défilement) -->
+  <div class="topbars">
+    <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
+    <div class="res-bar" id="resBar" role="group" aria-label="Ressources">
+      <div class="res-bar-cell" data-res="metal">
+        <span class="rb-label">Me</span>
+        <span class="rb-value" id="rbMetal">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="cristal">
+        <span class="rb-label">Cr</span>
+        <span class="rb-value" id="rbCristal">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="energie">
+        <span class="rb-label">En</span>
+        <span class="rb-value" id="rbEnergie">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="biomasse">
+        <span class="rb-label">Bio</span>
+        <span class="rb-value" id="rbBiomasse">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="datacubes">
+        <span class="rb-label">Dc</span>
+        <span class="rb-value" id="rbDatacubes">0</span>
+      </div>
+      <div class="res-bar-sep" aria-hidden="true"></div>
+      <div class="res-bar-cell pop">
+        <span class="rb-label">Pop</span>
+        <span class="rb-value" id="rbPop">0</span>
+      </div>
     </div>
-    <div class="res-bar-cell" data-res="cristal">
-      <span class="rb-label">Cr</span>
-      <span class="rb-value" id="rbCristal">0</span>
-    </div>
-    <div class="res-bar-cell" data-res="energie">
-      <span class="rb-label">En</span>
-      <span class="rb-value" id="rbEnergie">0</span>
-    </div>
-    <div class="res-bar-cell" data-res="biomasse">
-      <span class="rb-label">Bio</span>
-      <span class="rb-value" id="rbBiomasse">0</span>
-    </div>
-    <div class="res-bar-cell" data-res="datacubes">
-      <span class="rb-label">Dc</span>
-      <span class="rb-value" id="rbDatacubes">0</span>
-    </div>
-    <div class="res-bar-sep"></div>
-    <div class="res-bar-cell pop">
-      <span class="rb-label">Pop</span>
-      <span class="rb-value" id="rbPop">0</span>
-    </div>
-  </div>
 
-  <!-- 0.23 — Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
-  <div class="alert-bar" id="alertBar" style="display:none;">
-    <span class="ab-icon">⚠</span>
-    <span class="ab-text" id="alertText">Alertes</span>
-    <span class="ab-arrow">▸</span>
-  </div>
+    <!-- 0.23 — Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
+    <div class="alert-bar" id="alertBar" style="display:none;" role="button" tabindex="0" aria-haspopup="dialog">
+      <span class="ab-icon" aria-hidden="true">⚠</span>
+      <span class="ab-text" id="alertText">Alertes</span>
+      <span class="ab-arrow" aria-hidden="true">▸</span>
+    </div>
 
-  <nav class="tabs">
-    <button data-tab="overview" class="active" data-icon="🏛"><span class="tab-icon">🏛</span><span class="tab-label">Vue</span></button>
-    <button data-tab="modules" data-icon="⚙"><span class="tab-icon">⚙</span><span class="tab-label">Modules</span></button>
-    <button data-tab="crew" id="tab-crew" data-icon="👥"><span class="tab-icon">👥</span><span class="tab-label">Équipage</span><span class="tab-badge" id="crewBadge"></span></button>
-    <button data-tab="galaxy" id="tab-galaxy" data-icon="🛰"><span class="tab-icon">🛰</span><span class="tab-label">Galaxie</span><span class="tab-badge" id="galaxyBadge"></span></button>
-    <button data-tab="stocks" data-icon="📦"><span class="tab-icon">📦</span><span class="tab-label">Stocks</span></button>
-    <button data-tab="arcs" id="tab-arcs" data-icon="📜"><span class="tab-icon">📜</span><span class="tab-label">Chroniques</span><span class="tab-badge" id="arcsBadge"></span></button>
-    <button data-tab="journal" data-icon="📓"><span class="tab-icon">📓</span><span class="tab-label">Journal</span></button>
-  </nav>
+    <!-- Onglets : en haut sur ordinateur, barre fixe en bas sur mobile (libellés courts) -->
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button data-tab="overview" id="tab-overview" class="active" role="tab" aria-selected="true" aria-controls="view-overview"><span class="tab-icon" aria-hidden="true">🏛</span><span class="tab-label">Vue</span></button>
+      <button data-tab="modules" id="tab-modules" role="tab" aria-selected="false" aria-controls="view-modules" tabindex="-1"><span class="tab-icon" aria-hidden="true">⚙</span><span class="tab-label">Modules</span></button>
+      <button data-tab="crew" id="tab-crew" role="tab" aria-selected="false" aria-controls="view-crew" tabindex="-1"><span class="tab-icon" aria-hidden="true">👥</span><span class="tab-label tab-long">Équipage</span><span class="tab-short" aria-hidden="true">Équipe</span><span class="tab-badge" id="crewBadge"></span></button>
+      <button data-tab="galaxy" id="tab-galaxy" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1"><span class="tab-icon" aria-hidden="true">🛰</span><span class="tab-label">Galaxie</span><span class="tab-badge" id="galaxyBadge"></span></button>
+      <button data-tab="stocks" id="tab-stocks" role="tab" aria-selected="false" aria-controls="view-stocks" tabindex="-1"><span class="tab-icon" aria-hidden="true">📦</span><span class="tab-label">Stocks</span></button>
+      <button data-tab="arcs" id="tab-arcs" role="tab" aria-selected="false" aria-controls="view-arcs" tabindex="-1"><span class="tab-icon" aria-hidden="true">📜</span><span class="tab-label tab-long">Chroniques</span><span class="tab-short" aria-hidden="true">Chron.</span><span class="tab-badge" id="arcsBadge"></span></button>
+      <button data-tab="journal" id="tab-journal" role="tab" aria-selected="false" aria-controls="view-journal" tabindex="-1"><span class="tab-icon" aria-hidden="true">📓</span><span class="tab-label">Journal</span></button>
+    </nav>
+  </div>
 
   <main>
     <!-- VUE D'ENSEMBLE -->

@@ -4115,9 +4115,7 @@ document.addEventListener('keydown', e => {
   el.click();
 });
 
-// Barre de ressources : un clic mène à la vue d'ensemble (stocks et taux détaillés)
-$('#resBar')?.addEventListener('click', () => selectTab('overview'));
-// Bandeau d'alertes : ouvre le détail
+// Bandeau d'alertes : ouvre le détail (clavier : role="button", voir plus haut)
 $('#alertBar')?.addEventListener('click', () => { if (S) showAlertsModal(collectAlerts()); });
 
 function galaxyUI() {
