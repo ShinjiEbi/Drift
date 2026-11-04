@@ -44,6 +44,11 @@ import { notif } from './notifications.js';
    - flag        : effet débloqué (laboratoire, atelier, etc.)
 */
 
+// Identifiants uniques des recherches, fabrications, formations et traitements
+// (import séparé et renommé pour ne pas entrer en conflit avec la ligne d'import
+// principale de util.js).
+import { uid as makeId } from './util.js';
+
 // ============================================================
 //   POSTES & RÔLES — la vie de la base
 // ============================================================
@@ -688,7 +693,7 @@ export function startResearch(techId) {
   }
   if (!S.research) S.research = [];
   S.research.push({
-    id: 'r_' + Date.now().toString(36),
+    id: makeId('r'),
     techId,
     startedAt: S.meta.gameMin,
     totalMin: r.cost.time * BUILD_TIME_MULT,
@@ -967,7 +972,7 @@ export function startFabrication(fabId) {
   for (const k in fab.cost) S.res[k] -= fab.cost[k];
   if (!S.fabrication) S.fabrication = [];
   S.fabrication.push({
-    id: 'f_' + Date.now().toString(36),
+    id: makeId('f'),
     fabId,
     startedAt: S.meta.gameMin,
     totalMin: fab.time * BUILD_TIME_MULT,
@@ -1629,7 +1634,7 @@ export function startTraining(memberId, skill) {
   for (const k in r.cost) S.res[k] -= r.cost[k];
   // Ouvre la session
   const session = {
-    id: 't_' + Date.now().toString(36),
+    id: makeId('t'),
     memberId,
     skill,
     targetLvl: r.target,
@@ -1988,7 +1993,7 @@ export function startTreatment(memberId, statusRef) {
   // Débite les ressources une fois tous les calculs faits (rien n'est perdu en cas d'erreur)
   for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   S.treatments.push({
-    id: 'tr_' + Date.now().toString(36),
+    id: makeId('tr'),
     memberId,
     statusIdx: r.statusIdx,      // pour l'UI ; recalé par syncTreatmentIndexes
     statutKey: r.status.key,     // référence fiable du statut traité

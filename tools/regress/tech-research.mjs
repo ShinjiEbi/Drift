@@ -98,6 +98,22 @@ try {
     return { capRaised: cap > 260, refunded: S.res.datacubes === 260 - 30 + 15, cancelled: S.research.length === 0 };
   });
 
+  // Identifiants uniques même pour deux lancements dans la même milliseconde
+  await scenario('Ids : deux recherches lancées ensemble restent distinctes', () => {
+    const { app, fresh } = window.__t;
+    const S = fresh();
+    S.modules.laboratoire = { level: 4 };                     // 2 places de recherche
+    const now = Date.now;
+    Date.now = () => 1700000000000;                           // même milliseconde
+    try {
+      app.startResearch('tech_metallurgie');
+      app.startResearch('tech_circuiterie');
+    } finally { Date.now = now; }
+    const [a, b] = S.research;
+    app.cancelResearch(a.id);
+    return { distinct: !!a && !!b && a.id !== b.id, onlyOneCancelled: S.research.length === 1 && S.research[0].techId === 'tech_circuiterie' };
+  });
+
   // M5 — les autres remboursements ne réduisent jamais un stock
   await scenario('M5 : remboursements de formation sans perte', () => {
     const { st, app, fresh, mk } = window.__t;
