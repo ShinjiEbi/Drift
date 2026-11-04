@@ -683,6 +683,13 @@ export function startResearch(techId) {
   render();
 }
 
+// Rembourse `amount` d'une ressource dans la limite de la capacité réelle
+// (capOf : techs et modules compris). Ne réduit jamais un stock existant.
+function refundRes(k, amount) {
+  const cur = S.res[k] || 0;
+  S.res[k] = Math.max(cur, Math.min(capOf(k), cur + amount));
+}
+
 export function cancelResearch(researchId) {
   if (!S.research) return;
   const idx = S.research.findIndex(r => r.id === researchId);
@@ -691,7 +698,7 @@ export function cancelResearch(researchId) {
   const tech = TECH_TREE[r.techId];
   // Rembourse 50% des datacubes
   if (tech) {
-    S.res.datacubes = Math.min(CAP.datacubes || Infinity, S.res.datacubes + Math.floor(tech.cost.datacubes * 0.5));
+    refundRes('datacubes', Math.floor(tech.cost.datacubes * 0.5));
     if (tech.cost.datacubes_alien) {
       S.alienDatacubes = (S.alienDatacubes || 0) + Math.floor(tech.cost.datacubes_alien * 0.5);
     }
@@ -947,9 +954,7 @@ export function cancelFabrication(fId) {
   const fab = FABRICATIONS[f.fabId];
   // Rembourse 50% des ressources
   if (fab) {
-    for (const k in fab.cost) {
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + Math.floor(fab.cost[k] * 0.5));
-    }
+    for (const k in fab.cost) refundRes(k, Math.floor(fab.cost[k] * 0.5));
   }
   S.fabrication.splice(idx, 1);
   log('warn', `Fabrication interrompue : <em>${fab?.nom || '?'}</em>. 50% des ressources récupérées.`);
@@ -1655,10 +1660,7 @@ export function cancelTraining(sessionId) {
   const s = S.training[idx];
   const member = S.crew.find(m => m.id === s.memberId);
   // Rembourse 50% des ressources
-  for (const k in s.cost) {
-    const refund = Math.floor(s.cost[k] / 2);
-    S.res[k] = Math.min(capOf(k), S.res[k] + refund);
-  }
+  for (const k in s.cost) refundRes(k, Math.floor(s.cost[k] / 2));
   S.training.splice(idx, 1);
   if (member) {
     returnToBase(member);
@@ -1820,9 +1822,7 @@ export function dischargeMember(memberId) {
   S.treatments = S.treatments.filter(t => {
     if (t.memberId === memberId) {
       // rembourse 30%
-      for (const k in t.cost) {
-        S.res[k] = Math.min(capOf(k), S.res[k] + Math.floor(t.cost[k] * 0.3));
-      }
+      for (const k in t.cost) refundRes(k, Math.floor(t.cost[k] * 0.3));
       return false;
     }
     return true;
