@@ -1878,7 +1878,7 @@ function openResearchModal(techId) {
     <div class="rm-desc">${tech.desc}</div>
     <div class="rm-effects">${effectsLines.map(l => '› ' + l).join('<br>')}</div>
     ${costHTML}
-    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust)">${esc(r.reason)}</div>` : ''}
+    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust-text)">${esc(r.reason)}</div>` : ''}
     <div class="btn-row">
       <button id="researchCancel">Annuler</button>
       <button id="researchConfirm" class="primary" ${r.ok ? '' : 'disabled'}>Lancer la recherche</button>
@@ -1924,7 +1924,7 @@ function renderWorkshop() {
   const wBonusParts = [];
   if (bonuses.speedMult < 1) wBonusParts.push(`Fabrications <b>${Math.round((1 - bonuses.speedMult) * 100)}% plus rapides</b>`);
   if (bonuses.qualityChance > 0) wBonusParts.push(`<b>${Math.round(bonuses.qualityChance * 100)}%</b> de chance × 2`);
-  if (!bonuses.hasArtisan) wBonusParts.push(`<span style="color:var(--rust)">Aucun Artisan : 30% de la vitesse normale</span>`);
+  if (!bonuses.hasArtisan) wBonusParts.push(`<span style="color:var(--rust-text)">Aucun Artisan : 30% de la vitesse normale</span>`);
   const wBonusText = wBonusParts.length > 0
     ? wBonusParts.join(' · ')
     : `<span class="none">Aucun bonus actif. Affecte un Artisan.</span>`;
@@ -2088,7 +2088,7 @@ function openFabModal(fabId) {
     <h3>${fab.nom}</h3>
     <div class="rm-desc">${itemDef2.desc}</div>
     ${costHTML}
-    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust)">${esc(r.reason)}</div>` : ''}
+    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust-text)">${esc(r.reason)}</div>` : ''}
     <div class="btn-row">
       <button id="fabCancel">Annuler</button>
       <button id="fabConfirm" class="primary" ${r.ok ? '' : 'disabled'}>Lancer la fabrication</button>
@@ -3316,7 +3316,7 @@ function renderPersonCard(p, opts = {}) {
     let medInfo = '';
     if (sCount > 0 || seqCount > 0) {
       const parts = [];
-      if (sCount > 0) parts.push(`<span style="color:var(--rust)">⚠ ${sCount} statut${sCount>1?'s':''} actif${sCount>1?'s':''}</span>`);
+      if (sCount > 0) parts.push(`<span style="color:var(--rust-text)">⚠ ${sCount} statut${sCount>1?'s':''} actif${sCount>1?'s':''}</span>`);
       if (seqCount > 0) parts.push(`<span style="color:#d4998a">▲ ${seqCount} séquelle${seqCount>1?'s':''}</span>`);
       medInfo = `<div style="font-family:var(--mono);font-size:11px;margin-bottom:6px;letter-spacing:0.04em;">${parts.join(' · ')}</div>`;
     }
@@ -3335,7 +3335,7 @@ function renderPersonCard(p, opts = {}) {
         const dureeDays = p.posteInfo ? Math.floor(((S.meta?.gameMin || 0) - (p.posteInfo.depuis || 0)) / (24*60)) : 0;
         const ancBadge = ab.label
           ? ` <span class="career-badge cb-${ab.label.toLowerCase()}">${ab.label} +${Math.round((ab.mult-1)*100)}%</span>`
-          : (dureeDays > 0 ? ` <span style="opacity:0.55;font-size:10px">Dep. J.${dureeDays}</span>` : '');
+          : (dureeDays > 0 ? ` <span style="opacity:0.55;font-size:11px">Dep. J.${dureeDays}</span>` : '');
         postInfo = `<div class="crew-post-line">
           Poste : <span style="color:${role.color}">${job.label}</span> · ${def.nom}${ancBadge}
         </div>`;
@@ -3686,7 +3686,7 @@ function renderSoins() {
   const doctor = bestAvailableDoctor();
   const docInfo = doctor
     ? `<b>${esc(doctor.name)}</b> (Méd ${esc(doctor.skills?.medecine)})`
-    : `<span style="color:var(--rust)">aucun médecin disponible</span>`;
+    : `<span style="color:var(--rust-text)">aucun médecin disponible</span>`;
   setHTML(sub, `Infirmerie niv ${esc(lvl)} · paliers diag/traitement jusqu'à ${esc(lvl)}`);
 
   // Encart staff de l'infirmerie + bonus actuels
