@@ -5,7 +5,7 @@
 // À 360 px : les actions principales font au moins 44 px de haut ; les petits
 // boutons d'en-tête de carte ont une zone de toucher d'au moins 44 px
 // (vérifiée par elementFromPoint au-dessus et au-dessous du bouton).
-import { loadPlaywright, startServer, reporter, openGame, fillColony } from './lib.mjs';
+import { loadPlaywright, startServer, reporter, openGame, fillColony } from './_ui.mjs';
 
 const { chromium } = loadPlaywright();
 const t = reporter('Cibles tactiles (360 px)');

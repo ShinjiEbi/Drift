@@ -9,7 +9,7 @@
 //  M18 : les zones de sécurité iPhone (émulées via --safe-*) décalent l'en-tête,
 //        la barre d'onglets, l'overlay de scène et la modale.
 //  Divers : le bandeau d'alertes reste visible (non recouvert) après défilement.
-import { loadPlaywright, startServer, reporter, openGame } from './lib.mjs';
+import { loadPlaywright, startServer, reporter, openGame } from './_ui.mjs';
 
 const { chromium } = loadPlaywright();
 const t = reporter('Mise en page : pied de page, onglets, empilement, zones de sécurité');

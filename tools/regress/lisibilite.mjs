@@ -6,7 +6,7 @@
 //  - aucun texte visible sous 11 px, dans toutes les vues (390 px de large) ;
 //  - les champs de saisie font au moins 16 px (pas d'auto-zoom iOS) ;
 //  - --text-mute et --rust-text atteignent 4,5:1 sur toutes les surfaces du thème.
-import { loadPlaywright, startServer, reporter, openGame, fillColony } from './lib.mjs';
+import { loadPlaywright, startServer, reporter, openGame, fillColony } from './_ui.mjs';
 
 const { chromium } = loadPlaywright();
 const t = reporter('Lisibilité : zoom, tailles de police, contrastes');

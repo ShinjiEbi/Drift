@@ -9,7 +9,7 @@
 //  - cartes et lignes cliquables : role="button", tabindex, activation au clavier ;
 //  - onglets : role="tablist", aria-selected, flèches gauche/droite ;
 //  - arrière-plan inerte sous la modale et sous l'overlay de scène.
-import { loadPlaywright, startServer, reporter, openGame, fillColony } from './lib.mjs';
+import { loadPlaywright, startServer, reporter, openGame, fillColony } from './_ui.mjs';
 
 const { chromium } = loadPlaywright();
 const t = reporter('Accessibilité : modale, clavier, rôles');

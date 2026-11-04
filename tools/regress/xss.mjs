@@ -8,7 +8,7 @@
 // sources de découverte, effets temporaires, statuts…), rend chaque vue et chaque
 // modale, puis vérifie qu'aucun script ne s'est exécuté et que le texte est
 // affiché littéralement.
-import { loadPlaywright, startServer, reporter, openGame, fillColony } from './lib.mjs';
+import { loadPlaywright, startServer, reporter, openGame, fillColony } from './_ui.mjs';
 
 const { chromium } = loadPlaywright();
 const t = reporter('XSS : les données de sauvegarde sont échappées');

@@ -1,4 +1,4 @@
-// tools/regress/lib.mjs — outillage commun des tests de non-régression navigateur.
+// tools/regress/_ui.mjs — outillage commun des tests de non-régression de l'interface.
 // Même principe que tools/smoke.mjs : petit serveur statique + Chromium (Playwright,
 // cherché via NODE_PATH ou node_modules). Chaque test sort avec le code 1 en cas d'échec.
 /* global document, localStorage, sessionStorage */  // utilisés dans les callbacks exécutés par le navigateur

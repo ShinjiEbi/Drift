@@ -246,7 +246,9 @@ try {
   check(rob.buffs === 0, 'les sous-systèmes suivants tournent quand même');
   check(/erreur est survenue/.test(rob.toast), 'toast unique après erreurs répétées');
   check(rob.renderTicks === 12 && rob.renderAdvanced === 12 && rob.saved, `rendu en échec : +${rob.renderAdvanced} min pour 12 s (pas de double), sauvegarde faite`);
-  b.noErrors(page, 'aucune autre erreur de page', /\[TICK\]/);
+  // render() isole chaque vue (ui.js, guard) : l'en-tête privé de #gameTime ne lève plus
+  // d'exception mais journalise une fois « [render] renderHeader … » — attendu ici.
+  b.noErrors(page, 'aucune autre erreur de page', /\[TICK\]|\[render\]/);
   await ctx.close();
 } catch (e) {
   check(false, 'exception du test : ' + e.message);

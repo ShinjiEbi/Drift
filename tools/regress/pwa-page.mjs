@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global document, window, location */  // callbacks exécutés dans le navigateur
+/* global document, window, location, localStorage */  // callbacks exécutés dans le navigateur
 // tools/regress/pwa-page.mjs — sécurité et intégration PWA de la page (E5, F9, ?tab=).
 // Usage : node tools/regress/pwa-page.mjs   (Playwright via NODE_PATH, comme smoke.mjs)
 //
@@ -103,6 +103,9 @@ try {
   await page.waitForTimeout(900);
   check(await activeTab() === 'crew', '?tab=crew ouvre l\'onglet Équipage');
   check(!(await page.evaluate(() => location.search)), 'paramètre retiré de l\'URL');
+  // L'interface mémorise l'onglet ouvert (localStorage « drift_ui_nav ») et le restaure au
+  // rechargement : on l'oublie pour vérifier que les ?tab= suivants ne changent rien.
+  await page.evaluate(() => { try { localStorage.removeItem('drift_ui_nav'); } catch { /* rien */ } });
   for (const evil of ['"]', 'crew"],img[src=x', "x') ; alert(1)//", '<img src=x onerror=alert(1)>']) {
     await page.goto(BASE + '?tab=' + encodeURIComponent(evil));
     await waitGame();

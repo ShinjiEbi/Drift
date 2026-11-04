@@ -7,7 +7,7 @@
 //  C2 : une exception dans une vue ne bloque pas les autres, est journalisée
 //       une seule fois et affiche un message dans la vue ; les données
 //       inattendues (types inconnus) ne font pas planter le rendu.
-import { loadPlaywright, startServer, reporter, openGame, fillColony } from './lib.mjs';
+import { loadPlaywright, startServer, reporter, openGame, fillColony } from './_ui.mjs';
 
 const { chromium } = loadPlaywright();
 const t = reporter('Rendu : vue active, DOM conservé, isolation des erreurs');
