@@ -111,6 +111,65 @@ try {
     app.cancelTraining(s.id);
     return { started: !!s, notReduced: S.res.metal === metalCap + 50, back: m.statut === 'libre' };
   });
+
+  // E9 — baseFractionDelta relève vraiment le plancher des postes vacants
+  await scenario('E9 : plancher d\'automatisation appliqué', () => {
+    const { app, fresh } = window.__t;
+    const S = fresh();
+    S.modules.mine_surface = { level: 1 };
+    S.modules.laboratoire = { level: 1 };
+    const near = (a, b) => Math.abs(a - b) < 1e-9;
+    const base = app.moduleEfficiency('mine_surface').prodMult;
+    S.techCompleted.tech_automatisation = { at: 0 };
+    const auto = app.moduleEfficiency('mine_surface').prodMult;
+    S.techCompleted.tech_relais_unifie = { at: 0 };
+    const both = app.moduleEfficiency('mine_surface').prodMult;
+    // Recherche sans chercheur : avance au rythme du plancher
+    S.research = [{ id: 'r_t', techId: 'tech_metallurgie', startedAt: 0, totalMin: 1e6, doneMin: 0 }];
+    for (let i = 0; i < 10; i++) app.tickResearch();
+    return { base: near(base, 0.30), auto: near(auto, 0.45), both: near(both, 0.65), research: near(S.research[0].doneMin, 6.5) };
+  });
+
+  // E9 — Relais unifié : effet réel sur les postes de commandement
+  await scenario('E9 : Relais unifié renforce le commandement', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    const cap = mk({ skills: { pilotage: 2 } });
+    app.assignMember(cap.id, 'commandement', 0);
+    const before = app.globalCommandBonus();
+    S.techCompleted.tech_relais_unifie = { at: 0 };
+    return { before: before === 1, after: app.globalCommandBonus() === 1.5 };
+  });
+
+  // E9 — Membranes adaptives : immunité aux contaminations en expédition
+  await scenario('E9 : Membranes adaptives immunisent en expédition', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    const a = mk({ statut: 'expedition' });
+    const b = mk({ statut: 'expedition' });
+    const home = mk({ statut: 'libre' });
+    app.inflictStatus(a, 'pathogene_alien', 'expédition');
+    S.techCompleted.tech_membrane_adaptive = { at: 0 };
+    app.inflictStatus(b, 'pathogene_alien', 'expédition');
+    app.inflictStatus(b, 'blessure_legere', 'expédition');
+    app.inflictStatus(home, 'infection', 'incident');
+    return {
+      withoutTech: a.statuts.some(s => s.key === 'pathogene_alien'),
+      immune: !b.statuts.some(s => s.key === 'pathogene_alien'),
+      woundsStill: b.statuts.some(s => s.key === 'blessure_legere'),
+      baseUnaffected: home.statuts.some(s => s.key === 'infection')
+    };
+  });
+
+  // E9 — cohérence des paliers : une tech ne dépend jamais d'une tech de palier supérieur
+  await scenario('E9 : paliers de l\'arbre cohérents', async () => {
+    const { TECH_TREE } = await import('./src/catalog.js');
+    const bad = [];
+    for (const [id, t] of Object.entries(TECH_TREE)) {
+      for (const p of t.prereq?.tech || []) if (TECH_TREE[p] && TECH_TREE[p].tier > t.tier) bad.push(`${id}<-${p}`);
+    }
+    return { noInversion: bad.length === 0 || bad };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

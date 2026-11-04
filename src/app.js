@@ -349,6 +349,12 @@ export function ensureCrewIntegrity() {
   try { repairCrewState(); } catch (e) { console.error('[repairCrewState]', e); }
 }
 
+// Plancher de rendement d'un poste vacant (mode automatisé) : JOB_BASE_FRACTION,
+// relevé par les techs (baseFractionDelta : Automatisation, Relais unifié), borné à 1.
+export function automationFloor() {
+  return Math.min(1, JOB_BASE_FRACTION + (techEffectsAccumulated().baseFractionDelta || 0));
+}
+
 // Calcule le coefficient d'efficacité d'un bâtiment selon ses postes pourvus
 // Renvoie { fillFraction (0–1), prodMult, qualityBonus, upkeepMult, securityBonus, supportBonus, jobsTotal, jobsFilled }
 export function moduleEfficiency(modKey) {
@@ -399,15 +405,16 @@ export function moduleEfficiency(modKey) {
   }
 
   const fillFraction = filled / jobs.length;
-  // Production : mode automatisé à JOB_BASE_FRACTION, ou
+  // Production : mode automatisé au plancher (JOB_BASE_FRACTION + techs), ou
   //   (prodFilled / prodCount) × 1.0 si tous les postes prod sont pourvus, +qualité/ancienneté
+  const floor = automationFloor();
   let prodMult;
   if (prodCount === 0) {
     // pas de poste prod → fillFraction comme proxy
-    prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * fillFraction;
+    prodMult = floor + (1 - floor) * fillFraction;
   } else {
     const prodRatio = prodFilled / prodCount;
-    prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * prodRatio;
+    prodMult = floor + (1 - floor) * prodRatio;
     prodMult += qualityFilled * 0.20;   // chaque qualité = +20%
     prodMult += cmdFilled * 0.05;       // commandement bonus modeste
     prodMult += tenureBonus;            // ancienneté des producteurs
@@ -438,7 +445,10 @@ export function globalCommandBonus() {
     const m = S.crew.find(c => c.id === S.assignments[k]);
     if (m && m.statut === 'travail') n++;
   }
-  return n;
+  // Le Centre de commandement ne produit rien : son multiplicateur de tech
+  // (moduleProdMult.commandement, Relais unifié) renforce le poids de tous les
+  // postes de commandement de la colonie.
+  return n * (techEffectsAccumulated().moduleProdMult.commandement || 1);
 }
 
 // Récupère tous les colons affectés à un bâtiment (en travail effectif).
@@ -752,8 +762,8 @@ export function laboratoryBonuses() {
 export function tickResearch() {
   if (!S.research || S.research.length === 0) return;
   const lb = laboratoryBonuses();
-  // Mode automatisé sans Chercheur : 30% de la vitesse normale
-  const autoMult = lb.activeProd ? 1.0 : JOB_BASE_FRACTION;
+  // Mode automatisé sans Chercheur : plancher d'automatisation (30% + techs)
+  const autoMult = lb.activeProd ? 1.0 : automationFloor();
   
   // 0.25 : bonus de vitesse depuis modules avec researchSpeedBonus (mémoire cristalline)
   let modBonus = 1.0;
@@ -990,8 +1000,8 @@ function finishFabrication(fId) {
 export function tickFabrication() {
   if (!S.fabrication || S.fabrication.length === 0) return;
   const bonuses = workshopBonuses();
-  // Mode automatisé sans Artisan : 30% de la vitesse
-  const autoMult = bonuses.hasArtisan ? 1.0 : JOB_BASE_FRACTION;
+  // Mode automatisé sans Artisan : plancher d'automatisation (30% + techs)
+  const autoMult = bonuses.hasArtisan ? 1.0 : automationFloor();
   const finished = [];
   for (const f of S.fabrication) {
     f.doneMin += MIN_PER_TICK * autoMult / bonuses.speedMult;
@@ -1764,6 +1774,9 @@ export function infirmaryBonuses() {
   return { speedMult, diagBonus, traitMedecinNe };
 }
 
+// Statuts « contaminants » bloqués en expédition par tech_membrane_adaptive
+const EXPEDITION_CONTAMINANTS = ['pathogene_alien', 'infection', 'parasite'];
+
 // Inflige un statut à un membre. Si caché, pose "Anomalie suspecte" jusqu'au diagnostic.
 export function inflictStatus(member, statutKey, source = '') {
   if (!member || member.statut === 'mort') return;
@@ -1771,6 +1784,14 @@ export function inflictStatus(member, statutKey, source = '') {
   if (!def) return;
   // Évite les doublons exacts
   if (member.statuts.some(s => s.key === statutKey)) return;
+  // Membranes adaptives (expeditionToxicImmune) : l'équipe d'expédition est
+  // immunisée contre les contaminations biologiques du terrain
+  if (EXPEDITION_CONTAMINANTS.includes(statutKey)
+      && (member.statut === 'expedition' || /^exp[ée]dition/i.test(source))
+      && techEffectsAccumulated().expeditionToxicImmune) {
+    log('neutral', `La membrane adaptive de <em>${member.name}</em> bloque la contamination.`);
+    return;
+  }
   // Survivant résiste 50% du temps
   if (member.traits.includes('survivant') && Math.random() < 0.5) {
     log('neutral', `<em>${member.name}</em> évite ${def.nom.toLowerCase()} grâce à son instinct.`);
