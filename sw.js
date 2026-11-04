@@ -28,7 +28,7 @@
 
 // @generated-start — tools/sw-version.mjs (npm run sw:write)
 const APP_VERSION = '0.33.0';
-const CONTENT_HASH = '12738331efb1';
+const CONTENT_HASH = 'e0b52c5f5d3d';
 const PRECACHE_URLS = [
   './index.html',
   './favicon.ico',

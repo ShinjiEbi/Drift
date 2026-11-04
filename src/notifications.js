@@ -162,12 +162,10 @@ async function showSystemNotification(title, opts, target) {
   };
 }
 
-// Affiche l'onglet demandé (nom comparé aux onglets existants, jamais
-// injecté dans un sélecteur).
+// Affiche l'onglet demandé : ui.js valide le nom (liste blanche, anciens
+// noms compris) via l'événement 'drift:navigate'.
 function goToTab(name) {
-  const btn = Array.from(document.querySelectorAll('nav.tabs button[data-tab]'))
-    .find((b) => b.dataset.tab === name);
-  if (btn) btn.click();
+  window.dispatchEvent(new CustomEvent('drift:navigate', { detail: name }));
 }
 
 // ============================================================
@@ -175,23 +173,24 @@ function goToTab(name) {
 // ============================================================
 
 export const notif = {
-  buildDone:     (modNom, level)  => pushNotif({ type:'economy', severity:'info',    title:`${modNom} niv ${level} terminé`, action:{ label:'Voir', target:'modules' } }),
+  buildDone:     (modNom, level)  => pushNotif({ type:'economy', severity:'info',    title:`${modNom} niv ${level} terminé`, action:{ label:'Voir', target:'base/construction' } }),
   capReached:    (resLabel)       => pushNotif({ type:'economy', severity:'warn',    title:`Stocks saturés : ${resLabel}` }),
-  candidate:     (nom, origine)   => pushNotif({ type:'crew',    severity:'success', title:'Nouveau candidat', body:`${nom} (${origine}) propose ses services.`, action:{ label:'Voir', target:'crew' } }),
-  recruited:     (nom)            => pushNotif({ type:'crew',    severity:'info',    title:`${nom} rejoint la colonie`, action:{ label:'Voir', target:'crew' } }),
-  death:         (nom, cause)     => pushNotif({ type:'crew',    severity:'critical',title:`${nom} est mort`, body: cause || '', action:{ label:'Voir', target:'crew' } }),
-  injury:        (nom, sev)       => pushNotif({ type:'crew',    severity: sev==='grave'||sev==='critique'?'critical':'warn', title:`${nom} : blessure ${sev}`, action:{ label:'Infirmerie', target:'crew' } }),
+  candidate:     (nom, origine)   => pushNotif({ type:'crew',    severity:'success', title:'Nouveau candidat', body:`${nom} (${origine}) propose ses services.`, action:{ label:'Voir', target:'equipage/recrutement' } }),
+  recruited:     (nom)            => pushNotif({ type:'crew',    severity:'info',    title:`${nom} rejoint la colonie`, action:{ label:'Voir', target:'equipage' } }),
+  death:         (nom, cause)     => pushNotif({ type:'crew',    severity:'critical',title:`${nom} est mort`, body: cause || '', action:{ label:'Voir', target:'equipage' } }),
+  injury:        (nom, sev)       => pushNotif({ type:'crew',    severity: sev==='grave'||sev==='critique'?'critical':'warn', title:`${nom} : blessure ${sev}`, action:{ label:'Infirmerie', target:'equipage/soins' } }),
   trainingDone:  (nom, skill)     => pushNotif({ type:'crew',    severity:'success', title:`Formation terminée`, body:`${nom} a progressé en ${skill}.` }),
   treatmentDone: (nom)            => pushNotif({ type:'crew',    severity:'success', title:`${nom} est rétabli` }),
   sequel:        (nom, sequelNom) => pushNotif({ type:'crew',    severity:'warn',    title:`${nom} : séquelle permanente`, body: sequelNom }),
-  expReturn:     (sysName, summary) => pushNotif({ type:'expedition', severity:'info', title:`Retour de ${sysName}`, body: summary || '', action:{ label:'Résumé', target:'galaxy' } }),
+  expReturn:     (sysName, summary) => pushNotif({ type:'expedition', severity:'info', title:`Retour de ${sysName}`, body: summary || '', action:{ label:'Résumé', target:'expeditions/missions' } }),
   researchDone:  (techNom)        => pushNotif({ type:'research', severity:'success', title:`Recherche terminée`, body:techNom }),
   blueprint:     (nom)            => pushNotif({ type:'research', severity:'success', title:`Schéma découvert`, body:nom }),
-  incident:      (titre)          => pushNotif({ type:'event', severity:'critical', title:'Incident en attente', body: titre, action:{ label:'Décider', target:'overview' } }),
+  incident:      (titre)          => pushNotif({ type:'event', severity:'critical', title:'Incident en attente', body: titre, action:{ label:'Décider', target:'base/afaire' } }),
   colonyEvent:   (titre)          => pushNotif({ type:'event', severity:'warn',     title:'Événement de colonie', body: titre }),
   arcProgress:   (arcNom, etape)  => pushNotif({ type:'event', severity:'success', title:`Arc avance : ${arcNom}`, body: etape }),
   reputationSeuil: (factionNom, sens) => pushNotif({ type:'event', severity: sens==='hostile'?'critical':sens==='ami'?'success':'warn', title:`Réputation : ${factionNom}`, body: `Nouveau statut : ${sens}.` }),
   chronicleStart:(nom, planete)   => pushNotif({ type:'chronicle', severity:'success', title:`Chronique : ${nom}`, body:`Se révèle sur ${planete}.` }),
   episodeDone:   (chronNom, ep)   => pushNotif({ type:'chronicle', severity:'success', title:`Épisode terminé`, body:`${chronNom} — ${ep}.` }),
+  episodeReady:  (chronNom, ep)   => pushNotif({ type:'chronicle', severity:'success', title:`La suite est prête`, body: ep ? `${chronNom} — ${ep}.` : chronNom, action:{ label:'Voir', target:'recits/chroniques' } }),
   chronicleDone: (chronNom)       => pushNotif({ type:'chronicle', severity:'success', title:`Chronique achevée`, body:chronNom })
 };
