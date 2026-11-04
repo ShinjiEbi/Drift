@@ -78,6 +78,33 @@ async function clickAllTabs() {
   }
 }
 
+// Les incidents et événements « en direct » attendent une décision du joueur
+// (file persistée, une fenêtre à la fois) : on les résout via l'interface.
+async function resolveDecisions(max = 40) {
+  let choices = 0;
+  for (let i = 0; i < max; i++) {
+    const did = await page.evaluate(() => {
+      const bg = document.querySelector('#modalBg');
+      if (!bg?.classList.contains('show')) return 'none';
+      const cont = document.querySelector('#consContinue');
+      if (cont) { cont.click(); return 'continue'; }
+      const btn = document.querySelector('#modal button.incident-choice:not([disabled])');
+      if (btn) { btn.click(); return 'choice'; }
+      bg.classList.remove('show');   // autre fenêtre (résumé, alerte…) : on la ferme
+      return 'closed';
+    });
+    if (did === 'none') {
+      const pending = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions?.length || 0);
+      if (!pending) break;
+      await page.waitForTimeout(400);   // pumpDecisions affiche la suivante au prochain tick
+      continue;
+    }
+    if (did === 'choice') choices++;
+    await page.waitForTimeout(50);
+  }
+  return choices;
+}
+
 try {
   console.log('1. Démarrage d\'une partie neuve');
   await page.goto(BASE);
@@ -142,7 +169,9 @@ try {
   else ok('aucune valeur NaN/Infinity dans l\'état');
   flushErrors('aucune erreur de page pendant la simulation');
 
-  console.log('4. Onglets après simulation');
+  console.log('4. Décisions en attente, puis onglets après simulation');
+  const resolved = await resolveDecisions();
+  flushErrors(`décisions en attente résolues par l'interface (${resolved})`);
   await page.evaluate(() => document.querySelectorAll('.modal-bg.show').forEach(e => e.classList.remove('show')));
   await clickAllTabs();
   flushErrors('onglets sans erreur après simulation');

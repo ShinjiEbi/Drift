@@ -1970,7 +1970,10 @@ export function progressMemberStatuts(member) {
 // Format d'un incident :
 //   id, modKey, severity (1-3), narrative
 //   tagsRequired? : tags du bâtiment requis (pour incidents conditionnels)
-//   choices: [{ label, req?, consume?, outcome }]
+//   titre : libellé lisible (notifications, file des décisions)
+//   choices: [{ label, req?, consume?, pay?, outcome }]
+//   pay: true → la perte (loss) est un paiement volontaire : le choix n'est
+//                proposé que si le stock suffit (sinon perte subie, plafonnée au stock)
 //
 // Outcome de choix :
 //   loss: { metal: N, ... }      ressources perdues
@@ -1981,9 +1984,16 @@ export function progressMemberStatuts(member) {
 //   itemLoss: 'random'           perd un item de l'inventaire
 //   log: string                   ligne narrative
 
-const INCIDENTS = {
+// Imports propres à la zone incidents / événements / sauvegarde / démarrage.
+// Alias pour ne pas entrer en collision avec les imports du haut du fichier.
+import { esc as escHtml, uid as newUid } from './util.js';
+import { MAX_PENDING_DECISIONS } from './constants.js';
+import { loadSave, exportRawSave, lockSaves, unlockSaves, setSimPaused, isSimPaused, isCatchingUp, runCatchUp, markSessionStart, reportTickError } from './state.js';
+
+export const INCIDENTS = {
   // ===== MINE DE SURFACE =====
   mine_eboulement: {
+    titre: "Éboulement dans la mine",
     modKey: 'mine_surface',
     severity: 2,
     text: "Une galerie de la mine s'effondre partiellement. {worker} était à proximité.",
@@ -2030,6 +2040,7 @@ const INCIDENTS = {
     ]
   },
   mine_filon_riche: {
+    titre: "Filon inattendu",
     modKey: 'mine_surface',
     severity: 1,
     positive: true,
@@ -2042,6 +2053,7 @@ const INCIDENTS = {
     ]
   },
   mine_predateur: {
+    titre: "Créature dans la mine",
     modKey: 'mine_surface',
     severity: 3,
     requireMinLevel: 3,
@@ -2085,6 +2097,7 @@ const INCIDENTS = {
 
   // ===== HYDROPONIE =====
   hydro_contamination: {
+    titre: "Contamination hydroponique",
     modKey: 'hydroponie',
     severity: 2,
     text: "Une cuve d'hydroponie présente des signes de contamination. Couleur, odeur, mucus en surface.",
@@ -2125,6 +2138,7 @@ const INCIDENTS = {
     ]
   },
   hydro_recolte_abondante: {
+    titre: "Récolte abondante",
     modKey: 'hydroponie',
     severity: 1,
     positive: true,
@@ -2138,18 +2152,22 @@ const INCIDENTS = {
 
   // ===== GÉNÉRATEUR SOLAIRE =====
   solaire_panne: {
+    titre: "Voilure à la dérive",
     modKey: 'generateur_solaire',
     severity: 1,
     text: "Une voilure se met à dériver. Production en chute libre.",
     choices: [
       { label: "Réparation d'urgence", req: { skill: { key: 'ingenierie', min: 1 } },
         outcome: { loss: { energie: 20 }, log: "Réparation rapide. Production relancée." } },
-      { label: "Remplacer la voilure", outcome: { loss: { metal: 15, cristal: 10, energie: 10 }, log: "Voilure neuve installée. Plus durable." } },
+      { label: "Remplacer la voilure", pay: true, outcome: { loss: { metal: 15, cristal: 10, energie: 10 }, log: "Voilure neuve installée. Plus durable." } },
       { label: "Patcher avec un kit", consume: { item: 'kit_reparation' },
-        outcome: { gain: { energie: 5 }, log: "Le kit fait des merveilles. Aucun temps perdu." } }
+        outcome: { gain: { energie: 5 }, log: "Le kit fait des merveilles. Aucun temps perdu." } },
+      // 0.33 : choix de repli, toujours disponible (les autres demandent compétence, objet ou stock)
+      { label: "Attendre la prochaine maintenance", outcome: { disableModule: 180, log: "La voilure reste repliée en attendant la maintenance." } }
     ]
   },
   solaire_surcharge: {
+    titre: "Surcharge solaire",
     modKey: 'generateur_solaire',
     severity: 2,
     requireMinLevel: 3,
@@ -2185,6 +2203,7 @@ const INCIDENTS = {
 
   // ===== HANGAR =====
   hangar_sabotage: {
+    titre: "Sabotage au hangar",
     modKey: 'hangar',
     severity: 3,
     requireMinLevel: 2,
@@ -2201,6 +2220,7 @@ const INCIDENTS = {
       },
       {
         label: "Réparer en urgence",
+        pay: true,
         outcome: {
           loss: { metal: 50, cristal: 20 },
           log: "Réparations effectuées. Origine du sabotage non identifiée."
@@ -2224,6 +2244,7 @@ const INCIDENTS = {
     ]
   },
   hangar_decouverte: {
+    titre: "Trouvaille au hangar",
     modKey: 'hangar',
     severity: 1,
     positive: true,
@@ -2237,6 +2258,7 @@ const INCIDENTS = {
 
   // ===== LABORATOIRE =====
   labo_fuite_donnees: {
+    titre: "Données corrompues",
     modKey: 'laboratoire',
     severity: 2,
     text: "Une partie des données de recherche s'est corrompue. Cause inconnue.",
@@ -2248,6 +2270,7 @@ const INCIDENTS = {
     ]
   },
   labo_etude_inattendue: {
+    titre: "Corrélation inattendue",
     modKey: 'laboratoire',
     severity: 1,
     positive: true,
@@ -2261,6 +2284,7 @@ const INCIDENTS = {
 
   // ===== ATELIER =====
   atelier_accident: {
+    titre: "Accident à l'atelier",
     modKey: 'atelier',
     severity: 2,
     text: "Un accident de fabrication. {worker} était sur le poste.",
@@ -2272,6 +2296,7 @@ const INCIDENTS = {
     ]
   },
   atelier_innovation: {
+    titre: "Innovation de procédé",
     modKey: 'atelier',
     severity: 1,
     positive: true,
@@ -2285,6 +2310,7 @@ const INCIDENTS = {
 
   // ===== INFIRMERIE =====
   infirmerie_patient_fuit: {
+    titre: "Patient en fuite",
     modKey: 'infirmerie',
     severity: 2,
     text: "Un patient a quitté l'infirmerie sans autorisation.",
@@ -2295,6 +2321,7 @@ const INCIDENTS = {
     ]
   },
   infirmerie_remede: {
+    titre: "Nouvelle formule de soin",
     modKey: 'infirmerie',
     severity: 1,
     positive: true,
@@ -2306,11 +2333,12 @@ const INCIDENTS = {
 
   // ===== HABITAT =====
   habitat_panne_climatisation: {
+    titre: "Climatisation en panne",
     modKey: 'habitat',
     severity: 2,
     text: "La climatisation d'une partie de l'habitat tombe en panne. Les colons se plaignent.",
     choices: [
-      { label: "Réparer immédiatement", req: { skill: { key: 'ingenierie', min: 1 } },
+      { label: "Réparer immédiatement", req: { skill: { key: 'ingenierie', min: 1 } }, pay: true,
         outcome: { loss: { metal: 10, energie: 15 }, log: "Climatisation rétablie. L'équipage apprécie." } },
       { label: "Distribuer des rations supplémentaires", consume: { item: 'ration_concentree' },
         outcome: { moralAll: +1, log: "Geste apprécié. L'équipe tient le coup." } },
@@ -2318,12 +2346,13 @@ const INCIDENTS = {
     ]
   },
   habitat_anniversaire: {
+    titre: "Anniversaire",
     modKey: 'habitat',
     severity: 1,
     positive: true,
     text: "C'est l'anniversaire d'un colon. L'équipage propose une petite célébration.",
     choices: [
-      { label: "Organiser une fête", outcome: { loss: { biomasse: 20 }, moralAll: +3, log: "Soirée mémorable. Le moral grimpe." } },
+      { label: "Organiser une fête", pay: true, outcome: { loss: { biomasse: 20 }, moralAll: +3, log: "Soirée mémorable. Le moral grimpe." } },
       { label: "Geste discret", outcome: { moralAll: +1, log: "Cadeau modeste mais sincère." } },
       { label: "Trop occupés cette fois", outcome: { moralAll: -1, log: "Personne ne dit rien. Mais quelque chose s'éteint un peu." } }
     ]
@@ -2517,6 +2546,102 @@ export function significantRelations(memberId) {
 // ============================================================
 //   INCIDENTS LOCALISÉS (0.17) — suite
 // ============================================================
+// 0.28 : multiplicateur d'impact des choix d'incident ET d'événement (×3)
+const OUTCOME_MULT = 3;
+
+// Libellés lisibles (notifications, file des décisions, résumé de rattrapage)
+function incidentTitle(incidentId) {
+  return INCIDENTS[incidentId]?.titre || 'Incident';
+}
+function colonyEventTitle(eventId) {
+  const ev = COLONY_EVENTS[eventId];
+  return ev?.titre || ev?.theme || 'Événement';
+}
+
+// Montants réels (multiplicateur compris) d'un bloc loss/gain, en texte
+function amountsText(block) {
+  return Object.entries(block || {})
+    .map(([k, v]) => `${Math.round(v * OUTCOME_MULT)} ${RES_LABELS[k] || k}`)
+    .join(' · ');
+}
+
+// Remplace {loss.metal}, {gain.datacubes}… d'un libellé par les montants réels
+function fillAmounts(label, outcome) {
+  return String(label || '').replace(/\{(loss|gain)\.(\w+)\}/g, (_, kind, res) => {
+    const v = outcome?.[kind]?.[res];
+    return typeof v === 'number' ? String(Math.round(v * OUTCOME_MULT)) : '?';
+  });
+}
+
+// Choix « payant » (achat, échange, don — pay:true) : le stock doit couvrir
+// le coût AVANT de choisir. Les pertes subies (dégâts) restent plafonnées au stock.
+function choiceAffordable(choice) {
+  if (!choice?.pay || !choice.outcome?.loss) return true;
+  for (const k in choice.outcome.loss) {
+    if ((S.res[k] || 0) < choice.outcome.loss[k] * OUTCOME_MULT) return false;
+  }
+  return true;
+}
+
+// Équipe mobilisable pour un incident : staff du bâtiment + colons libres
+function incidentTeam(inc) {
+  return staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
+}
+function skillReqMet(req, team) {
+  if (!req?.skill) return true;
+  return team.some(m => (m.skills?.[req.skill.key] || 0) >= req.skill.min);
+}
+
+// Applique un gain plafonné à la capacité (sans jamais réduire un stock
+// déjà au-dessus). Renvoie la quantité réellement gagnée.
+function addResourceCapped(k, amt) {
+  const before = S.res[k] || 0;
+  S.res[k] = Math.max(before, Math.min(capOf(k), before + amt));
+  return S.res[k] - before;
+}
+// Applique une perte plafonnée au stock. Renvoie la quantité réellement perdue.
+function removeResourceCapped(k, amt) {
+  const before = S.res[k] || 0;
+  S.res[k] = Math.max(0, before - amt);
+  return before - S.res[k];
+}
+
+// Score d'un résultat pour le choix automatique : on évite d'abord les dégâts
+// durables (niveau perdu, blessure, incident en chaîne), puis ce qui coûte.
+function outcomeScore(o) {
+  let s = 0;
+  for (const k in o.loss || {}) s -= o.loss[k] * OUTCOME_MULT * 0.1;
+  for (const k in o.gain || {}) s += o.gain[k] * OUTCOME_MULT * 0.1;
+  if (o.moralAll) s += o.moralAll * 5;
+  if (o.status) s -= 30;
+  if (o.damageModule) s -= 100;
+  if (o.chainIncident) s -= 50;
+  if (o.debuff) s -= 20;
+  if (o.disableModule) s -= o.disableModule / 60;
+  if (o.generateRivalry) s -= 15;
+  if (o.delayResearch) s -= o.delayResearch * OUTCOME_MULT / 30;
+  if (o.spawnVisitor) s += 10;
+  if (o.randomBlueprint) s += 10;
+  if (o.adjustAffinity) s += (o.adjustAffinity.delta || 0) * 0.2;
+  return s;
+}
+
+// Choix automatique « sûr » (rattrapage hors ligne, file de décisions pleine) :
+// ni prérequis, ni objet consommé, ni coût impayable ; un choix non risqué
+// est préféré, au meilleur score.
+function pickAutoChoice(choices) {
+  const eligible = (choices || []).filter(c => !c.req && !c.consume && choiceAffordable(c));
+  const safe = eligible.filter(c => !c.risky);
+  const pool = safe.length ? safe : eligible;
+  let best = null;
+  let bestScore = -Infinity;
+  for (const c of pool) {
+    const sc = c.risky ? 0 : outcomeScore(c.outcome || {});
+    if (sc > bestScore) { best = c; bestScore = sc; }
+  }
+  return best;
+}
+
 // Liste les bâtiments construits qui peuvent générer un incident
 function eligibleIncidentBuildings() {
   const out = [];
@@ -2545,19 +2670,12 @@ function incidentProbability(modKey) {
   return hourlyRate * (MIN_PER_TICK / 60);
 }
 
-// Tirage par tick : pour chaque bâtiment, tente un incident
+// Tirage par tick : pour chaque bâtiment, tente un incident.
+// silent (rattrapage) : l'incident est résolu automatiquement.
 export function tickIncidents(silent = false) {
-  // 0.28 : déclencher d'abord les incidents en chaîne en attente (déclenchés par d'autres choix)
-  if (Array.isArray(S.queuedIncidents) && S.queuedIncidents.length > 0) {
-    const queued = S.queuedIncidents.shift();
-    triggerIncident(queued, silent);
-    return;
-  }
-
-  // Si on est en mode silent (rattrapage offline), on saute les incidents qui demandent une décision
+  // Cooldown global : pas d'incident trop rapproché
   if (S.meta.gameMin < S.nextIncidentMin) return;
 
-  // Cooldown global : pas d'incident trop rapproché
   const elig = eligibleIncidentBuildings();
   if (elig.length === 0) return;
 
@@ -2574,53 +2692,89 @@ export function tickIncidents(silent = false) {
   }
 }
 
-// Déclenche un incident (en silent : applique automatiquement le choix par défaut)
+// Colon « victime » : préfère le staff du bâtiment, sinon un libre, sinon n'importe quel vivant
+function pickIncidentVictim(inc) {
+  const staff = staffOf(inc.modKey).map(s => s.member);
+  if (staff.length) return rPick(staff);
+  const free = aliveCrew().filter(m => m.statut === 'libre');
+  if (free.length) return rPick(free);
+  const alive = aliveCrew();
+  return alive.length ? rPick(alive) : null;
+}
+
+// Déclenche un incident : en direct, il rejoint la file des décisions du
+// joueur ; en silencieux (rattrapage), il est résolu automatiquement.
 export function triggerIncident(incidentId, silent = false) {
   const inc = INCIDENTS[incidentId];
   if (!inc) return;
-  const def = MODULES[inc.modKey];
-  if (!def) return;
-
-  // Trouve un colon "victime" — préfère le staff du bâtiment, sinon un libre, sinon n'importe qui vivant
-  const staff = staffOf(inc.modKey).map(s => s.member);
-  let victim = staff[Math.floor(Math.random() * staff.length)];
-  if (!victim) {
-    const free = aliveCrew().filter(m => m.statut === 'libre');
-    victim = free[Math.floor(Math.random() * free.length)];
-  }
-  if (!victim) {
-    victim = aliveCrew()[Math.floor(Math.random() * aliveCrew().length)];
-  }
+  if (!MODULES[inc.modKey]) return;
+  const victim = pickIncidentVictim(inc);
   if (!victim) return;
 
-  // Si silent : applique le choix avec moins de pertes (le moins coûteux)
   if (silent) {
-    // Choix le moins risqué : prend le premier non-risky avec moins de perte
-    const safeChoice = inc.choices.find(c => !c.risky) || inc.choices[0];
-    applyIncidentChoice(inc, safeChoice, victim);
+    autoResolveIncident(incidentId, victim);
     return;
   }
-
-  // Affiche la modale d'incident
-  showIncidentModal(incidentId, victim);
+  enqueueDecision({ kind: 'incident', refId: incidentId, victimId: victim.id });
   // 0.26 : notification dédiée (critique, pour qu'on la voie même si on est ailleurs)
-  notif.incident(inc.titre || incidentId);
+  notif.incident(incidentTitle(incidentId));
 }
 
-// Applique l'outcome d'un choix d'incident
-export function applyIncidentChoice(inc, choice, victim) {
-  // Vérifications de prérequis (skill, item)
-  if (choice.req) {
-    if (choice.req.skill) {
-      const team = staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-      const found = team.find(m => (m.skills[choice.req.skill.key] || 0) >= choice.req.skill.min);
-      if (!found) { toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`); return false; }
-    }
+function autoResolveIncident(incidentId, victim) {
+  const inc = INCIDENTS[incidentId];
+  if (!inc) return;
+  const choice = pickAutoChoice(inc.choices);
+  if (!choice) return;
+  if (applyIncidentChoice(inc, choice, victim, { auto: true }) !== false) {
+    recordAutoResolution('incident', incidentTitle(incidentId), fillAmounts(choice.label, choice.outcome));
+  }
+}
+
+// Dégâts sur un module : perd un niveau (minimum 1). Les postes au-delà du
+// nouveau niveau disparaissent : leurs occupants sont libérés (et réaffectés
+// si possible). Un chantier en cours sur ce module reconstruit le niveau perdu
+// au lieu de sauter un niveau. Renvoie la ligne de journal.
+function damageModule(modKey) {
+  const mod = S.modules[modKey];
+  if (!mod) return null;
+  const nom = MODULES[modKey]?.nom || modKey;
+  if (mod.level <= 1) return `<em>${nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`;
+  mod.level--;
+  const freed = [];
+  for (const key of Object.keys(S.assignments || {})) {
+    const [k, idxStr] = key.split(':');
+    const idx = parseInt(idxStr, 10);
+    if (k !== modKey || !(idx >= mod.level)) continue;
+    freed.push(S.assignments[key]);
+    unassignSlot(modKey, idx);
+  }
+  for (const id of freed) autoAssignMember(id);
+  if (S.build?.id === modKey && S.build.targetLevel > mod.level + 1) S.build.targetLevel = mod.level + 1;
+  return `<em>${nom}</em> est endommagé : niveau ramené à ${mod.level}.`;
+}
+
+// Applique l'outcome d'un choix d'incident. Renvoie false si le choix est
+// impossible (prérequis, objet, stock). opts.auto : décision automatique —
+// pas de toast, et une seule ligne de journal résume tout.
+export function applyIncidentChoice(inc, choice, victim, opts = {}) {
+  const auto = !!opts.auto;
+  const notes = [];
+  const say = (kind, txt) => { if (auto) notes.push(txt); else log(kind, txt); };
+  const team = incidentTeam(inc);
+
+  // Vérifications de prérequis (skill, stock, item)
+  if (choice.req?.skill && !skillReqMet(choice.req, team)) {
+    if (!auto) toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`);
+    return false;
+  }
+  if (!choiceAffordable(choice)) {
+    if (!auto) toast(`Stock insuffisant : ${amountsText(choice.outcome.loss)}`);
+    return false;
   }
   if (choice.consume?.item) {
     const itemId = choice.consume.item;
     if ((S.inventory?.[itemId] || 0) <= 0) {
-      toast(`Stock insuffisant : ${ITEMS[itemId]?.nom || itemId}`);
+      if (!auto) toast(`Stock insuffisant : ${ITEMS[itemId]?.nom || itemId}`);
       return false;
     }
     S.inventory[itemId]--;
@@ -2630,8 +2784,7 @@ export function applyIncidentChoice(inc, choice, victim) {
   // Détermine outcome (gestion risky)
   let outcome = choice.outcome;
   if (choice.risky) {
-    const team = staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-    const bestStat = team.length > 0 ? Math.max(...team.map(m => m.stats[choice.risky.stat] || 5)) : 5;
+    const bestStat = team.length > 0 ? Math.max(...team.map(m => m.stats?.[choice.risky.stat] || 5)) : 5;
     const roll = 1 + Math.floor(Math.random() * 10);
     const total = roll + Math.floor((bestStat - 5) / 2);
     const success = total >= choice.risky.dc;
@@ -2639,19 +2792,15 @@ export function applyIncidentChoice(inc, choice, victim) {
   }
   if (!outcome) return true;
 
-  // 0.28 : multiplicateur d'impact pour rendre les choix mémorables (×3)
-  const OUTCOME_MULT = 3;
+  const workerHTML = victim ? `<em>${escHtml(victim.name)}</em>` : 'un colon';
+  if (outcome.log) say(inc.positive ? 'success' : 'warn', outcome.log.replace(/\{worker\}/g, workerHTML));
 
-  // Applique
+  // Applique (pertes plafonnées au stock ; gains plafonnés à la capacité)
   if (outcome.loss) {
-    for (const k in outcome.loss) {
-      S.res[k] = Math.max(0, (S.res[k] || 0) - outcome.loss[k] * OUTCOME_MULT);
-    }
+    for (const k in outcome.loss) removeResourceCapped(k, outcome.loss[k] * OUTCOME_MULT);
   }
   if (outcome.gain) {
-    for (const k in outcome.gain) {
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + outcome.gain[k] * OUTCOME_MULT);
-    }
+    for (const k in outcome.gain) addResourceCapped(k, outcome.gain[k] * OUTCOME_MULT);
   }
   if (outcome.status) {
     let target = victim;
@@ -2675,13 +2824,8 @@ export function applyIncidentChoice(inc, choice, victim) {
   // 0.28 : NOUVEAUX EFFETS DURABLES
   // — damageModule : module perd un niveau (effet sévère, permanent jusqu'à reconstruction)
   if (outcome.damageModule && inc.modKey) {
-    const mod = S.modules[inc.modKey];
-    if (mod && mod.level > 1) {
-      mod.level--;
-      log('warn', `<em>${MODULES[inc.modKey].nom}</em> est endommagé : niveau ramené à ${mod.level}.`);
-    } else if (mod && mod.level === 1) {
-      log('warn', `<em>${MODULES[inc.modKey].nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`);
-    }
+    const msg = damageModule(inc.modKey);
+    if (msg) say('warn', msg);
   }
   // — disableModule : module hors service pendant N minutes-jeu
   if (outcome.disableModule && inc.modKey) {
@@ -2689,7 +2833,7 @@ export function applyIncidentChoice(inc, choice, victim) {
     const mod = S.modules[inc.modKey];
     if (mod) {
       mod.disabledUntil = (S.meta.gameMin || 0) + duration;
-      log('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${Math.round(duration/60)}h jeu.`);
+      say('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${Math.round(duration/60)}h jeu.`);
     }
   }
   // — debuff : pénalité globale temporaire (ex: { type: 'prodMult', value: 0.8, duration: 1440 })
@@ -2697,11 +2841,11 @@ export function applyIncidentChoice(inc, choice, victim) {
     if (!S.activeBuffs) S.activeBuffs = [];
     S.activeBuffs.push({
       ...outcome.debuff,
-      sourceLabel: inc.text || 'Incident',
+      sourceLabel: inc.titre || 'Incident',
       startedAt: S.meta.gameMin,
       expiresAt: (S.meta.gameMin || 0) + (outcome.debuff.duration || 720)
     });
-    log('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
+    say('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
   }
   // — generateRivalry : crée une rivalité durable entre la victime et un autre colon
   if (outcome.generateRivalry && victim) {
@@ -2711,10 +2855,10 @@ export function applyIncidentChoice(inc, choice, victim) {
       const key = [victim.id, other.id].sort().join('|');
       if (!S.relations) S.relations = {};
       S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-      log('warn', `<em>${victim.name}</em> et <em>${other.name}</em> se brouillent durablement.`);
+      say('warn', `<em>${escHtml(victim.name)}</em> et <em>${escHtml(other.name)}</em> se brouillent durablement.`);
     }
   }
-  // — chainIncident : déclenche un autre incident plus tard
+  // — chainIncident : déclenche un autre incident plus tard (cf. tickOnce)
   if (outcome.chainIncident) {
     if (!S.pendingChainIncidents) S.pendingChainIncidents = [];
     S.pendingChainIncidents.push({
@@ -2732,34 +2876,185 @@ export function applyIncidentChoice(inc, choice, victim) {
     });
   }
 
-  if (outcome.log) {
-    const cleanLog = outcome.log.replace(/\{worker\}/g, victim ? `<em>${victim.name}</em>` : 'un colon');
-    log(inc.positive ? 'success' : 'warn', cleanLog);
+  if (auto) {
+    log(inc.positive ? 'success' : 'warn',
+      `<b>${escHtml(inc.titre || 'Incident')}</b> — décision automatique : « ${escHtml(fillAmounts(choice.label, choice.outcome))} ». ${notes.join(' ')}`.trim());
   }
   return true;
 }
 
-// Modale d'incident interactive (UI)
-let _activeIncident = null;
-function showIncidentModal(incidentId, victim) {
-  const inc = INCIDENTS[incidentId];
-  if (!inc) return;
-  _activeIncident = { incidentId, victimId: victim?.id };
-  const bg = $('#modalBg');
-  const m = $('#modal');
-  m.classList.add('incident-modal');
-  m.innerHTML = renderIncidentContent();
-  bg.classList.add('show');
-  hookIncidentModal();
+// ============================================================
+//   FILE DES DÉCISIONS (0.33) — incidents et événements en attente
+// ============================================================
+// Une seule fenêtre de décision à la fois. Les incidents et événements « en
+// direct » rejoignent S.pendingDecisions (persistée : recharger la page ne les
+// fait pas disparaître). pumpDecisions(), appelée à chaque tick, affiche la
+// plus ancienne dès qu'aucune autre fenêtre (modale, scène) n'est ouverte ;
+// la suivante attend que la courante soit résolue. Au-delà de
+// MAX_PENDING_DECISIONS, les plus anciennes sont résolues automatiquement.
+// S.pendingIncident / S.pendingColonyEvent (lus par le bandeau d'alertes)
+// reflètent la file.
+
+let _shownDecisionId = null;     // décision actuellement affichée dans #modal
+const _autoResolved = [];         // résolutions automatiques récentes (résumé de rattrapage)
+let _autoSeq = 0;
+
+function recordAutoResolution(kind, titre, choiceLabel) {
+  _autoResolved.push({ seq: ++_autoSeq, kind, titre, choiceLabel });
+  if (_autoResolved.length > 500) _autoResolved.splice(0, _autoResolved.length - 500);
+}
+function autoResolvedSince(seq) {
+  return _autoResolved.filter(r => r.seq > seq);
 }
 
-function renderIncidentContent() {
-  const inc = INCIDENTS[_activeIncident.incidentId];
-  const victim = S.crew.find(c => c.id === _activeIncident.victimId);
+function syncPendingFlags() {
+  const q = Array.isArray(S.pendingDecisions) ? S.pendingDecisions : [];
+  S.pendingIncident = q.find(d => d.kind === 'incident')?.refId || null;
+  S.pendingColonyEvent = q.find(d => d.kind === 'event')?.refId || null;
+}
+
+function enqueueDecision(dec) {
+  if (!Array.isArray(S.pendingDecisions)) S.pendingDecisions = [];
+  S.pendingDecisions.push({ id: newUid('dec'), createdAt: S.meta.gameMin, ...dec });
+  while (S.pendingDecisions.length > MAX_PENDING_DECISIONS) {
+    // La plus ancienne qui n'est pas à l'écran est résolue automatiquement
+    const idx = S.pendingDecisions[0].id === _shownDecisionId ? 1 : 0;
+    const [old] = S.pendingDecisions.splice(idx, 1);
+    autoResolveDecision(old);
+  }
+  syncPendingFlags();
+  save();
+}
+
+function removeDecision(id) {
+  const i = (S.pendingDecisions || []).findIndex(d => d.id === id);
+  if (i >= 0) S.pendingDecisions.splice(i, 1);
+  if (_shownDecisionId === id) _shownDecisionId = null;
+  syncPendingFlags();
+}
+
+function autoResolveDecision(dec) {
+  if (dec.kind === 'incident') {
+    if (INCIDENTS[dec.refId]) autoResolveIncident(dec.refId, resolveIncidentVictim(dec));
+  } else if (dec.kind === 'event') {
+    const actors = resolveEventActors(dec);
+    if (actors) autoResolveColonyEvent(dec.refId, actors);
+  }
+}
+
+// Victime d'un incident en attente, revalidée : morte entre-temps → un autre colon
+function resolveIncidentVictim(dec) {
+  const v = S.crew.find(m => m.id === dec.victimId);
+  if (v && v.statut !== 'mort') return v;
+  const inc = INCIDENTS[dec.refId];
+  const nv = inc ? pickIncidentVictim(inc) : null;
+  if (nv) dec.victimId = nv.id;
+  return nv;
+}
+
+// Acteurs d'un événement en attente, revalidés : un acteur vivant à la
+// création et mort depuis (ou disparu) rend l'événement caduc → nouveaux
+// acteurs si l'événement est toujours d'actualité, sinon null.
+function resolveEventActors(dec) {
+  const ev = COLONY_EVENTS[dec.refId];
+  if (!ev) return null;
+  const ids = dec.actorIds || {};
+  const wasDead = dec.actorsDead || {};
+  const get = role => (ids[role] ? S.crew.find(m => m.id === ids[role]) || null : null);
+  const valid = role => {
+    if (!ids[role]) return true;
+    const m = get(role);
+    return !!m && (wasDead[role] || m.statut !== 'mort');
+  };
+  if (valid('primary') && valid('secondary')) return { primary: get('primary'), secondary: get('secondary') };
+  try {
+    if (ev.condition()) {
+      const a = ev.pickActors();
+      if (a) {
+        Object.assign(dec, decisionActors(a));
+        return a;
+      }
+    }
+  } catch (e) { /* événement plus d'actualité */ }
+  return null;
+}
+
+function decisionActors(actors) {
+  return {
+    actorIds: { primary: actors?.primary?.id || null, secondary: actors?.secondary?.id || null },
+    actorsDead: { primary: actors?.primary?.statut === 'mort', secondary: actors?.secondary?.statut === 'mort' }
+  };
+}
+
+// Une fenêtre est-elle déjà ouverte (modale, scène d'expédition) ?
+function decisionUiBusy() {
+  return !!($('#modalBg')?.classList.contains('show') || $('#sceneOverlay')?.classList.contains('show'));
+}
+
+function openDecisionModal(html, hook) {
+  const m = $('#modal');
+  m.className = 'modal incident-modal';
+  m.innerHTML = html;
+  $('#modalBg').classList.add('show');
+  hook();
+}
+
+function closeDecisionModal() {
+  $('#modalBg').classList.remove('show');
+  $('#modal').className = 'modal';
+}
+
+// Affiche la plus ancienne décision en attente si rien d'autre n'est ouvert.
+// Appelée à chaque tick (et au démarrage).
+export function pumpDecisions() {
+  if (!S?.meta || isSimPaused() || isCatchingUp()) return;
+  const q = S.pendingDecisions;
+  if (!Array.isArray(q) || q.length === 0) return;
+  if (decisionUiBusy()) return;
+  let changed = false;
+  while (q.length > 0) {
+    if (showDecision(q[0])) break;
+    q.shift();   // décision caduque ou résolue automatiquement
+    changed = true;
+  }
+  if (changed) {
+    syncPendingFlags();
+    save();
+    try { render(); } catch (e) { reportTickError('render', e); }
+  }
+}
+
+function showDecision(dec) {
+  if (dec.kind === 'incident') {
+    const inc = INCIDENTS[dec.refId];
+    if (!inc) return false;
+    const victim = resolveIncidentVictim(dec);
+    if (!victim) {
+      // Plus personne pour y faire face : résolu automatiquement
+      autoResolveIncident(dec.refId, null);
+      return false;
+    }
+    _shownDecisionId = dec.id;
+    openDecisionModal(renderIncidentContent(inc, victim), () => hookIncidentModal(dec.id));
+    return true;
+  }
+  if (dec.kind === 'event') {
+    if (!COLONY_EVENTS[dec.refId]) return false;
+    const actors = resolveEventActors(dec);
+    if (!actors) return false;   // événement caduc
+    _shownDecisionId = dec.id;
+    openDecisionModal(renderColonyEventContent(dec.refId, actors), () => hookColonyEventModal(dec.id));
+    return true;
+  }
+  return false;
+}
+
+function renderIncidentContent(inc, victim) {
   const def = MODULES[inc.modKey];
-  const text = inc.text.replace(/\{worker\}/g, victim ? victim.name : 'un colon');
+  const text = inc.text.replace(/\{worker\}/g, victim ? escHtml(victim.name) : 'un colon');
   const severityLabel = ['', 'Mineur', 'Sérieux', 'Critique'][inc.severity || 1];
   const severityClass = ['', 'ok', 'warn', 'rust'][inc.severity || 1];
+  const team = incidentTeam(inc);
 
   // Liste des choix avec évaluation
   const choicesHTML = inc.choices.map((ch, i) => {
@@ -2768,8 +3063,7 @@ function renderIncidentContent() {
 
     // Vérif req skill
     if (ch.req?.skill) {
-      const team = staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-      const has = team.some(m => (m.skills[ch.req.skill.key] || 0) >= ch.req.skill.min);
+      const has = skillReqMet(ch.req, team);
       extras.push(`<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`);
       if (!has) available = false;
     }
@@ -2780,12 +3074,18 @@ function renderIncidentContent() {
       extras.push(`<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`);
       if (!has) available = false;
     }
+    // Vérif coût (choix payant)
+    if (ch.pay && ch.outcome?.loss) {
+      const ok = choiceAffordable(ch);
+      extras.push(`<span class="cost ${ok ? '' : 'ko'}">COÛT : ${amountsText(ch.outcome.loss)}${ok ? '' : ' — stock insuffisant'}</span>`);
+      if (!ok) available = false;
+    }
     if (ch.risky) {
       extras.push(`<span class="risk">RISQUÉ · jet de ${STAT_LABELS[ch.risky.stat]} (DC ${ch.risky.dc})</span>`);
     }
 
     return `<button class="incident-choice" data-incident-choice="${i}" ${available ? '' : 'disabled'}>
-      ${ch.label}
+      ${fillAmounts(ch.label, ch.outcome)}
       ${extras.join('')}
     </button>`;
   }).join('');
@@ -2794,35 +3094,36 @@ function renderIncidentContent() {
     <div class="incident-eyebrow ${inc.positive ? 'positive' : ''}">
       ${inc.positive ? 'Événement' : 'Incident'} · <span class="${severityClass}">${severityLabel}</span> · ${def.nom}
     </div>
-    <h3 class="incident-title">${inc.positive ? 'Bonne nouvelle' : 'Quelque chose s\'est passé'}</h3>
+    <h3 class="incident-title">${inc.titre || (inc.positive ? 'Bonne nouvelle' : 'Quelque chose s\'est passé')}</h3>
     <p class="incident-body">${text}</p>
     <div class="incident-choices">${choicesHTML}</div>
   `;
 }
 
-function hookIncidentModal() {
+function hookIncidentModal(decId) {
   const m = $('#modal');
   m.querySelectorAll('button[data-incident-choice]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.incidentChoice, 10);
-      const inc = INCIDENTS[_activeIncident.incidentId];
-      const victim = S.crew.find(c => c.id === _activeIncident.victimId);
-      const choice = inc.choices[idx];
+      const dec = (S.pendingDecisions || []).find(d => d.id === decId);
+      if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
+      const inc = INCIDENTS[dec.refId];
+      const v = S.crew.find(c => c.id === dec.victimId);
+      const victim = v && v.statut !== 'mort' ? v : null;
+      const choice = inc.choices[parseInt(btn.dataset.incidentChoice, 10)];
       const ok = applyIncidentChoice(inc, choice, victim);
-      if (ok !== false) {
-        $('#modalBg').classList.remove('show');
-        m.classList.remove('incident-modal');
-        _activeIncident = null;
-        render();
-      }
+      if (ok === false) return;
+      removeDecision(decId);
+      closeDecisionModal();
+      save();
+      render();
     });
   });
 }
 
 // Compatibilité : ancien rollColonyIncident remplacé par tickIncidents
-export function rollColonyIncident() {
-  tickIncidents(false);
+export function rollColonyIncident(silent = false) {
+  tickIncidents(silent);
 }
 
 // ============================================================
@@ -2837,11 +3138,14 @@ export function rollColonyIncident() {
 //   condition: () => bool    — peut-il se déclencher maintenant ?
 //   pickActors: () => { primary, secondary? } — qui est concerné
 //   text: "..." (peut référencer {primary} et {secondary})
-//   choices: [...] comme les incidents
+//   titre : libellé lisible (notifications, effets temporaires)
+//   choices: [...] comme les incidents (pay, req, consume) ; un libellé peut
+//            citer les montants réels via {loss.metal}, {gain.datacubes}…
 
-const COLONY_EVENTS = {
+export const COLONY_EVENTS = {
   // ===== ÉVÉNEMENTS SOCIAUX =====
   event_anniversaire: {
+    titre: "Anniversaire",
     theme: 'Anniversaire',
     positive: true,
     condition: () => aliveCrew().some(m => {
@@ -2857,13 +3161,14 @@ const COLONY_EVENTS = {
     },
     text: "C'est l'anniversaire de {primary}. {age} ans. L'équipage attend de voir si on marque le coup.",
     choices: [
-      { label: "Organiser une vraie fête", outcome: { loss: { biomasse: 25 }, moralAll: +4, log: "Soirée mémorable. {primary} sourit toute la nuit.", markBirthday: true } },
+      { label: "Organiser une vraie fête", pay: true, outcome: { loss: { biomasse: 25 }, moralAll: +4, log: "Soirée mémorable. {primary} sourit toute la nuit.", markBirthday: true } },
       { label: "Geste discret entre amis", outcome: { moralAll: +1, log: "Cadeau modeste, sincère. {primary} apprécie.", markBirthday: true } },
       { label: "Ne pas s'en occuper", outcome: { moralAll: -2, log: "Personne n'a rien dit. {primary} a remarqué.", markBirthday: true } }
     ]
   },
 
   event_hommage: {
+    titre: "Hommage aux disparus",
     theme: 'Hommage',
     positive: false,
     condition: () => {
@@ -2883,6 +3188,7 @@ const COLONY_EVENTS = {
   },
 
   event_conflit_rivaux: {
+    titre: "Dispute entre rivaux",
     theme: 'Conflit',
     positive: false,
     condition: () => {
@@ -2919,6 +3225,7 @@ const COLONY_EVENTS = {
   },
 
   event_romance: {
+    titre: "Romance naissante",
     theme: 'Romance',
     positive: true,
     condition: () => {
@@ -2952,6 +3259,7 @@ const COLONY_EVENTS = {
 
   // ===== INITIATIVES INDIVIDUELLES =====
   event_initiative_jardin: {
+    titre: "Nouvelle technique de culture",
     theme: 'Initiative',
     positive: true,
     condition: () => S.modules.hydroponie?.level >= 2 && aliveCrew().some(m => (m.skills.survie || 0) >= 2),
@@ -2961,12 +3269,13 @@ const COLONY_EVENTS = {
     },
     text: "{primary} propose une nouvelle technique de culture. Elle nécessite un peu de temps.",
     choices: [
-      { label: "Lui donner les moyens", outcome: { loss: { biomasse: 15 }, gain: { biomasse: 50, datacubes: 4 }, log: "{primary} double le rendement de la cuve d'essai." } },
+      { label: "Lui donner les moyens", pay: true, outcome: { loss: { biomasse: 15 }, gain: { biomasse: 50, datacubes: 4 }, log: "{primary} double le rendement de la cuve d'essai." } },
       { label: "Plus tard", outcome: { moralAll: -1, log: "{primary} comprend. Mais l'élan est passé." } }
     ]
   },
 
   event_initiative_atelier: {
+    titre: "Idée pour l'atelier",
     theme: 'Initiative',
     positive: true,
     condition: () => S.modules.atelier?.level >= 2 && aliveCrew().some(m => (m.skills.ingenierie || 0) >= 3),
@@ -2976,7 +3285,7 @@ const COLONY_EVENTS = {
     },
     text: "{primary} a une idée pour optimiser l'atelier. Elle pense pouvoir doubler la précision de fabrication.",
     choices: [
-      { label: "L'autoriser à expérimenter", outcome: { loss: { metal: 20, cristal: 10 }, gain: { datacubes: 12 }, log: "{primary} valide son hypothèse. Données techniques précieuses." } },
+      { label: "L'autoriser à expérimenter", pay: true, outcome: { loss: { metal: 20, cristal: 10 }, gain: { datacubes: 12 }, log: "{primary} valide son hypothèse. Données techniques précieuses." } },
       { label: "Demander un mémo détaillé d'abord", req: { skill: { key: 'science', min: 2 } },
         outcome: { gain: { datacubes: 8 }, log: "{primary} produit un dossier rigoureux. La méthode est intégrée sans coût." } },
       { label: "Refuser, trop coûteux", outcome: { moralAll: -1, log: "{primary} se replie sur ses tâches. Un peu déçu." } }
@@ -2985,13 +3294,14 @@ const COLONY_EVENTS = {
 
   // ===== PLAINTES & DEMANDES COLLECTIVES =====
   event_plainte_repas: {
+    titre: "Plainte sur les rations",
     theme: 'Plainte',
     positive: false,
     condition: () => aliveCrew().length >= 4 && (S.res.biomasse || 0) < (capOf('biomasse') * 0.3),
     pickActors: () => ({ primary: aliveCrew()[Math.floor(Math.random() * aliveCrew().length)] }),
     text: "L'équipage se plaint des rations. Plusieurs colons mangent à peine. {primary} parle au nom des autres.",
     choices: [
-      { label: "Augmenter les portions à court terme", outcome: { loss: { biomasse: 30 }, moralAll: +3, log: "L'équipage est apaisé. Les estomacs sont pleins ce soir." } },
+      { label: "Augmenter les portions à court terme", pay: true, outcome: { loss: { biomasse: 30 }, moralAll: +3, log: "L'équipage est apaisé. Les estomacs sont pleins ce soir." } },
       { label: "Distribuer une ration concentrée", consume: { item: 'ration_concentree' },
         outcome: { moralAll: +2, log: "La ration est partagée. Geste apprécié." } },
       { label: "Promettre une amélioration future", outcome: { moralAll: -2, log: "{primary} hoche la tête, peu convaincu." } },
@@ -3000,6 +3310,7 @@ const COLONY_EVENTS = {
   },
 
   event_plainte_logement: {
+    titre: "Plainte sur le logement",
     theme: 'Plainte',
     positive: false,
     condition: () => aliveCrew().length >= 3 && crewUsage().used >= crewUsage().total - 1 && (S.modules.habitat?.level || 0) < 4,
@@ -3015,6 +3326,7 @@ const COLONY_EVENTS = {
 
   // ===== VISITEURS / RECRUTEMENTS RARES =====
   event_visiteur_isole: {
+    titre: "Visiteur isolé",
     theme: 'Visiteur',
     positive: true,
     condition: () => crewUsage().used < crewUsage().total && (S.meta.gameMin - (S.lastVisitorMin || -99999)) > 14 * 24 * 60,
@@ -3029,20 +3341,24 @@ const COLONY_EVENTS = {
   },
 
   event_marchand: {
+    titre: "Marchand de passage",
     theme: 'Visiteur',
     positive: true,
-    condition: () => (S.meta.gameMin - (S.lastMerchantMin || -99999)) > 21 * 24 * 60 && (S.res.metal || 0) > 100,
+    // 0.33 : le marchand ne vient que si au moins un échange est payable (montants ×OUTCOME_MULT)
+    condition: () => (S.meta.gameMin - (S.lastMerchantMin || -99999)) > 21 * 24 * 60
+      && ((S.res.metal || 0) >= 80 * OUTCOME_MULT || (S.res.cristal || 0) >= 50 * OUTCOME_MULT),
     pickActors: () => ({ primary: null }),
     text: "Un vaisseau marchand se pose pour quelques heures. Le pilote propose un échange unique.",
     choices: [
-      { label: "Échanger 80 métal contre 30 datacubes", outcome: { loss: { metal: 80 }, gain: { datacubes: 30 }, log: "L'échange est conclu.", markMerchant: true } },
-      { label: "Échanger 50 cristal contre 1 schéma humain", outcome: { loss: { cristal: 50 }, randomBlueprint: 'humain', log: "Un plan technique change de mains.", markMerchant: true } },
+      { label: "Échanger {loss.metal} métal contre {gain.datacubes} datacubes", pay: true, outcome: { loss: { metal: 80 }, gain: { datacubes: 30 }, log: "L'échange est conclu.", markMerchant: true } },
+      { label: "Échanger {loss.cristal} cristal contre 1 schéma humain", pay: true, outcome: { loss: { cristal: 50 }, randomBlueprint: 'humain', log: "Un plan technique change de mains.", markMerchant: true } },
       { label: "Rien d'intéressant", outcome: { markMerchant: true, log: "Le marchand repart sans rien vendre." } }
     ]
   },
 
   // ===== DÉCOUVERTES & INSIGHTS =====
   event_insight_labo: {
+    titre: "Intuition au laboratoire",
     theme: 'Découverte',
     positive: true,
     condition: () => S.modules.laboratoire?.level >= 2 && (S.research?.length > 0 || Object.keys(S.techCompleted || {}).length >= 2),
@@ -3059,6 +3375,7 @@ const COLONY_EVENTS = {
   },
 
   event_decouverte_archive: {
+    titre: "Archive retrouvée",
     theme: 'Découverte',
     positive: true,
     condition: () => aliveCrew().some(m => (m.skills.linguistique || 0) >= 2),
@@ -3075,6 +3392,7 @@ const COLONY_EVENTS = {
 
   // ===== SONGES COLLECTIFS =====
   event_songe: {
+    titre: "Songe collectif",
     theme: 'Songe',
     positive: false,
     condition: () => aliveCrew().length >= 3 && Object.keys(S.discoveries || {}).some(id => {
@@ -3093,6 +3411,7 @@ const COLONY_EVENTS = {
 
   // ===== PROPOSITION D'EXPLORATION =====
   event_volontaire: {
+    titre: "Volontaire pour patrouiller",
     theme: 'Initiative',
     positive: true,
     condition: () => aliveCrew().some(m => m.statut === 'libre' && (m.skills.combat || 0) >= 2),
@@ -3112,7 +3431,10 @@ const COLONY_EVENTS = {
 
 // Trouve un événement éligible pondéré
 function pickColonyEvent() {
+  // Un événement déjà en attente du joueur n'est pas re-tiré
+  const pending = new Set((S.pendingDecisions || []).filter(d => d.kind === 'event').map(d => d.refId));
   const eligible = Object.entries(COLONY_EVENTS).filter(([id, ev]) => {
+    if (pending.has(id)) return false;
     try { return ev.condition(); } catch (e) { return false; }
   });
   if (eligible.length === 0) return null;
@@ -3131,59 +3453,57 @@ export function tickColonyEvents(silent = false) {
 
   const eventId = pickColonyEvent();
   if (!eventId) return;
-
-  if (silent) {
-    // Applique le premier choix (le plus simple)
-    triggerColonyEvent(eventId, true);
-  } else {
-    triggerColonyEvent(eventId, false);
-  }
+  // silent (rattrapage) : résolu automatiquement ; sinon file des décisions
+  triggerColonyEvent(eventId, silent);
 }
 
-let _activeColonyEvent = null;
 function triggerColonyEvent(eventId, silent = false) {
   const ev = COLONY_EVENTS[eventId];
   if (!ev) return;
   let actors;
   try { actors = ev.pickActors(); } catch (e) { return; }
   if (!actors) return;
+  S.lastColonyEventId = eventId;
 
   if (silent) {
-    // Choix le moins risqué : premier choix sans req
-    const safe = ev.choices.find(c => !c.req && !c.consume) || ev.choices[0];
-    applyColonyEventChoice(eventId, safe, actors);
-    S.lastColonyEventId = eventId;
+    autoResolveColonyEvent(eventId, actors);
     return;
   }
-
-  _activeColonyEvent = { eventId, actors };
-  const bg = $('#modalBg');
-  const m = $('#modal');
-  m.classList.add('incident-modal');  // Réutilise le style
-  m.innerHTML = renderColonyEventContent();
-  bg.classList.add('show');
-  hookColonyEventModal();
+  enqueueDecision({ kind: 'event', refId: eventId, ...decisionActors(actors) });
   // 0.26.1 : notification dédiée (warn — événement en attente de décision)
-  notif.colonyEvent(ev.titre || eventId);
+  notif.colonyEvent(colonyEventTitle(eventId));
 }
 
-function renderColonyEventContent() {
-  const { eventId, actors } = _activeColonyEvent;
+function autoResolveColonyEvent(eventId, actors) {
+  const ev = COLONY_EVENTS[eventId];
+  if (!ev) return;
+  const choice = pickAutoChoice(ev.choices);
+  if (!choice) return;
+  if (applyColonyEventChoice(eventId, choice, actors, { auto: true }) !== false) {
+    recordAutoResolution('event', colonyEventTitle(eventId), fillAmounts(choice.label, choice.outcome));
+  }
+}
+
+// Libellé d'un choix d'événement : montants réels et nom du protagoniste (échappé)
+function eventChoiceLabelHTML(ch, actors) {
+  return escHtml(fillAmounts(ch.label, ch.outcome)).replace(/\{primary\}/g, escHtml(actors?.primary?.name || ''));
+}
+
+function renderColonyEventContent(eventId, actors) {
   const ev = COLONY_EVENTS[eventId];
   const primaryName = actors.primary?.name || '';
   const secondaryName = actors.secondary?.name || '';
   const age = actors.primary ? currentAge(actors.primary) : '';
   const text = ev.text
-    .replace(/\{primary\}/g, primaryName ? `<em>${primaryName}</em>` : 'un colon')
-    .replace(/\{secondary\}/g, secondaryName ? `<em>${secondaryName}</em>` : '')
+    .replace(/\{primary\}/g, primaryName ? `<em>${escHtml(primaryName)}</em>` : 'un colon')
+    .replace(/\{secondary\}/g, secondaryName ? `<em>${escHtml(secondaryName)}</em>` : '')
     .replace(/\{age\}/g, age);
 
   const choicesHTML = ev.choices.map((ch, i) => {
     let extras = [];
     let available = true;
     if (ch.req?.skill) {
-      const team = aliveCrew();
-      const has = team.some(m => (m.skills[ch.req.skill.key] || 0) >= ch.req.skill.min);
+      const has = skillReqMet(ch.req, aliveCrew());
       extras.push(`<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`);
       if (!has) available = false;
     }
@@ -3193,8 +3513,13 @@ function renderColonyEventContent() {
       extras.push(`<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`);
       if (!has) available = false;
     }
+    if (ch.pay && ch.outcome?.loss) {
+      const ok = choiceAffordable(ch);
+      extras.push(`<span class="cost ${ok ? '' : 'ko'}">COÛT : ${amountsText(ch.outcome.loss)}${ok ? '' : ' — stock insuffisant'}</span>`);
+      if (!ok) available = false;
+    }
     return `<button class="incident-choice" data-event-choice="${i}" ${available ? '' : 'disabled'}>
-      ${ch.label.replace(/\{primary\}/g, primaryName)}
+      ${eventChoiceLabelHTML(ch, actors)}
       ${extras.join('')}
     </button>`;
   }).join('');
@@ -3204,26 +3529,36 @@ function renderColonyEventContent() {
     <div class="incident-eyebrow ${ev.positive ? 'positive' : ''}">
       Événement · <span style="color:${themeColor}">${ev.theme}</span>
     </div>
-    <h3 class="incident-title">${ev.positive ? 'Une bonne nouvelle' : 'Quelque chose se passe'}</h3>
+    <h3 class="incident-title">${ev.titre || (ev.positive ? 'Une bonne nouvelle' : 'Quelque chose se passe')}</h3>
     <p class="incident-body">${text}</p>
     <div class="incident-choices">${choicesHTML}</div>
   `;
 }
 
-function hookColonyEventModal() {
+function hookColonyEventModal(decId) {
   const m = $('#modal');
   m.querySelectorAll('button[data-event-choice]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.eventChoice, 10);
-      const { eventId, actors } = _activeColonyEvent;
-      const ev = COLONY_EVENTS[eventId];
-      const choice = ev.choices[idx];
-      const result = applyColonyEventChoice(eventId, choice, actors);
+      const dec = (S.pendingDecisions || []).find(d => d.id === decId);
+      if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
+      const ev = COLONY_EVENTS[dec.refId];
+      const actors = resolveEventActors(dec);
+      if (!ev || !actors) {
+        // Devenu caduc entre l'affichage et le clic
+        removeDecision(decId);
+        closeDecisionModal();
+        render();
+        return;
+      }
+      const choice = ev.choices[parseInt(btn.dataset.eventChoice, 10)];
+      const result = applyColonyEventChoice(dec.refId, choice, actors);
       if (result === false) return;   // échec (ex : stock insuffisant) — on laisse choisir
-      S.lastColonyEventId = eventId;
+      S.lastColonyEventId = dec.refId;
+      removeDecision(decId);
+      save();
       // 0.30 — Affiche l'écran de conséquences avant de fermer.
-      m.innerHTML = renderColonyConsequence(result, choice);
+      m.innerHTML = renderColonyConsequence(result, choice, actors);
       hookColonyConsequence();
       // Met à jour l'arrière-plan (ressources, etc.) tout de suite
       render();
@@ -3232,12 +3567,12 @@ function hookColonyEventModal() {
 }
 
 // 0.30 — Écran de conséquences : ce que le choix a réellement provoqué.
-function renderColonyConsequence(result, choice) {
-  const label = (choice.label || '').replace(/\{primary\}/g, _activeColonyEvent?.actors?.primary?.name || '');
+function renderColonyConsequence(result, choice, actors) {
+  const label = eventChoiceLabelHTML(choice, actors);
   const effectsHTML = (result.effects || []).map(e => {
     const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
     const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
-    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${e.text}</span></li>`;
+    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${escHtml(e.text)}</span></li>`;
   }).join('');
   const narrativeHTML = result.narrative
     ? `<p class="incident-body">${result.narrative}</p>`
@@ -3254,26 +3589,36 @@ function renderColonyConsequence(result, choice) {
 }
 
 function hookColonyConsequence() {
-  const m = $('#modal');
   $('#consContinue')?.addEventListener('click', () => {
-    $('#modalBg').classList.remove('show');
-    m.classList.remove('incident-modal');
-    _activeColonyEvent = null;
+    closeDecisionModal();
     render();
   });
 }
 
-export function applyColonyEventChoice(eventId, choice, actors) {
+// Applique un choix d'événement. Renvoie false si impossible (prérequis,
+// objet, stock), sinon { ok, narrative (HTML), effects (texte brut), positive }.
+// opts.auto : décision automatique — pas de toast, une seule ligne de journal.
+export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
   const ev = COLONY_EVENTS[eventId];
+  const auto = !!opts.auto;
+  const notes = [];
+  const say = (kind, txt) => { if (auto) notes.push(txt); else log(kind, txt); };
   const primary = actors.primary;
   const secondary = actors.secondary;
-  const primaryName = primary?.name || 'un colon';
-  const secondaryName = secondary?.name || '';
 
+  // Prérequis et coût vérifiés AVANT tout effet
+  if (choice.req?.skill && !skillReqMet(choice.req, aliveCrew())) {
+    if (!auto) toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`);
+    return false;
+  }
+  if (!choiceAffordable(choice)) {
+    if (!auto) toast(`Stock insuffisant : ${amountsText(choice.outcome.loss)}`);
+    return false;
+  }
   // Consume item
   if (choice.consume?.item) {
     if (!S.inventory?.[choice.consume.item]) {
-      toast(`Stock insuffisant : ${ITEMS[choice.consume.item]?.nom}`);
+      if (!auto) toast(`Stock insuffisant : ${ITEMS[choice.consume.item]?.nom}`);
       return false;
     }
     S.inventory[choice.consume.item]--;
@@ -3282,12 +3627,9 @@ export function applyColonyEventChoice(eventId, choice, actors) {
 
   const o = choice.outcome || {};
 
-  // 0.28 : multiplicateur d'impact
-  const OUTCOME_MULT = 3;
-
   // 0.30 — Conséquences concrètes recensées et renvoyées à l'UI.
   // Elles varient selon l'équipage et les ententes (réactions des proches, climat moral).
-  const effects = [];   // { kind:'good'|'bad'|'neutral', text }
+  const effects = [];   // { kind:'good'|'bad'|'neutral', text } — texte brut (échappé au rendu)
   const team = aliveCrew();
 
   // Climat moral de la colonie : module l'intensité des conséquences négatives.
@@ -3302,19 +3644,18 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     if (avgMoral < 35) { moodMult = 1.4; moodNote = "Après les jours difficiles, ce répit fait d'autant plus de bien."; }
   }
 
-  // Pertes / gains de ressources
+  // Pertes / gains de ressources — montants RÉELLEMENT appliqués
   if (o.loss) {
     for (const k in o.loss) {
-      const amt = o.loss[k] * OUTCOME_MULT;
-      S.res[k] = Math.max(0, (S.res[k] || 0) - amt);
-      effects.push({ kind: 'bad', text: `−${Math.round(amt)} ${RES_LABELS[k] || k}` });
+      const lost = removeResourceCapped(k, o.loss[k] * OUTCOME_MULT);
+      if (lost > 0) effects.push({ kind: 'bad', text: `−${Math.round(lost)} ${RES_LABELS[k] || k}` });
     }
   }
   if (o.gain) {
     for (const k in o.gain) {
       const amt = o.gain[k] * OUTCOME_MULT;
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + amt);
-      effects.push({ kind: 'good', text: `+${Math.round(amt)} ${RES_LABELS[k] || k}` });
+      const got = addResourceCapped(k, amt);
+      effects.push({ kind: 'good', text: `+${Math.round(got)} ${RES_LABELS[k] || k}${got < amt ? ' (stock plein)' : ''}` });
     }
   }
   // Moral collectif — 0.28 : impact durable (×3), 0.30 : modulé par le climat
@@ -3400,7 +3741,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
       }
       const member = {
         ...cand,
-        id: 'm_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
+        id: newUid('m'),
         joinedAt: S.meta.gameMin,
         birthGameMin: S.meta.gameMin - (cand.age || 30) * 43200,
         statut: 'libre',
@@ -3431,11 +3772,11 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     if (!S.activeBuffs) S.activeBuffs = [];
     S.activeBuffs.push({
       ...o.debuff,
-      sourceLabel: ev.titre || ev.id || 'Événement',
+      sourceLabel: colonyEventTitle(eventId),
       startedAt: S.meta.gameMin,
       expiresAt: (S.meta.gameMin || 0) + (o.debuff.duration || 720)
     });
-    log('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
+    say('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
     effects.push({ kind: 'bad', text: `Effet en cours : ${o.debuff.label || 'modulation temporaire'}` });
   }
   // — generateRivalry entre primary et secondary
@@ -3443,7 +3784,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     const key = [primary.id, secondary.id].sort().join('|');
     if (!S.relations) S.relations = {};
     S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-    log('warn', `<em>${primary.name}</em> et <em>${secondary.name}</em> se brouillent durablement.`);
+    say('warn', `<em>${escHtml(primary.name)}</em> et <em>${escHtml(secondary.name)}</em> se brouillent durablement.`);
     effects.push({ kind: 'bad', text: `${primary.name} et ${secondary.name} se brouillent durablement.` });
   }
   // — historicalMark : entrée dans le journal historique de la colonie
@@ -3456,12 +3797,17 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     });
   }
 
-  // Log final + narratif renvoyé à l'UI
+  // Log final + narratif renvoyé à l'UI (HTML : noms échappés)
   let narrative = '';
   if (o.log) {
     narrative = o.log
-      .replace(/\{primary\}/g, primary ? `<em>${primary.name}</em>` : 'un colon')
-      .replace(/\{secondary\}/g, secondary ? `<em>${secondary.name}</em>` : '');
+      .replace(/\{primary\}/g, primary ? `<em>${escHtml(primary.name)}</em>` : 'un colon')
+      .replace(/\{secondary\}/g, secondary ? `<em>${escHtml(secondary.name)}</em>` : '');
+  }
+  if (auto) {
+    log(ev.positive ? 'success' : 'warn',
+      `<b>${escHtml(colonyEventTitle(eventId))}</b> — décision automatique : « ${eventChoiceLabelHTML(choice, actors)} ». ${[narrative, ...notes].filter(Boolean).join(' ')}`.trim());
+  } else if (narrative) {
     log(ev.positive ? 'success' : 'warn', narrative);
   }
   if (effects.length === 0) {
@@ -5135,6 +5481,7 @@ function setupHandlers() {
   try { setupNotifHandlers(); } catch (e) { console.warn('[BOOT] setupNotifHandlers:', e); }
 
   $('#btnRename').addEventListener('click', () => {
+    if (!S?.meta) return;
     showModal({
       title: 'Renommer la colonie',
       body: "Comment cet avant-poste sera-t-il connu ?",
@@ -5159,13 +5506,10 @@ function setupHandlers() {
     if (f) importSave(f);
     e.target.value = '';
   });
-  $('#btnReset').addEventListener('click', resetGame);
+  $('#btnReset').addEventListener('click', () => { if (S?.meta) resetGame(); });
 
   // Bouton "Lancer une formation" (onglet Équipage > Formation)
-  $('#btnNewTraining').addEventListener('click', showTrainingModal);
-
-  // Pause auto si onglet caché : on accélère pas, mais on évite la dérive
-  // (en phase 0 on garde simple, le timer tourne quoi qu'il arrive)
+  $('#btnNewTraining').addEventListener('click', () => { if (S?.meta) showTrainingModal(); });
 }
 
 // Snapshot de l'état "important" avant rattrapage offline,
@@ -5236,230 +5580,120 @@ function diffSnapshot(before, after) {
   return lines;
 }
 
-// Rattrapage du temps écoulé hors-ligne
-// Renvoie { simulatedMin, realElapsedHours, capped, summary } pour affichage
-function catchUpOffline() {
-  const lastReal = S.meta.lastTickRealMs || S.meta.lastSave || Date.now();
-  const now = Date.now();
-  const elapsedMs = Math.max(0, now - lastReal);
-
-  // En dessous de 10 secondes, rien à faire (la page vient d'être ouverte/refresh)
-  if (elapsedMs < 10000) {
-    S.meta.lastTickRealMs = now;
-    return null;
+// Résumé des décisions prises automatiquement pendant le rattrapage
+function autoResolvedLines(entries) {
+  const lines = [];
+  for (const kind of ['incident', 'event']) {
+    const list = entries.filter(e => e.kind === kind);
+    if (!list.length) continue;
+    const counts = {};
+    for (const e of list) counts[e.titre] = (counts[e.titre] || 0) + 1;
+    const detail = Object.entries(counts).slice(0, 4).map(([t, n]) => n > 1 ? `${t} ×${n}` : t).join(', ');
+    const more = Object.keys(counts).length > 4 ? '…' : '';
+    lines.push(`${kind === 'incident' ? 'Incidents gérés automatiquement' : 'Événements gérés automatiquement'} : ${list.length} (${detail}${more})`);
   }
-
-  const elapsedMin = elapsedMs / 60000;          // minutes réelles
-  const elapsedHours = elapsedMin / 60;
-  // Dans le jeu, 1 seconde réelle = 1 minute jeu, donc N min réelles → N×60 min jeu.
-  // Mais pour limiter l'inflation, on cap à OFFLINE_MAX_HOURS heures réelles.
-  const capped = elapsedHours > OFFLINE_MAX_HOURS;
-  const cappedHours = Math.min(elapsedHours, OFFLINE_MAX_HOURS);
-  // Conversion : 1s réelle → 1 min jeu, donc cappedHours réelles → cappedHours*3600 min jeu
-  const ticksToSim = Math.floor(cappedHours * 3600 / MIN_PER_TICK);
-
-  if (ticksToSim < 1) {
-    S.meta.lastTickRealMs = now;
-    return null;
-  }
-
-  const before = snapshotForCatchup();
-
-  // Simule en silencieux. On laisse tourner mais sans render.
-  for (let i = 0; i < ticksToSim; i++) {
-    tickOnce({ silent: true });
-  }
-  S.meta.lastTickRealMs = now;
-
-  const after = snapshotForCatchup();
-  const summary = diffSnapshot(before, after);
-
-  // Une seule entrée de journal pour résumer la période
-  const realLabel = elapsedHours < 1
-    ? `${Math.round(elapsedMin)} min`
-    : elapsedHours < 24
-      ? `${elapsedHours.toFixed(1)} h`
-      : `${(elapsedHours / 24).toFixed(1)} jours`;
-  const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS}h)` : '';
-  log('neutral', `Reprise du contact après ${realLabel}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`);
-
-  return {
-    realElapsedHours: elapsedHours,
-    simulatedHours: cappedHours,
-    capped,
-    summary
-  };
+  return lines;
 }
 
-function boot() {
-  // Chaque étape critique est protégée par try/catch.
-  // L'objectif : que setInterval(tick) se lance TOUJOURS, même si une étape
-  // antérieure échoue. Sans ça, l'horloge se bloque définitivement.
-  
-  let isFresh = false;
-  let catchupReport = null;
-  
-  try {
-    setS(load());
-    isFresh = !S;
-    if (isFresh) {
-      setS(freshState());
-      seedJournal();
-      save();
-    }
-  } catch (err) {
-    console.error('[BOOT] Erreur load/init :', err);
-    // Si le load a planté (save corrompue par ex), repartir sur un fresh
-    try {
-      setS(freshState());
-      seedJournal();
-      save();
-      isFresh = true;
-    } catch (err2) {
-      console.error('[BOOT] Erreur sur fresh state :', err2);
-      alert("DRIFT : impossible d'initialiser le jeu.\n" + err2.message);
-      return; // sans state on ne peut rien faire
-    }
-  }
-  
-  if (!isFresh) {
-    try {
-      catchupReport = catchUpOffline();
-    } catch (err) {
-      console.error('[BOOT] Erreur catchUpOffline :', err);
-      // Pas grave, on continue sans rattrapage
-    }
-  }
-  
-  try {
-    autoAssignAllFreeMembers();
-  } catch (err) {
-    console.error('[BOOT] Erreur autoAssign :', err);
-  }
-  
-  try {
-    setupHandlers();
-  } catch (err) {
-    console.error('[BOOT] Erreur setupHandlers :', err);
-  }
-  
-  try {
-    render();
-  } catch (err) {
-    console.error('[BOOT] Erreur render initial :', err);
-  }
-  
-  if (catchupReport) {
-    try { showCatchupModal(catchupReport); }
-    catch (err) { console.error('[BOOT] Erreur catchup modal :', err); }
-  }
-  
-  // ============================================================
-  // DÉMARRAGE DU TICK — protégé pour ne jamais s'arrêter
-  // ============================================================
-  // Wrapper qui capture les exceptions du tick, sinon une seule erreur
-  // tue tout le système.
-  function safeTick() {
-    try {
-      tick();
-    } catch (err) {
-      console.error('[TICK] Erreur dans tick() :', err);
-      // On essaye au moins d'avancer le temps minimal et de sauvegarder
-      try {
-        if (S?.meta) {
-          S.meta.gameMin = (S.meta.gameMin || 0) + (MIN_PER_TICK || 1);
-          S.meta.lastTickRealMs = Date.now();
-        }
-      } catch (e) {}
-    }
-  }
-  // Lance le tick principal
-  let tickIntervalId = setInterval(safeTick, TICK_MS);
-  
-  // Watchdog : surveille que le tick tourne toujours.
-  // Si gameMin n'a pas bougé depuis 5 secondes alors que la PWA est visible,
-  // on relance le tick.
-  let lastWatchdogCheck = { time: Date.now(), gameMin: S?.meta?.gameMin || 0 };
-  setInterval(() => {
-    if (!S || !S.meta) return;
-    if (document.visibilityState !== 'visible') return;
-    
-    const now = Date.now();
-    const elapsed = now - lastWatchdogCheck.time;
-    const advanced = (S.meta.gameMin || 0) - lastWatchdogCheck.gameMin;
-    
-    // Si > 5 sec se sont écoulées et gameMin n'a pas bougé d'une seule minute,
-    // c'est que le tick est mort. On le relance.
-    if (elapsed > 5000 && advanced === 0) {
-      console.warn('[WATCHDOG] Tick gelé détecté — redémarrage');
-      try { clearInterval(tickIntervalId); } catch (e) {}
-      tickIntervalId = setInterval(safeTick, TICK_MS);
-      // Force aussi un render() pour rafraîchir l'UI
-      try { render(); } catch (e) {}
-    }
-    
-    lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
-  }, 5000);
-  
-  // Rattrapage à chaque retour au premier plan
-  document.addEventListener('visibilitychange', () => {
-    if (!S) return;
-    if (document.visibilityState === 'hidden') {
-      S.meta.lastTickRealMs = Date.now();
-      try { save(); } catch (e) {}
-      return;
-    }
-    if (document.visibilityState === 'visible') {
-      const now = Date.now();
-      const elapsedMs = now - (S.meta.lastTickRealMs || now);
-      // Au-delà de 30s d'écart, on rattrape silencieusement
-      if (elapsedMs > 30000) {
-        const ticksToSim = Math.min(
-          Math.floor(elapsedMs / TICK_MS),
-          OFFLINE_MAX_HOURS * 3600
-        );
-        try {
-          for (let i = 0; i < ticksToSim; i++) {
-            tickOnce({ silent: true });
-          }
-          S.meta.lastTickRealMs = now;
-          save();
-          render();
-        } catch (err) {
-          console.error('[VISIBILITY] Erreur rattrapage :', err);
-        }
-      }
-      // S'assurer aussi que le tick principal tourne après reprise
-      lastWatchdogCheck = { time: Date.now(), gameMin: S.meta.gameMin || 0 };
+// Libellé d'une durée réelle
+function realDurationLabel(hours, long = false) {
+  if (hours < 1) return `${Math.round(hours * 60)} ${long ? 'minutes' : 'min'}`;
+  if (hours < 24) return `${hours.toFixed(1)} ${long ? 'heures' : 'h'}`;
+  return `${(hours / 24).toFixed(1)} jours`;
+}
+
+// ---- Rattrapage du temps écoulé (hors ligne, page gelée, retour d'onglet) ----
+// Appelée par tick() quand l'écart avec l'horloge réelle est grand. Simule
+// par morceaux (page réactive, barre de progression si c'est long), incidents
+// et événements résolus automatiquement, puis affiche « Reprise du contact ».
+const CATCHUP_PROGRESS_MIN_TICKS = 900;   // ~15 min d'absence et plus : barre de progression
+const CATCHUP_REPORT_MIN_HOURS = 5 / 60;  // en dessous de 5 min réelles : ni modale ni journal
+
+export function catchUpOffline() {
+  if (!S?.meta || isCatchingUp()) return false;
+  const now = Date.now();
+  const elapsedMs = Math.max(0, now - S.meta.lastTickRealMs);
+  const elapsedHours = elapsedMs / 3600000;
+  const due = Math.floor(elapsedMs / TICK_MS);
+  const maxTicks = Math.floor(OFFLINE_MAX_HOURS * 3600);
+  const ticks = Math.min(due, maxTicks);
+  const capped = due > maxTicks;
+  const before = snapshotForCatchup();
+  const seqStart = _autoSeq;
+  const progress = ticks >= CATCHUP_PROGRESS_MIN_TICKS && !decisionUiBusy() ? openCatchupProgress() : null;
+  const started = runCatchUp(ticks, {
+    onProgress: (done, total) => progress?.update(done, total),
+    onDone: done => {
+      progress?.close();
+      finishCatchUp({ before, seqStart, elapsedHours, simulatedHours: done * MIN_PER_TICK / 60, capped });
     }
   });
-  
-  // Sauvegarde aussi avant fermeture
-  window.addEventListener('pagehide', () => {
-    if (S) {
-      S.meta.lastTickRealMs = Date.now();
-      try { save(); } catch (e) {}
+  if (!started) progress?.close();
+  return started;
+}
+
+function finishCatchUp({ before, seqStart, elapsedHours, simulatedHours, capped }) {
+  const summary = diffSnapshot(before, snapshotForCatchup()).concat(autoResolvedLines(autoResolvedSince(seqStart)));
+  syncPendingFlags();
+  if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
+    // Une seule entrée de journal pour résumer la période
+    const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS}h)` : '';
+    log('neutral', escHtml(`Reprise du contact après ${realDurationLabel(elapsedHours)}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`));
+  }
+  save();
+  try { render(); } catch (e) { reportTickError('render', e); }
+  if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
+    const report = { realElapsedHours: elapsedHours, simulatedHours, capped, summary };
+    if (!decisionUiBusy()) showCatchupModal(report);
+    else toast('Reprise du contact : le résumé est dans le journal.');
+  }
+}
+
+// Barre de progression du rattrapage (dans #modal, sans bouton : elle se
+// ferme d'elle-même). Renvoie { update, close } ou null.
+function openCatchupProgress() {
+  const m = $('#modal');
+  const bg = $('#modalBg');
+  if (!m || !bg) return null;
+  m.className = 'modal incident-modal';
+  m.innerHTML = `
+    <div class="incident-eyebrow">Reprise du contact</div>
+    <h3 class="incident-title">Synchronisation de l'avant-poste…</h3>
+    <p class="incident-body">L'avant-poste a continué de tourner pendant ton absence. Simulation en cours : <span id="catchupPct">0</span> %</p>
+    <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:12px">
+      <div id="catchupBar" style="height:100%;width:0%;background:var(--amber);transition:width .15s linear"></div>
+    </div>
+  `;
+  bg.classList.add('show');
+  let lastPaint = 0;
+  return {
+    update(done, total) {
+      const t = performance.now();
+      if (t - lastPaint < 100 && done < total) return;
+      lastPaint = t;
+      const pct = total ? Math.floor(done * 100 / total) : 100;
+      const p = $('#catchupPct');
+      const b = $('#catchupBar');
+      if (p) p.textContent = String(pct);
+      if (b) b.style.width = pct + '%';
+    },
+    close() {
+      if (!$('#catchupBar')) return;   // remplacée entre-temps par une autre fenêtre
+      bg.classList.remove('show');
+      m.className = 'modal';
     }
-  });
-  
-  console.log('[BOOT] DRIFT démarré, version', VERSION);
+  };
 }
 
 // Modale "bon retour" qui résume ce qui s'est passé pendant l'absence
 function showCatchupModal(report) {
   // En dessous de 5 minutes réelles, on ne montre rien (zéro friction)
-  if (report.realElapsedHours < 5/60) return;
-
-  const realLabel = report.realElapsedHours < 1
-    ? `${Math.round(report.realElapsedHours * 60)} minutes`
-    : report.realElapsedHours < 24
-      ? `${report.realElapsedHours.toFixed(1)} heures`
-      : `${(report.realElapsedHours / 24).toFixed(1)} jours`;
+  if (report.realElapsedHours < CATCHUP_REPORT_MIN_HOURS) return;
 
   const summaryHTML = report.summary.length > 0
     ? `<ul style="list-style:none;padding:0;margin:14px 0 0;">${
         report.summary.map(line =>
-          `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${line}</li>`
+          `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${escHtml(line)}</li>`
         ).join('')
       }</ul>`
     : '<p style="font-style:italic;color:var(--text-mute);margin-top:10px">L\'avant-poste a tenu sans encombre.</p>';
@@ -5470,11 +5704,12 @@ function showCatchupModal(report) {
        </p>`
     : '';
 
+  $('#modal').className = 'modal';   // pas de classe héritée d'une autre fenêtre (incident-modal…)
   showModal({
     title: 'Reprise du contact',
     body: `
       <span style="display:block;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;margin-bottom:4px;">
-        Absence : ${realLabel}
+        Absence : ${realDurationLabel(report.realElapsedHours, true)}
       </span>
       <span style="display:block;color:var(--text-dim);margin-bottom:4px;">
         L'avant-poste a continué de tourner pendant ton absence. Voici ce qu'il s'est passé :
@@ -5487,6 +5722,163 @@ function showCatchupModal(report) {
     primaryLabel: "Reprendre",
     onPrimary: () => {}
   });
+}
+
+// ============================================================
+// 10. DÉMARRAGE — verrou d'onglet, chargement, boucle de jeu
+// ============================================================
+
+const TICK_POLL_MS = 250;   // tick() est appelé 4×/s ; il ne simule que les secondes écoulées
+let _loopStarted = false;
+
+// Un tick protégé : une erreur ne tue jamais la boucle. tick() gère lui-même
+// l'avance du temps, la sauvegarde automatique et le rendu (isolés).
+function safeTick() {
+  try { tick(); } catch (err) { reportTickError('tick', err); }
+  try { pumpDecisions(); } catch (err) { reportTickError('décisions', err); }
+}
+
+// ---- Sauvegarde illisible ----
+// Rien n'est écrasé tant que le joueur n'a pas choisi : la chaîne brute est
+// copiée sous une clé de secours, et on propose de l'exporter, d'importer
+// une autre sauvegarde ou de recommencer.
+function showCorruptSaveModal(res) {
+  $('#modal').className = 'modal';
+  const backupNote = res.backupKey
+    ? `Une copie de secours est gardée dans ce navigateur (<code>${escHtml(res.backupKey)}</code>).`
+    : `⚠ Aucune copie de secours n'a pu être créée (stockage plein ?) : exporte la sauvegarde avant de recommencer.`;
+  showModal({
+    title: 'Sauvegarde illisible',
+    body: `
+      <p>La sauvegarde de ta colonie n'a pas pu être chargée : ${escHtml(res.error?.message || 'erreur inconnue')}.</p>
+      <p>Rien n'a été effacé. ${backupNote}</p>
+      <p>Tu peux l'exporter (pour la réparer ou la transmettre), importer une autre sauvegarde, ou recommencer une partie.</p>
+      <div class="btn-row" style="justify-content:flex-start;flex-wrap:wrap;margin-top:12px">
+        <button id="corruptExport">Exporter la sauvegarde endommagée</button>
+        <button id="corruptImport">Importer une sauvegarde…</button>
+      </div>`,
+    bodyIsHTML: true,
+    hideCancel: true,
+    primaryLabel: res.backupKey ? 'Recommencer une partie' : 'Recommencer quand même',
+    primaryClass: 'danger',
+    onPrimary: () => {
+      unlockSaves();
+      setS(freshState());
+      seedJournal();
+      save();
+      toast('Nouvelle fondation établie');
+      startGameLoop();
+    }
+  });
+  $('#corruptExport')?.addEventListener('click', () => exportRawSave(res.raw));
+  $('#corruptImport')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', () => {
+      const f = input.files?.[0];
+      if (f) importSave(f, { onCancel: () => showCorruptSaveModal(res) });
+    });
+    input.click();
+  });
+}
+
+// ---- Démarrage ----
+function boot() {
+  try { setupHandlers(); } catch (err) { console.error('[BOOT] Erreur setupHandlers :', err); }
+  startSession();
+}
+
+// Charge la sauvegarde (ou crée une partie) puis lance la boucle de jeu.
+function startSession() {
+  let res;
+  try { res = loadSave(); } catch (err) { res = { status: 'error', error: err, raw: null }; }
+  if (res.status === 'error') {
+    lockSaves('sauvegarde-illisible');
+    showCorruptSaveModal(res);
+    return;
+  }
+  try {
+    if (res.status === 'ok') {
+      setS(res.data);
+      if (res.newer) toast(`Sauvegarde d'une version plus récente du jeu : certaines données peuvent être ignorées.`);
+      else if (res.warnings?.length) toast(`Sauvegarde chargée avec ${res.warnings.length} avertissement(s) (détails dans la console).`);
+    } else {
+      setS(freshState());
+      seedJournal();
+      save();
+    }
+  } catch (err) {
+    console.error('[BOOT] Erreur init :', err);
+    alert("DRIFT : impossible d'initialiser le jeu.\n" + err.message);
+    return;   // sans state on ne peut rien faire
+  }
+  startGameLoop();
+}
+
+function startGameLoop() {
+  if (_loopStarted) return;
+  _loopStarted = true;
+  markSessionStart();   // l'horloge « session » repart de zéro
+
+  try {
+    autoAssignAllFreeMembers();
+  } catch (err) {
+    console.error('[BOOT] Erreur autoAssign :', err);
+  }
+  try {
+    render();
+  } catch (err) {
+    console.error('[BOOT] Erreur render initial :', err);
+  }
+
+  // Premier tick tout de suite : rattrape l'absence (par morceaux si elle
+  // est longue) puis réaffiche la décision en attente éventuelle.
+  safeTick();
+  let tickIntervalId = setInterval(safeTick, TICK_POLL_MS);
+
+  // Watchdog : surveille que le tick tourne toujours.
+  // Si gameMin n'a pas bougé depuis 5 secondes alors que la PWA est visible
+  // (et qu'aucun rattrapage / pause n'est en cours), on relance le tick.
+  let lastWatchdogCheck = { time: Date.now(), gameMin: S?.meta?.gameMin || 0 };
+  setInterval(() => {
+    if (!S || !S.meta) return;
+    const now = Date.now();
+    if (document.visibilityState !== 'visible' || isSimPaused() || isCatchingUp()) {
+      lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
+      return;
+    }
+    const elapsed = now - lastWatchdogCheck.time;
+    const advanced = (S.meta.gameMin || 0) - lastWatchdogCheck.gameMin;
+    if (elapsed > 5000 && advanced === 0) {
+      console.warn('[WATCHDOG] Tick gelé détecté — redémarrage');
+      try { clearInterval(tickIntervalId); } catch (e) { /* rien */ }
+      tickIntervalId = setInterval(safeTick, TICK_POLL_MS);
+      try { render(); } catch (e) { /* rien */ }
+    }
+    lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
+  }, 5000);
+
+  // Onglet caché : on sauvegarde (sans toucher à lastTickRealMs : tick()
+  // simulera tout ce qui est dû). Retour au premier plan : tick() tout de
+  // suite, qui rattrape l'écart (par morceaux s'il est grand).
+  document.addEventListener('visibilitychange', () => {
+    if (!S?.meta || isSimPaused()) return;
+    if (document.visibilityState === 'hidden') {
+      try { save(); } catch (e) { /* rien */ }
+      return;
+    }
+    safeTick();
+    lastWatchdogCheck = { time: Date.now(), gameMin: S.meta.gameMin || 0 };
+  });
+
+  // Sauvegarde aussi avant fermeture
+  window.addEventListener('pagehide', () => {
+    if (S?.meta) { try { save(); } catch (e) { /* rien */ } }
+  });
+
+
+  console.log('[BOOT] DRIFT démarré, version', VERSION);
 }
 
 // Différer le démarrage pour éviter les problèmes de Temporal Dead Zone
