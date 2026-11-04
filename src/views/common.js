@@ -211,10 +211,10 @@ export function emptyState(text, action = null) {
 }
 // Chips de filtre (role=radiogroup) ; data-filter="<groupe>:<valeur>"
 export function filterChips(group, options, current, counts = {}) {
-  return `<div class="filters" role="radiogroup" aria-label="Filtrer">${options.map(([key, label]) => {
+  return `<div class="filters" role="group" aria-label="Filtrer">${options.map(([key, label]) => {
     const on = key === current;
     const n = counts[key];
-    return `<button type="button" class="chip${on ? ' on' : ''}" role="radio" aria-checked="${on}" data-filter="${esc(group)}:${esc(key)}">${esc(label)}${n !== undefined ? ` <span class="chip-n">${esc(n)}</span>` : ''}</button>`;
+    return `<button type="button" class="chip${on ? ' on' : ''}" aria-pressed="${on}" data-filter="${esc(group)}:${esc(key)}">${esc(label)}${n !== undefined ? ` <span class="chip-n">${esc(n)}</span>` : ''}</button>`;
   }).join('')}</div>`;
 }
 

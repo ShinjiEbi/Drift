@@ -5310,7 +5310,7 @@ h2.eyebrow { margin-top: 22px; }
   cursor: pointer;
 }
 .seg button + button { border-left: 1px solid var(--border-bright); }
-.seg button[aria-checked="true"] { background: rgba(212,160,86,0.15); color: var(--amber-bright); }
+.seg button[aria-pressed="true"] { background: rgba(212,160,86,0.15); color: var(--amber-bright); }
 .switch-btn {
   width: 60px;
   height: 44px;

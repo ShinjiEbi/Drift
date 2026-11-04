@@ -853,7 +853,7 @@ function applyPrefs() {
   for (const b of $$('#menuSheet [data-pref]')) {
     const name = b.dataset.pref;
     const on = b.dataset.value !== undefined ? p[name] === b.dataset.value : !!p[name];
-    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    b.setAttribute(b.getAttribute('role') === 'switch' ? 'aria-checked' : 'aria-pressed', on ? 'true' : 'false');
     b.classList.toggle('on', on);
   }
 }
@@ -1784,7 +1784,8 @@ export function confirmModal({ titre = 'Confirmer ?', texte = '', confirmer = 'C
     });
     obs.observe(m, { childList: true });
     obs.observe(bg, { attributes: true, attributeFilter: ['class'] });
-    $('#confirmYes').focus({ preventScroll: true });
+    // Action destructrice : le focus va sur « Annuler » (Entrée par mégarde sans effet)
+    $(danger ? '#confirmNo' : '#confirmYes').focus({ preventScroll: true });
   });
 }
 

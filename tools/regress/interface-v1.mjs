@@ -288,7 +288,7 @@ try {
     document.querySelector('#sceneOverlay').classList.remove('show');
     return out;
   });
-  t.check(conf.ui.title === 'Tout libérer ?' && conf.ui.yes === 'Libérer' && conf.ui.danger && conf.ui.focus === 'confirmYes', 'confirmModal : titre, libellés, style danger, focus', JSON.stringify(conf.ui));
+  t.check(conf.ui.title === 'Tout libérer ?' && conf.ui.yes === 'Libérer' && conf.ui.danger && conf.ui.focus === 'confirmNo', 'confirmModal : titre, libellés, style danger, focus sur « Annuler » (action destructrice)', JSON.stringify(conf.ui));
   t.check(conf.yes === true && conf.no === false && conf.esc === false && conf.replaced === false, 'confirmModal : vrai / faux / Échap / remplacée', JSON.stringify(conf));
   t.check(conf.onTop, 'confirmModal au-dessus de l\'écran de scène');
   // Une action réelle passe par la fenêtre du jeu (plus de confirm() natif)
