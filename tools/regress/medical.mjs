@@ -174,6 +174,35 @@ try {
     S.expeditions = [];
     return r;
   });
+
+  // F4 — un diagnostic raté ne peut pas être relancé immédiatement et gratuitement
+  await scenario('F4 : délai entre deux diagnostics', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 3 };
+    S.flags.recherche = true;
+    const doc = mk({ skills: { medecine: 1 } });   // médecin libre, peu doué
+    doc.stats = { ...doc.stats, intellect: 5 };
+    const pat = mk({ statut: 'infirmerie' });
+    pat.statuts = [{ key: 'parasite', since: S.meta.gameMin, revealed: false, diagnosed: false, statMod: {} }];
+    const dc0 = S.res.datacubes;
+    const orig = Math.random;
+    let r;
+    try {
+      Math.random = () => 0;                    // jet de 1 → échec assuré (DC 4)
+      app.startDiagnostic(pat.id, 0);
+      const failedOnce = !pat.statuts[0].diagnosed && S.res.datacubes === dc0 - 2;
+      const blocked = app.canDiagnose(pat.id, 0);
+      app.startDiagnostic(pat.id, 0);           // refusé : pas de nouveau débit
+      const notCharged = S.res.datacubes === dc0 - 2;
+      S.meta.gameMin += app.DIAG_RETRY_MIN;
+      const again = app.canDiagnose(pat.id, 0).ok;
+      Math.random = () => 0.99;                 // jet de 6 → réussite
+      app.startDiagnostic(pat.id, 'parasite');
+      r = { failedOnce, blocked: blocked.ok === false && blocked.waitMin > 0, notCharged, again, diagnosed: pat.statuts[0].diagnosed === true };
+    } finally { Math.random = orig; }
+    return r;
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

@@ -1874,42 +1874,56 @@ export function dischargeMember(memberId) {
   render();
 }
 
-// Lance un diagnostic actif sur un statut caché
-export function startDiagnostic(memberId, statusIdx) {
+// Délai minimal entre deux examens d'un même statut après un échec (minutes de jeu)
+export const DIAG_RETRY_MIN = 60;
+
+// Vérifie qu'un diagnostic est lançable. statusRef : index (UI) ou clé du statut.
+// Renvoie { ok, reason, cost, doctor, waitMin? } — utilisable par l'UI pour le bouton.
+export function canDiagnose(memberId, statusRef) {
   const member = S.crew.find(m => m.id === memberId);
-  if (!member) return;
-  if (member.statut !== 'infirmerie') {
-    toast("Le patient doit être admis avant.");
-    return;
-  }
-  const status = member.statuts[statusIdx];
-  if (!status || status.diagnosed) return;
+  if (!member) return { ok:false, reason:"Patient introuvable" };
+  if (member.statut !== 'infirmerie') return { ok:false, reason:"Le patient doit être admis avant." };
+  const found = findMemberStatus(member, statusRef);
+  if (!found) return { ok:false, reason:"Statut introuvable" };
+  const { status, idx: statusIdx } = found;
+  if (status.diagnosed) return { ok:false, reason:"Déjà diagnostiqué" };
   const def = STATUTS[status.key];
-  // Conditions
-  if (def.detect.needLab && !S.flags.recherche) {
-    toast("Laboratoire requis pour ce diagnostic.");
-    return;
-  }
+  if (!def) return { ok:false, reason:"Statut inconnu" };
+  const det = (def.detect && typeof def.detect === 'object') ? def.detect : {};
+  if (det.needLab && !S.flags.recherche) return { ok:false, reason:"Laboratoire requis pour ce diagnostic." };
   const doctor = bestAvailableDoctor();
-  if (!doctor) {
-    toast("Aucun médecin disponible.");
+  if (!doctor) return { ok:false, reason:"Aucun médecin disponible." };
+  // Un examen non concluant ne peut être refait qu'après un délai
+  const waitMin = typeof status.lastDiagAt === 'number' ? status.lastDiagAt + DIAG_RETRY_MIN - S.meta.gameMin : 0;
+  if (waitMin > 0) return { ok:false, reason:`Nouvel examen possible dans ${fmtMin(waitMin)}`, waitMin };
+  // Coût simple : 2 datacubes pour usage labo, sinon 0
+  const cost = det.needLab ? { datacubes: 2 } : {};
+  for (const k in cost) {
+    if ((S.res[k] || 0) < cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+  }
+  return { ok:true, member, status, statusIdx, def, doctor, cost };
+}
+
+// Lance un diagnostic actif sur un statut caché (statusRef : index ou clé)
+export function startDiagnostic(memberId, statusRef) {
+  const r = canDiagnose(memberId, statusRef);
+  if (!r.ok) {
+    if (r.reason !== "Déjà diagnostiqué") toast(r.reason);
     return;
   }
-  // Coût simple : 2 datacubes pour usage labo, sinon 0
-  const cost = def.detect.needLab ? { datacubes: 2 } : {};
-  for (const k in cost) {
-    if (S.res[k] < cost[k]) { toast(`Ressources insuffisantes (${RES_LABELS[k]})`); return; }
-  }
+  const { member, status, def, doctor, cost } = r;
   for (const k in cost) S.res[k] -= cost[k];
   // Diagnostic instantané : le médecin garde son statut (et son poste)
-
-  const success = rollDiagnostic(memberId, status.key, doctor);
+  const success = rollDiagnostic(member.id, status.key, doctor);
   if (success) {
     status.diagnosed = true;
     status.revealed = true;
+    delete status.lastDiagAt;
     log('success', `Diagnostic posé par <em>${doctor.name}</em> : <em>${member.name}</em> souffre de <em>${def.nom}</em>.`);
   } else {
-    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. À retenter.`);
+    // Échec : nouvel examen possible seulement après DIAG_RETRY_MIN
+    status.lastDiagAt = S.meta.gameMin;
+    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. Nouvel examen possible dans ${fmtMin(DIAG_RETRY_MIN)}.`);
   }
   render();
 }
