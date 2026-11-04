@@ -145,6 +145,22 @@ try {
     return ok;
   });
 
+  // E8 — l'infirmerie n'admet ni ne « rapatrie » un colon absent
+  await scenario('E8 : admission/sortie d\'infirmerie réservées aux présents', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 2 };
+    const away = mk({ statut: 'expedition' });
+    const worker = mk({ statut: 'libre', skills: { pilotage: 2 } });
+    app.assignMember(worker.id, 'commandement', 0);
+    app.admitToInfirmary(away.id);
+    app.dischargeMember(away.id);
+    app.admitToInfirmary(worker.id);
+    const admitted = worker.statut === 'infirmerie' && !!app.memberAssignment(worker.id);
+    app.dischargeMember(worker.id);
+    return { awayUntouched: away.statut === 'expedition', admitted, backToPost: worker.statut === 'travail' };
+  });
+
   // M7 — recliquer sur son propre poste ne remet pas l'ancienneté à zéro
   await scenario('M7 : ancienneté conservée en recliquant sur son poste', () => {
     const { app, fresh, mk } = window.__t;

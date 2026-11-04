@@ -1852,7 +1852,12 @@ export function inflictStatus(member, statutKey, source = '', opts = {}) {
 export function admitToInfirmary(memberId) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return;
-  if (member.statut === 'mort') return;
+  if (member.statut === 'mort' || member.statut === 'infirmerie') return;
+  // Seul un colon présent à la base peut être admis (pas en expédition ni en mission)
+  if (!['libre', 'travail', 'formation'].includes(member.statut)) {
+    toast(`${member.name} n'est pas à la base.`);
+    return;
+  }
   if (infirmaryBeds() <= bedsInUse()) {
     toast("Infirmerie pleine — choisir un triage.");
     return;
@@ -1870,7 +1875,8 @@ export function admitToInfirmary(memberId) {
 
 export function dischargeMember(memberId) {
   const member = S.crew.find(m => m.id === memberId);
-  if (!member) return;
+  // Ne concerne qu'un patient admis : ne « rapatrie » pas un colon absent
+  if (!member || member.statut !== 'infirmerie') return;
   // Annule traitements en cours
   S.treatments = S.treatments.filter(t => {
     if (t.memberId === memberId) {
