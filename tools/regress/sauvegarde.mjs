@@ -119,7 +119,7 @@ try {
         seed: S.journal[0]?.txt
       };
     }, oldSave.workerId);
-    check(r.schema === 1 && r.prev === '0.31.0', `schemaVersion=1, version d'origine gardée (${r.prev})`);
+    check(r.schema === 2 && r.prev === '0.31.0', `schemaVersion=2, version d'origine gardée (${r.prev})`);
     check((await backupsOf(page)).length === 1, 'copie de secours avant migration');
     check(!r.notifications && !r.diplomacy && !r.queued, 'champs morts retirés (notifications, diplomacy, queuedIncidents)');
     check(r.chain.includes('mine_eboulement'), 'incident en file converti en incident en chaîne');
@@ -163,7 +163,7 @@ try {
       const { S } = await import('./src/state.js');
       return { name: S.meta.colonyName, gm: S.meta.gameMin, schema: S.meta.schemaVersion, ui: !!S.ui, journal: S.journal.at(-1)?.txt };
     });
-    check(after.name === 'Colonie importée' && after.schema === 1 && after.ui, 'sauvegarde importée, migrée et rechargée');
+    check(after.name === 'Colonie importée' && after.schema === 2 && after.ui, 'sauvegarde importée, migrée et rechargée');
     check(after.gm < 77777 + 60, `pas de rattrapage de la période export → import (gameMin ${after.gm})`);
     // Clic sur un système (plantait avec une vieille sauvegarde sans S.ui)
     await page.click('nav.tabs button[data-tab="expeditions"]', { force: true });

@@ -18,7 +18,7 @@ const r = await page.evaluate(async () => {
   app.unassignMember(x.id);
   for (const k of Object.keys(S.assignments)) delete S.assignments[k];
   for (const m of S.crew) m.statut = 'libre';
-  app.autoAssignMember(x.id);
+  app.autoAssignMember(x.id, { force: true });   // V1 : désaffecté par le joueur → replacé seulement sur demande
   const a = app.memberAssignment(x.id);
   globalThis.__slot = a.modKey + ':' + a.slotIdx;
   for (const sys of S.galaxy.systems) sys.scanned = true;

@@ -49,11 +49,14 @@ async function prepare() {
     window.__intervals.forEach(id => clearInterval(id));
     const st = await import('./src/state.js');
     const app = await import('./src/app.js');
+    window.__YEAR = (await import('./src/constants.js')).YEAR_IN_GAME_MIN;
     window.__t = {
       st, app,
       fresh() {
         st.setS(st.freshState());
         const S = st.S;
+        S.crew = []; S.fleet = [];  // V1 : sans l'équipage ni la vedette de départ
+        S.nextIncidentMin = 1e12;
         S.nextEventMin = 1e12;      // pas d'événement de colonie parasite
         S.autoAssign = false;
         S.res = { metal: 500, cristal: 500, energie: 500, biomasse: 500, datacubes: 200 };
@@ -61,7 +64,7 @@ async function prepare() {
       },
       mk(over = {}) {
         const c = st.genCandidate();
-        const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * 43200,
+        const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * window.__YEAR,
           statut: 'libre', sante: 100, moral: 70, loyaute: 60, statuts: [], sequels: [], ...over };
         m.skills = { ...c.skills, ...(over.skills || {}) };
         st.S.crew.push(m);
@@ -165,10 +168,10 @@ try {
   await scenario('M7 : ancienneté conservée en recliquant sur son poste', () => {
     const { app, fresh, mk } = window.__t;
     const S = fresh();
-    S.meta.gameMin = 10 * 43200;                    // 10 ans de jeu écoulés (1 an = 30 j)
+    S.meta.gameMin = 10 * window.__YEAR;            // 10 ans écoulés (V1 : 1 an = 7 jours réels)
     const vet = mk({ skills: { pilotage: 3 } });
     app.assignMember(vet.id, 'commandement', 0);
-    vet.posteInfo.depuis = S.meta.gameMin - 8 * 43200;   // 8 ans en poste → Vétéran
+    vet.posteInfo.depuis = S.meta.gameMin - 8 * window.__YEAR;   // 8 ans en poste → Vétéran
     const before = app.ancienneteBonus(vet);
     const hist = (vet.posteHistorique || []).length;
     const r = app.assignMember(vet.id, 'commandement', 0);
@@ -212,6 +215,64 @@ try {
     const after = app.globalCommandBonus();
     const staffed = app.staffOf('commandement').length;
     return { ok, before: before === 1, after: after === 0, staffConsistent: staffed === after };
+  });
+
+  // V1 — formation sans désaffectation : le poste reste réservé et repris au retour
+  await scenario('V1 : formation sans désaffectation', () => {
+    const { st, app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.formation = { level: 2 };
+    S.modules.mine_surface = { level: 1 };
+    const w = mk({ skills: { survie: 1, science: 1 } });
+    app.assignMember(w.id, 'mine_surface', 0);
+    const r = app.canTrain(w.id, 'science');
+    app.startTraining(w.id, 'science');
+    const during = { statut: w.statut, post: app.memberAssignment(w.id)?.modKey };
+    const sess = S.training[0];
+    sess.failChance = 0;
+    S.training = [];
+    app.finishTraining(sess);
+    return { canTrainAtWork: r.ok === true, inTraining: during.statut === 'formation', reserved: during.post === 'mine_surface',
+      backToPost: w.statut === 'travail' && app.memberAssignment(w.id)?.modKey === 'mine_surface', learned: w.skills.science === 2, st: !!st };
+  });
+
+  // V1 — le soignant va à l'infirmerie et l'auto-affectation ne l'en retire jamais
+  await scenario('V1 : médecin muté à l\'infirmerie par l\'auto-affectation, jamais repris', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.autoAssign = true;
+    S.modules.hydroponie = { level: 3 };
+    const doc = mk({ skills: { medecine: 2 } });
+    app.autoAssignAllFreeMembers();
+    const before = app.memberAssignment(doc.id)?.modKey;      // Hygiéniste (hydroponie) faute d'infirmerie
+    S.modules.infirmerie = { level: 1 };
+    app.autoAssignAllFreeMembers({ respectChoice: true });     // fin de chantier de l'infirmerie
+    const moved = app.memberAssignment(doc.id)?.modKey;
+    const other = mk({ skills: { medecine: 1 } });
+    app.autoAssignAllFreeMembers();                            // « Réoptimiser »
+    return { before: before === 'hydroponie', moved: moved === 'infirmerie', kept: app.memberAssignment(doc.id)?.modKey === 'infirmerie',
+      otherPlaced: !!app.memberAssignment(other.id) };
+  });
+
+  // V1 — « libre » volontaire : pas d'alerte, pas de réaffectation automatique
+  await scenario('V1 : isVoluntarilyFree', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.autoAssign = true;
+    const noPost = mk({ skills: { combat: 1 } });             // aucun poste vacant pour lui
+    const pilot = mk({ skills: { pilotage: 2 } });            // Capitaine vacant
+    const r = { noPostFree: app.isVoluntarilyFree(noPost) === true, pilotNotFree: app.isVoluntarilyFree(pilot) === false,
+      alertList: app.freeMembersWithOpenPost().map(m => m.id).join() === pilot.id };
+    app.autoAssignAllFreeMembers({ respectChoice: true });
+    r.placed = app.memberAssignment(pilot.id)?.modKey === 'commandement';
+    app.unassignMember(pilot.id);                              // choix du joueur
+    r.voluntary = app.isVoluntarilyFree(pilot) === true;
+    app.autoAssignAllFreeMembers({ respectChoice: true });     // fin de chantier : il reste libre
+    r.respected = pilot.statut === 'libre';
+    app.autoAssignAllFreeMembers();                            // « Réoptimiser » : tout le monde est placé
+    r.reoptimise = pilot.statut === 'travail';
+    r.s = !!S;
+    return r;
   });
 
   // Réparation au démarrage réel : sauvegarde abîmée enregistrée puis page rechargée

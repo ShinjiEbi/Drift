@@ -54,6 +54,12 @@ import { notif } from './notifications.js';
 // Chaque bâtiment génère des postes selon son niveau. Un poste a un rôle
 // avec des prérequis et un effet sur le rendement du bâtiment.
 
+// Imports propres à la zone rythme / économie / équipage (V1), sur des lignes
+// séparées pour ne pas toucher aux imports du haut du fichier.
+import { PACING, PROD_INDEX } from './constants.js';
+import { refundCost, energyRatio } from './state.js';
+import { fmtDuree } from './util.js';
+
 export const ROLES = {
   production:  { nom: 'Production',   color: '#c8a878', desc: "Augmente le rendement principal du bâtiment." },
   securite:    { nom: 'Sécurité',     color: '#a8493b', desc: "Réduit le risque d'incident sur le bâtiment." },
@@ -128,8 +134,10 @@ const UNAVAILABLE_REASONS = {
   diplomatie: 'En mission diplomatique'
 };
 
-// Affecte un membre à un poste (gère désaffectation préalable)
-export function assignMember(memberId, modKey, slotIdx) {
+// Affecte un membre à un poste (gère désaffectation préalable).
+// opts.auto : affectation décidée par l'auto-affectation (et non par le joueur) ;
+// seules celles-là peuvent être revues automatiquement (cf. staffInfirmary).
+export function assignMember(memberId, modKey, slotIdx, opts = {}) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok: false, reason: 'Colon introuvable' };
   // Seul un colon présent et disponible (libre ou déjà en poste) peut être affecté
@@ -181,6 +189,7 @@ export function assignMember(memberId, modKey, slotIdx) {
   // Affecte et enregistre le poste actuel
   S.assignments[jobKey(modKey, slotIdx)] = memberId;
   member.statut = 'travail';
+  delete member.libreVolontaire;
   if (!keepTenure) {
     member.posteInfo = {
       modKey,
@@ -190,14 +199,21 @@ export function assignMember(memberId, modKey, slotIdx) {
       depuis: S.meta?.gameMin || 0
     };
   }
+  if (member.posteInfo) {
+    if (opts.auto) member.posteInfo.auto = true;
+    else delete member.posteInfo.auto;
+  }
   return { ok: true };
 }
 
-// Désaffecte un membre (le laisse libre)
-export function unassignMember(memberId) {
+// Désaffecte un membre (le laisse libre). Par défaut c'est un choix du joueur :
+// le colon reste libre (libreVolontaire) et l'auto-affectation ne le replace pas
+// d'elle-même ; opts.auto pour une désaffectation décidée par le jeu.
+export function unassignMember(memberId, opts = {}) {
   const a = memberAssignment(memberId);
   if (!a) return;
   const member = S.crew.find(m => m.id === memberId);
+  if (member && !opts.auto && member.statut !== 'mort') member.libreVolontaire = true;
   // Archive career history
   if (member?.posteInfo) {
     if (!member.posteHistorique) member.posteHistorique = [];
@@ -253,49 +269,101 @@ export function returnToBase(member) {
   }
 }
 
-// Auto-affecte un membre nouvellement disponible vers le meilleur poste libre éligible
-export function autoAssignMember(memberId) {
-  if (!S.autoAssign) return;
-  const member = S.crew.find(m => m.id === memberId);
-  if (!member || member.statut !== 'libre') return;
+// Postes médicaux : ceux de l'infirmerie qui demandent de la médecine (ou le trait medic_ne)
+const isMedicalJob = (modKey, job) => modKey === 'infirmerie' && (job.req?.skill?.key === 'medecine' || job.req?.trait === 'medic_ne');
+const isMedic = m => (m?.skills?.medecine || 0) >= 1;
 
-  // Liste tous les postes libres éligibles, scoré par "qualité du match"
-  const candidates = [];
+// Postes vacants auxquels un colon est éligible : [{ modKey, slotIdx, job }]
+function openPostsFor(member) {
+  const out = [];
   for (const modKey in MODULE_JOBS) {
     const jobs = jobsForModule(modKey);
     for (let i = 0; i < jobs.length; i++) {
-      const k = jobKey(modKey, i);
-      if (S.assignments[k]) continue;          // déjà occupé
-      const job = jobs[i];
-      if (!isEligibleForJob(member, job)) continue;
-      // Score : skill demandé × marge
-      let score = 1;
-      if (job.req?.skill) {
-        const v = member.skills[job.req.skill.key] || 0;
-        score = v * 2 - job.req.skill.min + 1;
-      }
-      // Bonus rôle / commandement plus important
-      if (job.role === 'commandement') score += 5;
-      candidates.push({ modKey, slotIdx: i, score });
+      if (S.assignments[jobKey(modKey, i)]) continue;          // occupé ou réservé
+      if (isEligibleForJob(member, jobs[i])) out.push({ modKey, slotIdx: i, job: jobs[i] });
     }
+  }
+  return out;
+}
+
+// Auto-affecte un membre nouvellement disponible vers le meilleur poste libre éligible.
+// V1 : un soignant va d'abord à l'infirmerie ; un colon libéré par le joueur
+// (libreVolontaire) n'est pas replacé sans opts.force.
+export function autoAssignMember(memberId, opts = {}) {
+  if (!S.autoAssign) return;
+  const member = S.crew.find(m => m.id === memberId);
+  if (!member || member.statut !== 'libre') return;
+  if (member.libreVolontaire && !opts.force) return;
+
+  // Liste tous les postes libres éligibles, scoré par "qualité du match"
+  const candidates = [];
+  for (const { modKey, slotIdx, job } of openPostsFor(member)) {
+    // Score : skill demandé × marge
+    let score = 1;
+    if (job.req?.skill) {
+      const v = member.skills[job.req.skill.key] || 0;
+      score = v * 2 - job.req.skill.min + 1;
+    }
+    // Bonus rôle / commandement plus important
+    if (job.role === 'commandement') score += 5;
+    // V1 : les soignants vont en priorité aux postes médicaux de l'infirmerie
+    if (isMedicalJob(modKey, job)) score += 20;
+    candidates.push({ modKey, slotIdx, score });
   }
   if (candidates.length === 0) return;
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
-  assignMember(memberId, best.modKey, best.slotIdx);
+  assignMember(memberId, best.modKey, best.slotIdx, { auto: true });
 }
 
-// Lance l'auto-affectation pour tous les colons libres (utilisé au démarrage et à la construction)
-export function autoAssignAllFreeMembers() {
+// V1 : l'infirmerie a toujours son médecin si la colonie en compte un. Si le poste
+// de Médecin chef (ou d'Infirmier) est vacant, le meilleur soignant placé AILLEURS
+// par l'auto-affectation y est muté (jamais un colon placé par le joueur, jamais
+// un colon absent). L'auto-affectation ne retire jamais personne de l'infirmerie.
+function staffInfirmary() {
+  if (!S.autoAssign || !(S.modules.infirmerie?.level > 0)) return;
+  const jobs = jobsForModule('infirmerie');
+  for (let i = 0; i < jobs.length; i++) {
+    if (!isMedicalJob('infirmerie', jobs[i]) || S.assignments[jobKey('infirmerie', i)]) continue;
+    const pick = S.crew
+      .filter(m => m.statut === 'travail' && isEligibleForJob(m, jobs[i]) && isMedic(m))
+      .filter(m => { const a = memberAssignment(m.id); return a && a.modKey !== 'infirmerie' && m.posteInfo?.auto; })
+      .sort((a, b) => (b.skills.medecine || 0) - (a.skills.medecine || 0))[0];
+    if (pick) assignMember(pick.id, 'infirmerie', i, { auto: true });
+  }
+}
+
+// Lance l'auto-affectation pour tous les colons libres (démarrage, fin de chantier,
+// « Réoptimiser »). opts.respectChoice : laisse libres les colons que le joueur a
+// libérés (fin de chantier, démarrage) ; sans option (Réoptimiser), tout le monde est placé.
+export function autoAssignAllFreeMembers(opts = {}) {
   ensureCrewIntegrity();
   if (!S.autoAssign) return;
+  if (!opts.respectChoice) for (const m of S.crew) delete m.libreVolontaire;
   // Trie les colons libres par "force" décroissante (somme skills) pour donner
-  // les meilleurs postes aux meilleurs colons
+  // les meilleurs postes aux meilleurs colons ; les soignants d'abord (infirmerie)
   const free = S.crew
     .filter(m => m.statut === 'libre')
-    .map(m => ({ m, score: SKILL_LIST.reduce((s, k) => s + (m.skills[k] || 0), 0) }))
+    .map(m => ({ m, score: SKILL_LIST.reduce((s, k) => s + (m.skills[k] || 0), 0) + (isMedic(m) && S.modules.infirmerie?.level ? 100 : 0) }))
     .sort((a, b) => b.score - a.score);
   for (const { m } of free) autoAssignMember(m.id);
+  staffInfirmary();
+  // Un colon muté à l'infirmerie a libéré un poste : on le repourvoit
+  for (const m of S.crew) if (m.statut === 'libre') autoAssignMember(m.id);
+}
+
+// V1 — un colon libre l'est-il « volontairement » (sans qu'il y ait lieu d'alerter) ?
+// Vrai si le joueur l'a libéré lui-même, ou s'il n'existe aucun poste vacant
+// auquel il soit éligible. Faux pour un colon absent ou en poste.
+export function isVoluntarilyFree(member) {
+  if (!member || member.statut !== 'libre') return false;
+  if (member.libreVolontaire) return true;
+  return openPostsFor(member).length === 0;
+}
+
+// Colons libres qui pourraient occuper un poste vacant (l'alerte « sans poste » utile)
+export function freeMembersWithOpenPost() {
+  return S.crew.filter(m => m.statut === 'libre' && !isVoluntarilyFree(m));
 }
 
 // ---- Réparation des sauvegardes ----
@@ -495,10 +563,10 @@ const SKILL_SPECIALIZATION = {
 };
 
 
-// Constantes d'expédition
-export const EXPED_TIME_PER_PC = 180;   // 3h jeu par parsec à vitesse 1.0 (puis ×vessel.speed)
-export const EXPED_ONSITE_MIN = 240;    // 4h jeu sur place (phase 2b — sera variable en 2c avec scènes)
-export const EXPED_BIOMASSE_PER_HOUR = 0.2;  // par membre, par heure de mission
+// Constantes d'expédition (V1 : en secondes réelles, cf. PACING)
+export const EXPED_TIME_PER_PC = PACING.EXPED_PER_PC;   // par parsec à vitesse 1.0 (puis ×vessel.speed), + EXPED_BASE
+export const EXPED_ONSITE_MIN = PACING.EXPED_ONSITE;    // temps estimé sur place (les scènes attendent le joueur)
+export const EXPED_BIOMASSE_PER_HOUR = PACING.EXPED_BIO_PER_MEMBER_HOUR * PROD_INDEX;  // vivres par membre et par heure réelle
 
 // ============================================================
 //   CATALOGUE D'ITEMS — fondation de l'inventaire (0.11)
@@ -635,22 +703,81 @@ export function isTechResearching(techId) {
   return (S.research || []).some(r => r.techId === techId);
 }
 
-// Évalue si une tech peut être lancée. Renvoie { ok, reason, cost }.
+// V1 — vrai si une tech attend dans la file du laboratoire
+export function isTechQueued(techId) {
+  return (S.researchQueue || []).includes(techId);
+}
+
+// Places de recherche simultanées du laboratoire
+export function researchSlots() {
+  const labLvl = S.modules.laboratoire?.level || 0;
+  return labLvl ? Math.max(1, Math.ceil(labLvl / 2)) : 0;   // niv 1-2 → 1, 3-4 → 2, 5-6 → 3
+}
+
+// Durée nominale d'une recherche en ticks (avec un Chercheur en poste, sans bonus)
+export function researchDuration(techId) {
+  const t = TECH_TREE[techId];
+  return t ? t.cost.time * BUILD_TIME_MULT : 0;
+}
+
+// Vitesse actuelle du laboratoire (ticks de recherche par tick réel) : plancher
+// d'automatisation sans Chercheur, bonus du personnel et des modules, pénurie d'énergie.
+function researchSpeed(tech) {
+  const lb = laboratoryBonuses();
+  const autoMult = lb.activeProd ? 1.0 : automationFloor();
+  let modBonus = 1.0;
+  for (const id of Object.keys(S.modules || {})) {
+    const def = MODULES[id];
+    const m = S.modules[id];
+    if (def?.researchSpeedBonus && m?.level > 0) modBonus += def.researchSpeedBonus(m.level);
+  }
+  let speed = MIN_PER_TICK * autoMult * modBonus / lb.speedMult * energyRatio();
+  if (tech?.branch === 'bio') speed *= lb.bioBonus;
+  return speed;
+}
+
+// V1 — temps restant (ticks) avant la fin d'une recherche, à la vitesse actuelle
+// du laboratoire (personnel, énergie) : en cours → reste ; en file → attente
+// comprise ; sinon durée qu'elle prendrait si on la lançait maintenant.
+// Infinity si le laboratoire est à l'arrêt.
+export function researchEta(techId) {
+  const tech = TECH_TREE[techId];
+  if (!tech) return null;
+  const speed = researchSpeed(tech);
+  if (!(speed > 0)) return Infinity;
+  const running = (S.research || []).find(r => r.techId === techId);
+  if (running) return Math.ceil(Math.max(0, running.totalMin - running.doneMin) / speed);
+  const own = Math.ceil(researchDuration(techId) / speed);
+  const qi = (S.researchQueue || []).indexOf(techId);
+  if (qi >= 0) {
+    // attend la première place libérée (au plus tôt la recherche en cours la plus avancée)
+    const remain = (S.research || []).map(r => Math.max(0, r.totalMin - r.doneMin) / researchSpeed(TECH_TREE[r.techId]));
+    const wait = remain.length >= researchSlots() && remain.length ? Math.min(...remain) : 0;
+    return Math.ceil(wait) + own;
+  }
+  return own;
+}
+
+// Évalue si une tech peut être lancée (ou mise en file). Renvoie { ok, reason, cost, queued }.
 export function canResearch(techId) {
   const tech = TECH_TREE[techId];
   if (!tech) return { ok: false, reason: 'Tech inconnue' };
   if (isTechCompleted(techId)) return { ok: false, reason: 'Déjà complétée' };
   if (isTechResearching(techId)) return { ok: false, reason: 'Déjà en cours' };
+  if (isTechQueued(techId)) return { ok: false, reason: 'Déjà en file' };
   // Branche exotique nécessite déblocage
   if (tech.branch === 'exotique' && !isExoticUnlocked()) {
     return { ok: false, reason: "Branche verrouillée — découvre d'abord un schéma alien" };
   }
-  // Prérequis : techs précédentes complétées
+  // Prérequis : techs précédentes complétées — ou en cours : la tech attend alors en file
+  let prereqPending = false;
   for (const t of (tech.prereq?.tech || [])) {
-    if (!isTechCompleted(t)) {
-      return { ok: false, reason: `Requiert : ${TECH_TREE[t]?.nom || t}` };
-    }
+    if (isTechCompleted(t)) continue;
+    if (isTechResearching(t)) { prereqPending = true; continue; }
+    return { ok: false, reason: `Requiert : ${TECH_TREE[t]?.nom || t}` };
   }
+  // Places du laboratoire : au-delà, file d'attente (RESEARCH_QUEUE_MAX)
+  const slotsFull = (S.research || []).length >= researchSlots() || prereqPending;
   // Prérequis : schéma spécifique
   if (tech.prereq?.blueprint && !S.discoveries?.[tech.prereq.blueprint]) {
     return { ok: false, reason: `Requiert le schéma : ${BLUEPRINTS[tech.prereq.blueprint]?.nom || tech.prereq.blueprint}` };
@@ -667,11 +794,10 @@ export function canResearch(techId) {
     }
   }
   // Capacité du laboratoire
-  const labLvl = S.modules.laboratoire?.level || 0;
-  if (labLvl === 0) return { ok: false, reason: 'Laboratoire requis' };
-  const slots = Math.max(1, Math.ceil(labLvl / 2));   // niv 1-2 → 1 slot, 3-4 → 2, 5-6 → 3
-  if ((S.research || []).length >= slots) {
-    return { ok: false, reason: `Toutes les places de recherche sont prises (${slots})` };
+  const slots = researchSlots();
+  if (slots === 0) return { ok: false, reason: 'Laboratoire requis' };
+  if (slotsFull && (S.researchQueue || []).length >= PACING.RESEARCH_QUEUE_MAX) {
+    return { ok: false, reason: `Toutes les places de recherche sont prises (${slots}) et la file est pleine` };
   }
   // Coût
   const cost = tech.cost;
@@ -682,27 +808,79 @@ export function canResearch(techId) {
   if (cost.datacubes_alien && (S.alienDatacubes || 0) < cost.datacubes_alien) {
     return { ok: false, reason: `Manque datacubes alien (${cost.datacubes_alien} requis)` };
   }
-  return { ok: true, cost, tech };
+  return { ok: true, cost, tech, queued: slotsFull };
 }
 
-export function startResearch(techId) {
-  const r = canResearch(techId);
-  if (!r.ok) { toast(r.reason); return; }
-  // Débite
-  S.res.datacubes -= r.cost.datacubes;
-  if (r.cost.datacubes_alien) {
-    S.alienDatacubes = (S.alienDatacubes || 0) - r.cost.datacubes_alien;
-  }
+function beginResearch(techId) {
   if (!S.research) S.research = [];
   S.research.push({
     id: uid('r'),
     techId,
     startedAt: S.meta.gameMin,
-    totalMin: r.cost.time * BUILD_TIME_MULT,
+    totalMin: researchDuration(techId),
     doneMin: 0
   });
-  log('neutral', `Recherche engagée : <em>${r.tech.nom}</em>. Durée : ${fmtMin(r.cost.time * BUILD_TIME_MULT)}.`);
+}
+
+// V1 — lance la recherche, ou la met en file si toutes les places sont prises
+// (coût débité à l'ajout). → { ok, why, queued }
+export function enqueueResearch(techId) {
+  const r = canResearch(techId);
+  if (!r.ok) return { ok: false, why: r.reason };
+  // Débite
+  S.res.datacubes -= r.cost.datacubes;
+  if (r.cost.datacubes_alien) {
+    S.alienDatacubes = (S.alienDatacubes || 0) - r.cost.datacubes_alien;
+  }
+  if (r.queued) {
+    if (!Array.isArray(S.researchQueue)) S.researchQueue = [];
+    S.researchQueue.push(techId);
+    log('neutral', `Recherche mise en file : <em>${r.tech.nom}</em>.`);
+  } else {
+    beginResearch(techId);
+    log('neutral', `Recherche engagée : <em>${r.tech.nom}</em>. Durée : ${fmtDuree(researchEta(techId))}.`);
+  }
   render();
+  return { ok: true, why: '', queued: !!r.queued };
+}
+
+// Compatibilité : l'interface historique appelle startResearch
+export function startResearch(techId) {
+  const r = enqueueResearch(techId);
+  if (!r.ok) toast(r.why);
+  return r;
+}
+
+// Retire une recherche de la file : datacubes rendus en totalité (dans la limite du stockage).
+export function cancelQueuedResearch(index) {
+  const q = S.researchQueue || [];
+  const techId = q[index];
+  if (!techId) return { ok: false, why: 'Recherche introuvable' };
+  q.splice(index, 1);
+  const tech = TECH_TREE[techId];
+  if (tech) refundCost({ datacubes: tech.cost.datacubes, ...(tech.cost.datacubes_alien ? { datacubes_alien: tech.cost.datacubes_alien } : {}) });
+  log('neutral', `Recherche retirée de la file : <em>${tech?.nom || techId}</em>. Datacubes rendus.`);
+  render();
+  return { ok: true, why: '' };
+}
+
+// Démarre les recherches en file tant qu'il y a des places (prérequis revérifiés :
+// une recherche devenue impossible est remboursée).
+function startQueuedResearch() {
+  const q = S.researchQueue || [];
+  while (q.length && (S.research || []).length < researchSlots()) {
+    const techId = q.shift();
+    const tech = TECH_TREE[techId];
+    const missing = (tech?.prereq?.tech || []).find(t => !isTechCompleted(t) && !isTechResearching(t));
+    if (!tech || isTechCompleted(techId) || isTechResearching(techId) || missing) {
+      if (tech) refundCost({ datacubes: tech.cost.datacubes, ...(tech.cost.datacubes_alien ? { datacubes_alien: tech.cost.datacubes_alien } : {}) });
+      continue;
+    }
+    // Prérequis encore en cours : on la remet en tête et on attend
+    if ((tech.prereq?.tech || []).some(t => !isTechCompleted(t))) { q.unshift(techId); break; }
+    beginResearch(techId);
+    log('neutral', `Recherche suivante engagée : <em>${tech.nom}</em>.`);
+  }
 }
 
 // Rembourse `amount` d'une ressource dans la limite de la capacité réelle
@@ -727,6 +905,7 @@ export function cancelResearch(researchId) {
   }
   S.research.splice(idx, 1);
   log('warn', `Recherche interrompue : <em>${tech?.nom || '?'}</em>. 50% des ressources récupérées.`);
+  startQueuedResearch();
   render();
 }
 
@@ -742,6 +921,8 @@ function finishResearch(researchId) {
   log('success', `Recherche complétée : <em>${tech?.nom || '?'}</em>.`);
   // 0.26 : notification dédiée
   notif.researchDone(tech?.nom || r.techId);
+  // V1 : la file prend le relais
+  startQueuedResearch();
 }
 
 // Bonus du staff laboratoire (Chercheur senior, Bio-spécialiste)
@@ -765,29 +946,15 @@ export function laboratoryBonuses() {
   return { speedMult, qualityChance, bioBonus, activeProd };
 }
 
-// Avance les recherches en cours d'un tick
+// Avance les recherches en cours d'un tick.
+// Sans Chercheur : plancher d'automatisation (30 % + techs) ; bonus du personnel
+// et des modules (mémoire cristalline) ; V1 : ralentie par une pénurie d'énergie.
 export function tickResearch() {
+  if ((S.researchQueue || []).length && (S.research || []).length < researchSlots()) startQueuedResearch();
   if (!S.research || S.research.length === 0) return;
-  const lb = laboratoryBonuses();
-  // Mode automatisé sans Chercheur : plancher d'automatisation (30% + techs)
-  const autoMult = lb.activeProd ? 1.0 : automationFloor();
-  
-  // 0.25 : bonus de vitesse depuis modules avec researchSpeedBonus (mémoire cristalline)
-  let modBonus = 1.0;
-  for (const id of Object.keys(S.modules || {})) {
-    const def = MODULES[id];
-    const m = S.modules[id];
-    if (def?.researchSpeedBonus && m?.level > 0) {
-      modBonus += def.researchSpeedBonus(m.level);
-    }
-  }
-  
   const finished = [];
   for (const r of S.research) {
-    const tech = TECH_TREE[r.techId];
-    let progress = MIN_PER_TICK * autoMult * modBonus / lb.speedMult;
-    if (tech?.branch === 'bio') progress *= lb.bioBonus;
-    r.doneMin += progress;
+    r.doneMin += researchSpeed(TECH_TREE[r.techId]);
     if (r.doneMin >= r.totalMin) finished.push(r);
   }
   for (const r of finished) finishResearch(r.id);
@@ -980,7 +1147,7 @@ export function startFabrication(fabId) {
     totalMin: fab.time * BUILD_TIME_MULT,
     doneMin: 0
   });
-  log('neutral', `Fabrication engagée : <em>${fab.nom}</em>. Durée : ${fmtMin(fab.time * BUILD_TIME_MULT)}.`);
+  log('neutral', `Fabrication engagée : <em>${fab.nom}</em>. Durée : ${fmtDuree(fab.time * BUILD_TIME_MULT)}.`);
   render();
 }
 
@@ -1026,8 +1193,9 @@ export function tickFabrication() {
   // Mode automatisé sans Artisan : plancher d'automatisation (30% + techs)
   const autoMult = bonuses.hasArtisan ? 1.0 : automationFloor();
   const finished = [];
+  const energy = energyRatio();   // V1 : l'atelier ralentit en pénurie d'énergie
   for (const f of S.fabrication) {
-    f.doneMin += MIN_PER_TICK * autoMult / bonuses.speedMult;
+    f.doneMin += MIN_PER_TICK * autoMult / bonuses.speedMult * energy;
     if (f.doneMin >= f.totalMin) finished.push(f);
   }
   for (const f of finished) finishFabrication(f.id);
@@ -1524,6 +1692,7 @@ export function fillTemplate(text, ctx = {}) {
 // medLvlReq   : niveau d'infirmerie minimum pour traiter
 // contagion   : { perDay (0–1), kind: même kind contagieux } ou null
 // untreated   : { afterMin: action } — ce qui se passe si non traité
+//               (V1 : délais en secondes réelles — afterMin garde son nom historique)
 // onCured     : { sequelChance, sequels: [...] } — séquelles potentielles
 // moralImpact : impact passif sur moral / jour
 export const STATUTS = {
@@ -1536,7 +1705,7 @@ export const STATUTS = {
     medLvlReq: 1,
     statMod: { vigueur:-1, dexterite:-1 },
     moralImpact: -0.5,
-    untreated: { afterMin: 60*48, become: null, selfCure: true },  // guérit seul en 48h
+    untreated: { afterMin: 24*3600, become: null, selfCure: true },  // guérit seul en 24 h réelles
     onCured: { sequelChance: 0 }
   },
   blessure_grave: {
@@ -1548,7 +1717,7 @@ export const STATUTS = {
     medLvlReq: 1,
     statMod: { vigueur:-3 },
     moralImpact: -2,
-    untreated: { afterMin: 60*24, become: 'mort' },  // mort en 24h
+    untreated: { afterMin: 12*3600, become: 'mort' },  // mortelle sans soin en 12 h réelles
     onCured: { sequelChance: 0.4, sequels: ['boiteux', 'cicatrice'] }
   },
   infection: {
@@ -1561,7 +1730,7 @@ export const STATUTS = {
     statMod: { vigueur:-2 },
     moralImpact: -1,
     contagion: { perDay: 0.05 },
-    untreated: { afterMin: 60*72, become: 'mort' },
+    untreated: { afterMin: 36*3600, become: 'mort' },  // 36 h réelles
     onCured: { sequelChance: 0.1, sequels: ['fragile_pulm'] }
   },
   pathogene_alien: {
@@ -1575,7 +1744,7 @@ export const STATUTS = {
     statMod: { vigueur:-2, intellect:-1 },
     moralImpact: -2,
     contagion: { perDay: 0.10 },
-    untreated: { afterMin: 60*96, become: 'mort' },
+    untreated: { afterMin: 48*3600, become: 'mort' },  // 48 h réelles
     onCured: { sequelChance: 0.5, sequels: ['mutation_xeno', 'cicatrice_xeno'] }
   },
   trauma_psy: {
@@ -1588,7 +1757,7 @@ export const STATUTS = {
     medLvlReq: 4,
     statMod: { sangfroid:-3 },
     moralImpact: -3,
-    untreated: { afterMin: 60*120, become: 'mutinerie' },
+    untreated: { afterMin: 60*3600, become: 'mutinerie' },  // 60 h réelles
     onCured: { sequelChance: 0.2, sequels: ['esprit_fele'] }
   },
   parasite: {
@@ -1601,7 +1770,7 @@ export const STATUTS = {
     medLvlReq: 3,
     statMod: { vigueur:-1 },
     moralImpact: -0.5,
-    untreated: { afterMin: 60*24*7, become: 'eclosion' },  // 7 jours
+    untreated: { afterMin: 84*3600, become: 'eclosion' },  // 3,5 jours réels
     onCured: { sequelChance: 0.3, sequels: ['cicatrice'] }
   },
   mutation: {
@@ -1610,7 +1779,7 @@ export const STATUTS = {
     kind: 'exotique',
     severity: 3,
     detect: 'auto',  // apparente après quelques heures
-    revealAfter: 60*24,
+    revealAfter: 12*3600,   // apparente après 12 h réelles
     medLvlReq: 5,
     statMod: {},   // déterminé au moment de l'apparition (positif ou négatif)
     moralImpact: -1,
@@ -1665,7 +1834,7 @@ export function hangarBonuses() {
 
 // Calcule la durée en minutes-jeu de la formation
 function computeTrainingDuration(member, skill, targetLvl) {
-  const base = TRAINING_PROGRAMS[skill].baseHours * 60; // en min
+  const base = TRAINING_PROGRAMS[skill].baseHours * PACING.TRAINING_UNIT; // en secondes réelles
   let mult = Math.sqrt(targetLvl);
   // Modificateurs liés aux traits
   if (member.traits.includes('memoire_eidetique')) mult *= 0.7;
@@ -1706,7 +1875,9 @@ function computeFailChance(member) {
 export function canTrain(memberId, skill) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Colon introuvable" };
-  if (member.statut !== 'libre') return { ok:false, reason:`Colon ${member.statut}` };
+  // V1 : un colon en poste peut se former sans être désaffecté (son poste lui reste réservé)
+  if (member.statut !== 'libre' && member.statut !== 'travail') return { ok:false, reason:`Colon ${member.statut}` };
+  if (isTreatingDoctor(member.id)) return { ok:false, reason:"Assure un traitement en cours" };
   const target = trainingTargetLevel(member, skill);
   if (target === null) {
     const cur = member.skills[skill] || 0;
@@ -1760,7 +1931,7 @@ export function startTraining(memberId, skill) {
   };
   S.training.push(session);
   member.statut = 'formation';
-  log('neutral', `<em>${member.name}</em> entre en formation : ${TRAINING_PROGRAMS[skill].nom} (→ niv ${r.target}). Durée : ${fmtMin(r.duration)}.`);
+  log('neutral', `<em>${member.name}</em> entre en formation : ${TRAINING_PROGRAMS[skill].nom} (→ niv ${r.target}). Durée : ${fmtDuree(r.duration)}.`);
   render();
 }
 
@@ -1873,16 +2044,16 @@ export function syncTreatmentIndexes(member) {
 // Trouve le meilleur médecin disponible.
 // Priorité 1 : staff de l'infirmerie avec skill Médecine > 0 (en `travail`)
 // Priorité 2 : tout colon libre avec skill Médecine > 0 (fallback si pas de staff)
-export function bestAvailableDoctor() {
+export function bestAvailableDoctor(excludeId = null) {
   // Priorité au staff infirmerie en service
   const infirmaryStaff = staffOf('infirmerie')
     .map(s => s.member)
-    .filter(m => (m.skills.medecine || 0) > 0)
+    .filter(m => m.id !== excludeId && (m.skills.medecine || 0) > 0)
     .sort((a, b) => (b.skills.medecine || 0) - (a.skills.medecine || 0));
   if (infirmaryStaff.length > 0) return infirmaryStaff[0];
   // Fallback : un colon libre avec Médecine
   return S.crew
-    .filter(m => m.statut === 'libre' && (m.skills.medecine || 0) > 0)
+    .filter(m => m.id !== excludeId && m.statut === 'libre' && (m.skills.medecine || 0) > 0)
     .sort((a, b) => (b.skills.medecine || 0) - (a.skills.medecine || 0))[0] || null;
 }
 
@@ -2005,15 +2176,16 @@ export function dischargeMember(memberId) {
   render();
 }
 
-// Délai minimal entre deux examens d'un même statut après un échec (minutes de jeu)
-export const DIAG_RETRY_MIN = 60;
+// Délai minimal entre deux examens d'un même statut après un échec (ticks, cf. PACING)
+export const DIAG_RETRY_MIN = PACING.DIAG_RETRY;
 
 // Vérifie qu'un diagnostic est lançable. statusRef : index (UI) ou clé du statut.
 // Renvoie { ok, reason, cost, doctor, waitMin? } — utilisable par l'UI pour le bouton.
-export function canDiagnose(memberId, statusRef) {
+// opts.assumeAdmitted : évalue comme si le patient était déjà admis (soins en un geste).
+export function canDiagnose(memberId, statusRef, opts = {}) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Patient introuvable" };
-  if (member.statut !== 'infirmerie') return { ok:false, reason:"Le patient doit être admis avant." };
+  if (member.statut !== 'infirmerie' && !opts.assumeAdmitted) return { ok:false, reason:"Le patient doit être admis avant." };
   const found = findMemberStatus(member, statusRef);
   if (!found) return { ok:false, reason:"Statut introuvable" };
   const { status, idx: statusIdx } = found;
@@ -2022,11 +2194,11 @@ export function canDiagnose(memberId, statusRef) {
   if (!def) return { ok:false, reason:"Statut inconnu" };
   const det = (def.detect && typeof def.detect === 'object') ? def.detect : {};
   if (det.needLab && !S.flags.recherche) return { ok:false, reason:"Laboratoire requis pour ce diagnostic." };
-  const doctor = bestAvailableDoctor();
+  const doctor = bestAvailableDoctor(member.statut === 'infirmerie' ? null : memberId);
   if (!doctor) return { ok:false, reason:"Aucun médecin disponible." };
   // Un examen non concluant ne peut être refait qu'après un délai
   const waitMin = typeof status.lastDiagAt === 'number' ? status.lastDiagAt + DIAG_RETRY_MIN - S.meta.gameMin : 0;
-  if (waitMin > 0) return { ok:false, reason:`Nouvel examen possible dans ${fmtMin(waitMin)}`, waitMin };
+  if (waitMin > 0) return { ok:false, reason:`Nouvel examen possible dans ${fmtDuree(waitMin)}`, waitMin };
   // Coût simple : 2 datacubes pour usage labo, sinon 0
   const cost = det.needLab ? { datacubes: 2 } : {};
   for (const k in cost) {
@@ -2054,17 +2226,18 @@ export function startDiagnostic(memberId, statusRef) {
   } else {
     // Échec : nouvel examen possible seulement après DIAG_RETRY_MIN
     status.lastDiagAt = S.meta.gameMin;
-    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. Nouvel examen possible dans ${fmtMin(DIAG_RETRY_MIN)}.`);
+    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. Nouvel examen possible dans ${fmtDuree(DIAG_RETRY_MIN)}.`);
   }
   render();
 }
 
 // Vérifie qu'un traitement est lançable.
 // statusRef : index dans member.statuts (UI) ou clé du statut.
-export function canTreat(memberId, statusRef) {
+// opts.assumeAdmitted : évalue comme si le patient était déjà admis (soins en un geste).
+export function canTreat(memberId, statusRef, opts = {}) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Patient introuvable" };
-  if (member.statut !== 'infirmerie') return { ok:false, reason:"Patient non admis" };
+  if (member.statut !== 'infirmerie' && !opts.assumeAdmitted) return { ok:false, reason:"Patient non admis" };
   const found = findMemberStatus(member, statusRef);
   if (!found) return { ok:false, reason:"Statut introuvable" };
   const { status, idx: statusIdx } = found;
@@ -2081,7 +2254,7 @@ export function canTreat(memberId, statusRef) {
   }
   const tdef = TREATMENTS[status.key]?.[0];
   if (!tdef) return { ok:false, reason:"Aucun traitement disponible" };
-  const doctor = bestAvailableDoctor();
+  const doctor = bestAvailableDoctor(member.statut === 'infirmerie' ? null : memberId);
   // Même un soin bénin (requiresMedSkill 0) demande quelqu'un pour le prodiguer
   if (!doctor) return { ok:false, reason:"Aucun médecin disponible" };
   if ((doctor.skills.medecine || 0) < tdef.requiresMedSkill) {
@@ -2122,7 +2295,7 @@ export function startTreatment(memberId, statusRef) {
     doneMin: 0,
     cost: r.treatment.cost
   });
-  log('neutral', `<em>${r.doctor.name}</em> entreprend le traitement de <em>${member.name}</em> (${r.def.nom}). Durée : ${fmtMin(duration)}.`);
+  log('neutral', `<em>${r.doctor.name}</em> entreprend le traitement de <em>${member.name}</em> (${r.def.nom}). Durée : ${fmtDuree(duration)}.`);
   render();
 }
 
@@ -2164,17 +2337,90 @@ export function finishTreatment(treatment) {
   }
 }
 
+// ---- V1 : soins en un geste et soins automatiques ----
+
+// Ce qui est faisable tout de suite pour un statut (sans admission préalable) :
+// 'diag' | 'treat' | null, avec la raison du blocage.
+function careStep(member, st) {
+  if (!st.diagnosed) {
+    const r = canDiagnose(member.id, st.key, { assumeAdmitted: true });
+    return r.ok ? { step: 'diag' } : { step: null, why: r.reason, wait: !!r.waitMin };
+  }
+  if (treatmentOf(member.id, st.key)) return { step: null, why: 'Traitement en cours', running: true };
+  const r = canTreat(member.id, st.key, { assumeAdmitted: true });
+  return r.ok ? { step: 'treat' } : { step: null, why: r.reason };
+}
+
+// Soins en un geste (contrat V1) : admission si besoin, diagnostic des statuts
+// cachés, puis traitement de chaque statut soignable.
+// → { ok, why, admis, diagnostics, traitements }
+export function soigner(memberId) {
+  const m = S.crew.find(c => c.id === memberId);
+  if (!m || m.statut === 'mort') return { ok: false, why: 'Colon introuvable' };
+  if (!(m.statuts || []).length) return { ok: false, why: `${m.name} n'a besoin d'aucun soin.` };
+  if (!(S.modules.infirmerie?.level > 0)) return { ok: false, why: 'Infirmerie requise' };
+  const plan = m.statuts.map(st => careStep(m, st));
+  if (!plan.some(p => p.step || p.running || p.wait)) {
+    return { ok: false, why: plan.find(p => p.why)?.why || 'Aucun soin possible pour le moment' };
+  }
+  let admis = false;
+  if (m.statut !== 'infirmerie') {
+    if (!['libre', 'travail', 'formation'].includes(m.statut)) return { ok: false, why: `${m.name} n'est pas à la base.` };
+    if (infirmaryBeds() <= bedsInUse()) return { ok: false, why: 'Infirmerie pleine' };
+    admitToInfirmary(memberId);
+    if (m.statut !== 'infirmerie') return { ok: false, why: 'Admission impossible' };
+    admis = true;
+  }
+  let diagnostics = 0, traitements = 0;
+  for (const st of [...m.statuts]) {
+    if (!m.statuts.includes(st)) continue;
+    if (!st.diagnosed && canDiagnose(memberId, st.key).ok) { startDiagnostic(memberId, st.key); diagnostics++; }
+    if (st.diagnosed && !treatmentOf(memberId, st.key) && canTreat(memberId, st.key).ok) { startTreatment(memberId, st.key); traitements++; }
+  }
+  render();
+  const why = traitements ? '' : (m.statuts.map(st => careStep(m, st)).find(p => p.why && !p.running)?.why || '');
+  return { ok: diagnostics + traitements > 0 || (S.treatments || []).some(t => t.memberId === memberId), why, admis, diagnostics, traitements };
+}
+
+// Soins automatiques (V1) : si l'infirmerie a un soignant en poste (Médecine ≥ 1),
+// chaque colon présent à la base qui a un statut est soigné sans clic — y compris
+// pendant les absences du joueur. Un soignant ne quitte pas son poste pour se faire
+// soigner s'il est le seul (personne ne le remplacerait).
+export function tickAutoCare() {
+  if ((S.meta.gameMin || 0) % PACING.AUTO_CARE_EVERY !== 0) return;
+  if (!(S.modules.infirmerie?.level > 0)) return;
+  const carers = staffOf('infirmerie').filter(s => (s.member.skills.medecine || 0) > 0).map(s => s.member);
+  if (!carers.length) return;
+  for (const m of S.crew) {
+    if (m.statut === 'mort' || !(m.statuts || []).length) continue;
+    const severe = m.statuts.some(st => (STATUTS[st.key]?.severity || 0) >= 3);
+    if (!['libre', 'travail', 'infirmerie'].includes(m.statut) && !(m.statut === 'formation' && severe)) continue;
+    if (carers.length === 1 && carers[0].id === m.id && m.statut !== 'infirmerie') continue;
+    const plan = m.statuts.map(st => careStep(m, st));
+    if (!plan.some(p => p.step)) {
+      // Admis mais plus rien à faire (statut hors de portée de l'infirmerie) : il
+      // retourne à son poste, sauf s'il est contagieux (quarantaine).
+      if (m.statut === 'infirmerie' && !plan.some(p => p.running || p.wait)
+          && !m.statuts.some(st => STATUTS[st.key]?.contagion)) dischargeMember(m.id);
+      continue;   // rien de faisable (évite d'admettre pour rien)
+    }
+    if (m.statut !== 'infirmerie' && infirmaryBeds() <= bedsInUse()) continue;
+    soigner(m.id);
+  }
+}
+
 // Mort d'un membre
 function memberDies(member, cause = 'cause inconnue') {
   if (member.statut === 'mort') return;
   // Libère le poste s'il en avait un (archive la carrière), puis toute
   // affectation résiduelle qui pointerait encore vers lui
-  unassignMember(member.id);
+  unassignMember(member.id, { auto: true });
   for (const k of Object.keys(S.assignments || {})) {
     if (S.assignments[k] === member.id) delete S.assignments[k];
   }
   member.statut = 'mort';
   member.diedAt = S.meta.gameMin;
+  member.deathCause = cause;     // V1 : raconté dans le rapport de retour
   // Retire les traitements en cours
   S.treatments = (S.treatments || []).filter(t => t.memberId !== member.id);
   // Retire ses sessions de formation (en place : la boucle de tick garde la référence)
@@ -2279,9 +2525,9 @@ export function progressMemberStatuts(member) {
     if (inTreatment) rate /= 2;
     // Bonus de tech (immunologie)
     rate *= techEffectsAccumulated().contagionMult;
-    // Convertir taux/jour en taux/min
-    const ratePerMin = rate / (24 * 60);
-    if (Math.random() < ratePerMin * MIN_PER_TICK) {
+    // Taux par période (PACING.CONTAGION_PERIOD) → probabilité par tick
+    const ratePerTick = rate / PACING.CONTAGION_PERIOD;
+    if (Math.random() < ratePerTick * MIN_PER_TICK) {
       // Tire une victime parmi les autres membres sains présents au même endroit
       const here = memberLocation(member);
       const pool = here ? S.crew.filter(m =>
@@ -2889,6 +3135,10 @@ export function significantRelations(memberId) {
 // 0.28 : multiplicateur d'impact des choix d'incident ET d'événement (×3)
 const OUTCOME_MULT = 3;
 
+// V1 : les durées écrites dans le contenu hérité (incidents, événements) sont en
+// « minutes de jeu » (360 = « 6 h jeu ») → secondes réelles × PACING.LEGACY_GAME_MIN.
+const legacyDuration = d => Math.round((Number(d) || 0) * PACING.LEGACY_GAME_MIN);
+
 // Libellés lisibles (notifications, file des décisions, résumé de rattrapage)
 function incidentTitle(incidentId) {
   return INCIDENTS[incidentId]?.titre || 'Incident';
@@ -3003,7 +3253,9 @@ function incidentProbability(modKey) {
   if (lvl === 0) return 0;
   const eff = moduleEfficiency(modKey);
   // Base : ~1 incident toutes les 12-24h selon niveau
-  const baseHourlyRate = 0.04 + 0.01 * lvl;       // niv 1 = 5%/h, niv 5 = 9%/h
+  // V1 : une fois l'espacement écoulé, l'incident survient en quelques minutes ;
+  // la sécurité et le commandement retardent son arrivée.
+  const baseHourlyRate = 0.04 + 0.01 * lvl;       // niv 1 = 5 %, niv 5 = 9 % (par minute réelle)
   const securityFactor = 1 - (eff.securityBonus * 0.30);  // chaque poste sécurité = -30%
   const cmdFactor = 1 - globalCommandBonus() * 0.08;  // chaque cmd = -8% global
   const hourlyRate = Math.max(0.005, baseHourlyRate * securityFactor * cmdFactor);
@@ -3011,10 +3263,17 @@ function incidentProbability(modKey) {
 }
 
 // Tirage par tick : pour chaque bâtiment, tente un incident.
-// silent (rattrapage) : l'incident est résolu automatiquement.
+// V1 : espacement de 1 à 2,5 h réelles (PACING.INCIDENT_GAP_*) ; pas de nouveau
+// tirage tant que PACING.INCIDENT_QUEUE_MAX incidents attendent le joueur.
+// silent (rattrapage) : seuls les incidents mineurs sont résolus automatiquement.
 export function tickIncidents(silent = false) {
   // Cooldown global : pas d'incident trop rapproché
   if (S.meta.gameMin < S.nextIncidentMin) return;
+  const waiting = (S.pendingDecisions || []).filter(d => d.kind === 'incident').length;
+  if (waiting >= PACING.INCIDENT_QUEUE_MAX) {
+    S.nextIncidentMin = S.meta.gameMin + PACING.INCIDENT_GAP_MIN / 2;
+    return;
+  }
 
   const elig = eligibleIncidentBuildings();
   if (elig.length === 0) return;
@@ -3025,8 +3284,8 @@ export function tickIncidents(silent = false) {
       // Choisit aléatoirement un incident parmi les candidats du bâtiment
       const id = candidates[Math.floor(Math.random() * candidates.length)];
       triggerIncident(id, silent);
-      // Cooldown : 4-8h jeu avant prochain incident global
-      S.nextIncidentMin = S.meta.gameMin + 60 * 4 + Math.floor(Math.random() * 60 * 4);
+      S.nextIncidentMin = S.meta.gameMin + PACING.INCIDENT_GAP_MIN
+        + Math.floor(Math.random() * (PACING.INCIDENT_GAP_MAX - PACING.INCIDENT_GAP_MIN));
       return;
     }
   }
@@ -3043,8 +3302,14 @@ function pickIncidentVictim(inc) {
   return atBase.length ? rPick(atBase) : null;
 }
 
+// Incident mineur : gravité 1 (résolu automatiquement pendant une absence)
+function isMinorIncident(incidentId) {
+  return (INCIDENTS[incidentId]?.severity || 1) <= 1;
+}
+
 // Déclenche un incident : en direct, il rejoint la file des décisions du
-// joueur ; en silencieux (rattrapage), il est résolu automatiquement.
+// joueur ; en silencieux (rattrapage), V1 : seul un incident mineur est résolu
+// automatiquement, les autres attendent le retour du joueur dans la file.
 export function triggerIncident(incidentId, silent = false) {
   const inc = INCIDENTS[incidentId];
   if (!inc) return;
@@ -3052,13 +3317,13 @@ export function triggerIncident(incidentId, silent = false) {
   const victim = pickIncidentVictim(inc);
   if (!victim) return;
 
-  if (silent) {
+  if (silent && isMinorIncident(incidentId)) {
     autoResolveIncident(incidentId, victim);
     return;
   }
-  enqueueDecision({ kind: 'incident', refId: incidentId, victimId: victim.id });
+  enqueueDecision({ kind: 'incident', refId: incidentId, victimId: victim.id, offline: silent || undefined });
   // 0.26 : notification dédiée (critique, pour qu'on la voie même si on est ailleurs)
-  notif.incident(incidentTitle(incidentId));
+  if (!silent) notif.incident(incidentTitle(incidentId));
 }
 
 function autoResolveIncident(incidentId, victim) {
@@ -3159,7 +3424,7 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
     }
   }
   if (outcome.delayResearch && S.research?.length > 0) {
-    for (const r of S.research) r.doneMin = Math.max(0, r.doneMin - outcome.delayResearch * OUTCOME_MULT);
+    for (const r of S.research) r.doneMin = Math.max(0, r.doneMin - legacyDuration(outcome.delayResearch * OUTCOME_MULT));
   }
 
   // 0.28 : NOUVEAUX EFFETS DURABLES
@@ -3170,11 +3435,11 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
   }
   // — disableModule : module hors service pendant N minutes-jeu
   if (outcome.disableModule && inc.modKey) {
-    const duration = outcome.disableModule;
+    const duration = legacyDuration(outcome.disableModule);
     const mod = S.modules[inc.modKey];
     if (mod) {
       mod.disabledUntil = (S.meta.gameMin || 0) + duration;
-      say('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${Math.round(duration/60)}h jeu.`);
+      say('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${fmtDuree(duration)}.`);
     }
   }
   // — debuff : pénalité globale temporaire (ex: { type: 'prodMult', value: 0.8, duration: 1440 })
@@ -3184,7 +3449,7 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
       ...outcome.debuff,
       sourceLabel: inc.titre || 'Incident',
       startedAt: S.meta.gameMin,
-      expiresAt: (S.meta.gameMin || 0) + (outcome.debuff.duration || 720)
+      expiresAt: (S.meta.gameMin || 0) + legacyDuration(outcome.debuff.duration || 720)
     });
     say('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
   }
@@ -3204,7 +3469,7 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
     if (!S.pendingChainIncidents) S.pendingChainIncidents = [];
     S.pendingChainIncidents.push({
       incidentId: outcome.chainIncident.id,
-      triggerAt: (S.meta.gameMin || 0) + (outcome.chainIncident.delay || 720)
+      triggerAt: (S.meta.gameMin || 0) + legacyDuration(outcome.chainIncident.delay || 720)
     });
   }
   // — historicalMark : entrée dans le journal historique de la colonie
@@ -3258,9 +3523,12 @@ function enqueueDecision(dec) {
   if (!Array.isArray(S.pendingDecisions)) S.pendingDecisions = [];
   S.pendingDecisions.push({ id: uid('dec'), createdAt: S.meta.gameMin, ...dec });
   while (S.pendingDecisions.length > MAX_PENDING_DECISIONS) {
-    // La plus ancienne qui n'est pas à l'écran est résolue automatiquement
-    const idx = S.pendingDecisions[0].id === _shownDecisionId ? 1 : 0;
-    const [old] = S.pendingDecisions.splice(idx, 1);
+    // V1 : la plus ancienne décision MINEURE (incident de gravité 1) qui n'est pas
+    // à l'écran est tranchée automatiquement ; à défaut, la plus ancienne.
+    const q = S.pendingDecisions;
+    let idx = q.findIndex(d => d.id !== _shownDecisionId && d.kind === 'incident' && isMinorIncident(d.refId));
+    if (idx < 0) idx = q.findIndex(d => d.id !== _shownDecisionId);
+    const [old] = q.splice(idx, 1);
     autoResolveDecision(old);
   }
   syncPendingFlags();
@@ -3776,8 +4044,11 @@ export const COLONY_EVENTS = {
 function pickColonyEvent() {
   // Un événement déjà en attente du joueur n'est pas re-tiré
   const pending = new Set((S.pendingDecisions || []).filter(d => d.kind === 'event').map(d => d.refId));
+  // V1 : un même événement ne revient pas avant PACING.EVENT_REPEAT_GAP
+  const lastAt = S.flags.eventLastAt || {};
   const eligible = Object.entries(COLONY_EVENTS).filter(([id, ev]) => {
     if (pending.has(id)) return false;
+    if (typeof lastAt[id] === 'number' && S.meta.gameMin - lastAt[id] < PACING.EVENT_REPEAT_GAP) return false;
     try { return ev.condition(); } catch (e) { return false; }
   });
   if (eligible.length === 0) return null;
@@ -3789,32 +4060,44 @@ function pickColonyEvent() {
   return eligible[Math.floor(Math.random() * eligible.length)][0];
 }
 
+// V1 : un événement toutes les 3 à 6 h réelles (PACING.EVENT_GAP_*). Pendant une
+// absence, il n'est plus tranché à la place du joueur : il attend dans la file
+// (PACING.EVENT_QUEUE_MAX au plus).
 export function tickColonyEvents(silent = false) {
-  // Cooldown : 2-5 jours jeu entre événements
   if (S.meta.gameMin < (S.nextEventMin || 0)) return;
-  S.nextEventMin = S.meta.gameMin + (2 + Math.random() * 3) * 24 * 60;
+  S.nextEventMin = S.meta.gameMin + PACING.EVENT_GAP_MIN + Math.random() * (PACING.EVENT_GAP_MAX - PACING.EVENT_GAP_MIN);
+  if ((S.pendingDecisions || []).filter(d => d.kind === 'event').length >= PACING.EVENT_QUEUE_MAX) return;
 
   const eventId = pickColonyEvent();
   if (!eventId) return;
-  // silent (rattrapage) : résolu automatiquement ; sinon file des décisions
   triggerColonyEvent(eventId, silent);
+}
+
+// V1 : au retour d'une absence de plus de PACING.EVENT_ON_RETURN_AFTER, un
+// événement est garanti (s'il y en a un d'éligible et pas déjà un en attente).
+// Renvoie l'identifiant de l'événement déclenché, ou null.
+export function guaranteeReturnEvent() {
+  if ((S.pendingDecisions || []).some(d => d.kind === 'event')) return null;
+  const eventId = pickColonyEvent();
+  if (!eventId) return null;
+  if (!triggerColonyEvent(eventId, false)) return null;
+  S.nextEventMin = Math.max(S.nextEventMin || 0, S.meta.gameMin + PACING.EVENT_GAP_MIN);
+  return eventId;
 }
 
 function triggerColonyEvent(eventId, silent = false) {
   const ev = COLONY_EVENTS[eventId];
-  if (!ev) return;
+  if (!ev) return false;
   let actors;
-  try { actors = ev.pickActors(); } catch (e) { return; }
-  if (!actors) return;
+  try { actors = ev.pickActors(); } catch (e) { return false; }
+  if (!actors) return false;
   S.lastColonyEventId = eventId;
-
-  if (silent) {
-    autoResolveColonyEvent(eventId, actors);
-    return;
-  }
-  enqueueDecision({ kind: 'event', refId: eventId, ...decisionActors(actors) });
+  if (!S.flags.eventLastAt) S.flags.eventLastAt = {};
+  S.flags.eventLastAt[eventId] = S.meta.gameMin;
+  enqueueDecision({ kind: 'event', refId: eventId, ...decisionActors(actors), offline: silent || undefined });
   // 0.26.1 : notification dédiée (warn — événement en attente de décision)
-  notif.colonyEvent(colonyEventTitle(eventId));
+  if (!silent) notif.colonyEvent(colonyEventTitle(eventId));
+  return true;
 }
 
 function autoResolveColonyEvent(eventId, actors) {
@@ -4086,7 +4369,7 @@ export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
         ...cand,
         id: uid('m'),
         joinedAt: S.meta.gameMin,
-        birthGameMin: S.meta.gameMin - (cand.age || 30) * 43200,
+        birthGameMin: S.meta.gameMin - (cand.age || 30) * YEAR_IN_GAME_MIN,
         statut: 'libre',
         sante: 100,
         statuts: [],
@@ -4117,7 +4400,7 @@ export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
       ...o.debuff,
       sourceLabel: colonyEventTitle(eventId),
       startedAt: S.meta.gameMin,
-      expiresAt: (S.meta.gameMin || 0) + (o.debuff.duration || 720)
+      expiresAt: (S.meta.gameMin || 0) + legacyDuration(o.debuff.duration || 720)
     });
     say('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
     effects.push({ kind: 'bad', text: `Effet en cours : ${o.debuff.label || 'modulation temporaire'}` });
@@ -4305,10 +4588,10 @@ export function offerGift(factionId, giftIdx) {
   const gift = ft.giftOptions?.[giftIdx];
   if (!gift) return;
   // Cooldown
-  const cooldown = ft.giftCooldown || 3 * 24 * 60;
+  const cooldown = ft.giftCooldown || PACING.GIFT_COOLDOWN;
   if (f.lastGift && (S.meta.gameMin - f.lastGift) < cooldown) {
     const wait = cooldown - (S.meta.gameMin - f.lastGift);
-    toast(`Cadeau récent. Réessaie dans ${fmtMin(wait)}.`);
+    toast(`Cadeau récent. Réessaie dans ${fmtDuree(wait)}.`);
     return;
   }
   if ((S.res[gift.resource] || 0) < gift.amount) {
@@ -4438,7 +4721,7 @@ export function tickFactions() {
     // Commerce auto (rep ≥ 40 et activé par le joueur — l'activation exige la tech,
     // cf. toggleFactionTrade ; une route ouverte avant 0.32.1 reste active)
     if (f.reputation >= TRADE_REP_MIN && f.tradeActive) {
-      const cycle = 15 * 24 * 60;
+      const cycle = PACING.CARAVAN_CYCLE;
       if (!f.lastCaravan) f.lastCaravan = f.metAt;
       if (S.meta.gameMin - f.lastCaravan >= cycle) triggerCaravan(f);
     }
@@ -4497,7 +4780,7 @@ export function toggleFactionTrade(factionId) {
   f.tradeActive = !f.tradeActive;
   if (f.tradeActive) {
     f.lastCaravan = S.meta.gameMin;
-    log('success', `Commerce ouvert avec <em>${f.name}</em>. Première caravane dans ~15 jours jeu.`);
+    log('success', `Commerce ouvert avec <em>${f.name}</em>. Première caravane dans ${fmtDuree(PACING.CARAVAN_CYCLE)}.`);
   } else {
     log('neutral', `Commerce suspendu avec <em>${f.name}</em>.`);
   }
@@ -4559,7 +4842,7 @@ export function launchDiplomaticMission(factionId, memberId) {
   S.res.biomasse -= cost;
   m.statut = 'diplomatie';
   if (!S.diplomaticMissions) S.diplomaticMissions = [];
-  const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);
+  const duration = PACING.DIPLO_MISSION_MIN + Math.floor(Math.random() * (PACING.DIPLO_MISSION_MAX - PACING.DIPLO_MISSION_MIN));
   // 0.29 — Un Émissaire disponible (à quai) porte la délégation : bonus de réputation.
   // Le vaisseau n'est pas immobilisé : il reste utilisable pour les expéditions.
   const envoy = (S.fleet || []).find(v => v.type === 'emissaire' && v.available);
@@ -4573,7 +4856,7 @@ export function launchDiplomaticMission(factionId, memberId) {
     vesselId: envoy ? envoy.id : null
   });
   const envoyNote = envoy ? ` à bord de l'Émissaire <em>${envoy.name}</em> (réputation ×${VESSELS.emissaire.diplomaticBonus || 1.5})` : '';
-  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>${envoyNote}. Retour dans ${fmtMin(duration)}.`);
+  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>${envoyNote}. Retour dans ${fmtDuree(duration)}.`);
   render();
 }
 
@@ -4712,7 +4995,7 @@ function factionForExpedition(exp) {
 //   FLOTTE — construction et gestion de vaisseaux
 // ============================================================
 
-function genVesselName(typeKey) {
+export function genVesselName(typeKey) {
   // Préfixe selon type
   const prefixes = {
     vedette:  ['Furet','Faucon','Aiguille','Gypaète','Effraie','Saiga','Vif'],
@@ -4726,15 +5009,26 @@ function genVesselName(typeKey) {
   return `${list[Math.floor(Math.random() * list.length)]}-${num}`;
 }
 
+// Places de la flotte : l'aire de fortune (1) + 1 par niveau de hangar
+export function fleetCapacity() {
+  return 1 + (S.modules.hangar?.level || 0);
+}
+
+// Durée de construction d'un vaisseau (ticks)
+export function vesselBuildDuration(typeKey) {
+  const def = VESSELS[typeKey];
+  return def ? def.buildHours * 60 * BUILD_TIME_MULT : 0;
+}
+
 export function canBuildVessel(typeKey) {
   const def = VESSELS[typeKey];
   if (!def) return { ok:false, why:'Modèle inconnu' };
   if (S.vesselBuild) return { ok:false, why:'Chantier vaisseau déjà en cours' };
   const hangarLvl = S.modules.hangar?.level || 0;
   if (hangarLvl < def.hangarReq) return { ok:false, why:`Hangar niv ${def.hangarReq} requis` };
-  // Capacité hangar : 1 vaisseau par niveau
+  // Capacité : 1 vaisseau par niveau de hangar + l'aire de fortune (V1 : la vedette de départ)
   const fleetCount = S.fleet.length;
-  if (fleetCount >= hangarLvl) return { ok:false, why:`Capacité hangar atteinte (${hangarLvl})` };
+  if (fleetCount >= fleetCapacity()) return { ok:false, why:`Capacité de la flotte atteinte (${fleetCapacity()})` };
   
   // 0.29 — check prérequis tech (ex. Émissaire requiert tech_diplomatie_cosmopolite)
   if (def.requireTech) {
@@ -4767,11 +5061,11 @@ export function startVesselBuild(typeKey) {
   for (const k in r.def.cost) S.res[k] -= r.def.cost[k];
   S.vesselBuild = {
     type: typeKey,
-    totalMin: r.def.buildHours * 60 * BUILD_TIME_MULT,
+    totalMin: vesselBuildDuration(typeKey),
     doneMin: 0,
     cost: { ...r.def.cost }
   };
-  log('neutral', `Mise sur cale : <em>${r.def.nom}</em>. Livraison estimée : ${fmtMin(S.vesselBuild.totalMin)}.`);
+  log('neutral', `Mise sur cale : <em>${r.def.nom}</em>. Livraison estimée : ${fmtDuree(S.vesselBuild.totalMin)}.`);
   render();
 }
 
@@ -4824,12 +5118,13 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
     if (isTreatingDoctor(m.id)) return { ok:false, why:`${m.name} assure un traitement en cours` };
   }
 
-  // Calcul coûts (avec bonus Hangar et tech)
+  // Calcul coûts (avec bonus Hangar et tech) — V1 : durées en secondes réelles
+  // (décollage + trajet), carburant et vivres indexés sur la production (PROD_INDEX)
   const hb = hangarBonuses();
   const tech = techEffectsAccumulated();
-  const oneWayHours = sys.distance * EXPED_TIME_PER_PC * def.speed * hb.speedMult * tech.vesselSpeedMult / 60;
-  const totalHours = oneWayHours * 2 + EXPED_ONSITE_MIN / 60;
-  const fuel = Math.ceil(sys.distance * def.fuelPerPc * 2 * hb.fuelMult * tech.vesselFuelMult);
+  const oneWaySec = PACING.EXPED_BASE + sys.distance * EXPED_TIME_PER_PC * def.speed * hb.speedMult * tech.vesselSpeedMult;
+  const totalHours = (oneWaySec * 2 + EXPED_ONSITE_MIN) / 3600;
+  const fuel = Math.ceil(sys.distance * def.fuelPerPc * 2 * hb.fuelMult * tech.vesselFuelMult * PACING.FUEL_SCALE * PROD_INDEX);
   const bio  = Math.ceil(totalHours * EXPED_BIOMASSE_PER_HOUR * crewIds.length * tech.expeditionBiomasseMult);
 
   if (S.res.energie < fuel) return { ok:false, why:`Carburant insuffisant (${fuel} énergie requis)` };
@@ -4838,10 +5133,10 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
   return {
     ok: true,
     vessel, def, body, sys,
-    oneWayMin: Math.round(oneWayHours * 60),
+    oneWayMin: Math.round(oneWaySec),
     onSiteMin: EXPED_ONSITE_MIN,
     fuel, bio,
-    totalMin: Math.round(totalHours * 60)
+    totalMin: Math.round(totalHours * 3600)
   };
 }
 
@@ -4913,7 +5208,7 @@ export function launchExpedition(args) {
   }
   S.expeditions.push(exp);
   const equipNote = equipUnits > 0 ? ` · ${equipUnits} équipement(s) embarqué(s)` : '';
-  log('neutral', `Décollage : <em>${r.vessel.name}</em> en route vers <em>${r.body.name}</em>. Voyage : ${fmtMin(r.oneWayMin)}${equipNote}.`);
+  log('neutral', `Décollage : <em>${r.vessel.name}</em> en route vers <em>${r.body.name}</em>. Voyage : ${fmtDuree(r.oneWayMin)}${equipNote}.`);
   render();
 }
 
@@ -4957,10 +5252,37 @@ export function tickExpeditions() {
     // mais par les scènes (outcome.end ou outcome.retreat)
   }
   for (const exp of completed) {
+    grantRuinDiscovery(exp);
     onReturn(exp);
     const idx = S.expeditions.indexOf(exp);
     if (idx >= 0) S.expeditions.splice(idx, 1);
   }
+}
+
+// ---- V1 : découvertes déterministes des ruines ----
+// Les schémas dont dépendent des techs ne sont plus tirés au hasard : la n-ième
+// expédition qui rentre d'un type de ruines rapporte le n-ième schéma de la piste
+// de ce type (s'il n'est pas déjà connu). La 1re visite de ruines alien ouvre donc
+// la branche exotique, et la suite de la branche suit l'exploration.
+export const RUIN_DISCOVERY_TRACK = {
+  humaines: ['bp_kit_medical', 'bp_extraction_avancee', 'bp_module_stockage'],
+  alien_a:  ['bp_voilure_cristal', 'bp_arme_resonance'],
+  alien_b:  ['bp_culture_xeno', 'bp_membrane_adaptive'],
+  fusion:   ['bp_propulsion_pliee', 'bp_relais_quantique'],
+};
+
+function grantRuinDiscovery(exp) {
+  const body = bodyOfExpedition(exp);
+  const track = RUIN_DISCOVERY_TRACK[body?.ruines];
+  if (!track) return;
+  if (!S.flags.ruinVisits) S.flags.ruinVisits = {};
+  const n = S.flags.ruinVisits[body.ruines] = (S.flags.ruinVisits[body.ruines] || 0) + 1;
+  // Premier schéma de la piste pas encore connu, dans la limite du rang de la visite
+  const bp = track.slice(0, n).find(id => BLUEPRINTS[id] && !S.discoveries?.[id]);
+  if (!bp) return;
+  if (!Array.isArray(exp.accumulatedItems)) exp.accumulatedItems = [];
+  exp.accumulatedItems.push(bp);
+  if (Array.isArray(exp.accumulatedLog)) exp.accumulatedLog.push(`Relevés des ruines : schéma ${BLUEPRINTS[bp].nom}.`);
 }
 
 function onArrival(exp) {
@@ -4994,14 +5316,13 @@ function onArrival(exp) {
 
 // ---- Épuisement des sites pillés ----
 // Un site fouillé ne rend que LOOT_DEPLETED_MULT de son butin, puis se
-// reconstitue linéairement en LOOT_RECOVERY_DAYS jours de jeu.
+// reconstitue linéairement en PACING.LOOT_RECOVERY (3 jours réels).
 const LOOT_DEPLETED_MULT = 0.25;
-const LOOT_RECOVERY_DAYS = 30;
 function bodyLootMult(body) {
   if (!body || typeof body.lootedAt !== 'number') return 1;
-  const days = Math.max(0, (S.meta.gameMin - body.lootedAt) / 1440);
-  if (days >= LOOT_RECOVERY_DAYS) return 1;
-  return LOOT_DEPLETED_MULT + (1 - LOOT_DEPLETED_MULT) * days / LOOT_RECOVERY_DAYS;
+  const t = Math.max(0, S.meta.gameMin - body.lootedAt);
+  if (t >= PACING.LOOT_RECOVERY) return 1;
+  return LOOT_DEPLETED_MULT + (1 - LOOT_DEPLETED_MULT) * t / PACING.LOOT_RECOVERY;
 }
 
 // Départ après scènes : finit la mission et programme le retour
@@ -5899,8 +6220,9 @@ export function memberCombatStats(member, gear) {
   const weaponAcc  = bestWeapon?.accuracy || 0;
   armorPen = Math.max(armorPen, bestWeapon?.armorPen || 0);
 
-  let dmgMin = Math.max(1, 1 + effCombat + weaponDmg);
-  let dmgMax = Math.max(2, 3 + effCombat * 2 + weaponDmg);
+  // V1 : dégâts de base relevés (2-4 à mains nues au lieu de 1-3) — cf. armorReduce
+  let dmgMin = Math.max(2, 2 + effCombat + weaponDmg);
+  let dmgMax = Math.max(3, 4 + effCombat * 2 + weaponDmg);
   let accuracy = 55 + dexterite * 3 + effCombat * 4 + weaponAcc;
 
   // Bonus de stat selon type d'arme
@@ -5986,8 +6308,8 @@ function allocateCombatGear(team, equipment) {
   return gear;
 }
 
-// Initialise l'état de combat sur une expédition
-function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
+// Initialise l'état de combat sur une expédition (exportée pour les outils de test)
+export function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
   const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
   const gear = allocateCombatGear(team, exp.equipment);
 
@@ -6060,6 +6382,9 @@ function combatRng(exp, ...parts) {
 
 const isStunned = enemy => (enemy.effects || []).some(e => e.type === 'stunned' && e.turnsLeft > 0);
 
+// V1 : l'armure absorbe au plus la moitié d'un coup (fini les combats à coups de 1)
+const armorReduce = (raw, armor) => Math.max(1, Math.ceil(raw / 2), raw - Math.max(0, armor || 0));
+
 // Action d'un allié (appelée par l'UI)
 export function combatAllyAction(expId, allyId, action, targetIdx) {
   const exp = S.expeditions.find(e => e.id === expId);
@@ -6088,7 +6413,7 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
       const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1)) + dmgBonus;
       // armorPen réduit l'armure effective
       const effectiveArmor = Math.max(0, target.armor - (ally.armorPen || 0));
-      const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
+      const effectiveDmg = armorReduce(rawDmg, effectiveArmor);
       target.hp = Math.max(0, target.hp - effectiveDmg);
       const penNote = (ally.armorPen || 0) > 0 ? ` (pénètre ${ally.armorPen})` : '';
       cbt.log.push(`${ally.name} → ${target.nom} : ${effectiveDmg} dégâts${penNote}${target.hp <= 0 ? ' — neutralisé !' : '.'}`);
@@ -6196,6 +6521,52 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   }
 }
 
+// V1 — résolution automatique (contrat docs/V1.md) : joue le combat jusqu'au bout
+// avec une IA simple — soin si un allié est sous 40 % de ses PV (compétence ou
+// trousse), explosif s'il reste plusieurs ennemis, sinon attaque de l'ennemi le
+// plus entamé. → { ok, why, outcome, rounds, resume: [lignes] }
+export function combatAutoResolve(expId) {
+  const exp = S.expeditions.find(e => e.id === expId);
+  if (!exp?.combat?.active) return { ok: false, why: 'Aucun combat en cours' };
+  const cbt = exp.combat;
+  const firstRound = cbt.round;
+  const logStart = cbt.log.length;
+  let guard = 0;
+  while (cbt.active && cbt.phase === 'player' && guard++ < 60) {
+    for (const ally of cbt.allies) {
+      let g = 0;
+      while (cbt.active && cbt.phase === 'player' && ally.hp > 0 && ally.pa > 0 && g++ < 8) {
+        const live = cbt.enemies.map((e, i) => [e, i]).filter(([e]) => e.hp > 0);
+        if (!live.length) break;
+        const paBefore = ally.pa;
+        const wounded = cbt.allies.some(a => a.hp > 0 && a.hp < a.maxHp * 0.4);
+        const canHeal = ally.pa >= 2 && wounded && (ally.medecine > 0 || COMBAT_HEAL_KITS.some(id => (exp.equipment?.[id] || 0) > 0));
+        const hasAoe = COMBAT_AOE_ITEMS.some(id => (exp.equipment?.[id] || 0) > 0);
+        if (canHeal) combatAllyAction(exp.id, ally.id, 'heal');
+        else if (live.length >= 2 && hasAoe) combatAllyAction(exp.id, ally.id, 'grenade');
+        else {
+          live.sort((a, b) => a[0].hp - b[0].hp);
+          combatAllyAction(exp.id, ally.id, 'attack', live[0][1]);
+        }
+        if (ally.pa === paBefore) break;   // action refusée : on passe au suivant
+      }
+    }
+    if (cbt.active && cbt.phase === 'player') combatEndTurn(exp.id);
+  }
+  // Combat interminable (garde-fou) : l'équipe rompt le contact
+  if (cbt.active && cbt.phase === 'player') {
+    const a = cbt.allies.find(x => x.hp > 0);
+    if (a) combatAllyAction(exp.id, a.id, 'retreat');
+  }
+  render();
+  return {
+    ok: true, why: '',
+    outcome: cbt.outcome,
+    rounds: cbt.round - firstRound + 1,
+    resume: cbt.log.slice(logStart).filter(l => /Victoire|Défaite|Retraite|neutralisé|à terre/.test(l)).slice(-8)
+  };
+}
+
 // Fin de tour joueur → phase ennemie (appelée par l'UI)
 export function combatEndTurn(expId) {
   const exp = S.expeditions.find(e => e.id === expId);
@@ -6227,7 +6598,7 @@ function _enemyAttack(cbt, enemy, rng) {
   if (hit) {
     const [dmin, dmax] = enemy.damage;
     const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1));
-    const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
+    const effectiveDmg = armorReduce(rawDmg, effectiveArmor);
     // Les dégâts frappent le bouclier d'abord, puis les PV
     if ((target.shieldHp || 0) > 0) {
       const shieldAbsorb = Math.min(target.shieldHp, effectiveDmg);
@@ -6382,6 +6753,47 @@ export function abandonExpedition(expId) {
 
 
 // ============================================================
+//   V1 — ÉCONOMIE : salaires, pénuries
+// ============================================================
+
+// Salaire d'un colon (ou d'un candidat) : biomasse prélevée par jour réel.
+// `salary` garde sa valeur historique (points de prétention, 1 à 8).
+export function salaryPerDay(p) {
+  const pts = Number(p?.salary);
+  return (Number.isFinite(pts) && pts > 0 ? pts : 0) * PACING.SALARY_PER_POINT;
+}
+
+// Pénuries en cours, pour l'alerte de l'interface : [{ res, effet }]
+//  - énergie : la demande n'est plus couverte → modules consommateurs ralentis ;
+//  - biomasse : stock vide → vivres rationnés, salaires impayés, moral en baisse ;
+//  - autre ressource à zéro alors qu'elle baisse.
+export function shortages() {
+  if (!S?.res) return [];
+  const out = [];
+  const rate = computeRates();   // met aussi à jour energyRatio()
+  const ratio = energyRatio();
+  if (ratio < 0.999) {
+    out.push({ res: 'energie', effet: `Pénurie d'énergie : les modules consommateurs (mine, hydroponie, laboratoire, atelier…) tournent à ${Math.round(ratio * 100)} %.` });
+  }
+  if ((S.res.biomasse || 0) <= 0.5 && rate.biomasse < 0) {
+    out.push({ res: 'biomasse', effet: "Plus de biomasse : vivres rationnés et salaires impayés, le moral de l'équipage baisse." });
+  }
+  for (const k of ['metal', 'cristal', 'datacubes']) {
+    if ((S.res[k] || 0) <= 0.5 && rate[k] < 0) out.push({ res: k, effet: `${RES_LABELS[k]} épuisé : la consommation n'est plus couverte.` });
+  }
+  return out;
+}
+
+// Production nette par heure réelle (pour l'affichage : computeRates() est par tick)
+export function ratesPerHour() {
+  const r = computeRates();
+  const out = {};
+  for (const k of RESOURCES) out[k] = r[k] * PACING.HEURE;
+  return out;
+}
+
+
+// ============================================================
 // 8. UI — rendu DOM
 // ============================================================
 
@@ -6422,71 +6834,104 @@ function setupHandlers() {
   $('#btnNewTraining').addEventListener('click', () => { if (S?.meta) showTrainingModal(); });
 }
 
-// Snapshot de l'état "important" avant rattrapage offline,
-// pour pouvoir afficher un récap propre au joueur après.
+// Instantané de l'état avant un rattrapage hors ligne, pour raconter au retour
+// ce qui s'est passé (noms, décès et leur cause, faits marquants).
 function snapshotForCatchup() {
   return {
     res: { ...S.res },
-    crewAlive: S.crew.filter(m => m.statut !== 'mort').length,
-    crewDead: S.crew.filter(m => m.statut === 'mort').length,
-    candidates: S.candidates.length,
-    expActive: S.expeditions.length,
-    expHistory: S.expHistory.length,
+    crew: new Map(S.crew.map(m => [m.id, {
+      statut: m.statut,
+      statuts: (m.statuts || []).map(s => s.key),
+      skills: { ...(m.skills || {}) }
+    }])),
+    candidates: new Set(S.candidates.map(c => c.id)),
+    modules: Object.fromEntries(Object.entries(S.modules).map(([k, v]) => [k, v?.level || 0])),
+    techs: new Set(Object.keys(S.techCompleted || {})),
+    discoveries: new Set(Object.keys(S.discoveries || {})),
+    expHistoryTop: S.expHistory[0] || null,
+    fleet: new Set(S.fleet.map(v => v.id)),
     journalLen: S.journal.length,
+    pending: (S.pendingDecisions || []).length,
+    // compatibilité (anciens compteurs)
     buildDone: S.build ? S.build.doneMin : null,
-    vesselBuildDone: S.vesselBuild ? S.vesselBuild.doneMin : null,
-    trainingCount: S.training.length,
-    treatmentCount: S.treatments.length,
-    statusCount: S.crew.reduce((s,m) => s + (m.statuts?.length || 0), 0)
+    vesselBuildDone: S.vesselBuild ? S.vesselBuild.doneMin : null
   };
 }
 
-// Compare deux snapshots et produit un résumé textuel des évolutions
-function diffSnapshot(before, after) {
-  const lines = [];
-  // Ressources
-  const resDelta = {};
+const statutNom = key => STATUTS[key]?.nom || key;
+
+// Compare l'état à un instantané : données du rapport de retour.
+// → { deces, arrivees, candidats, chantiers, recherches, expeditions, vaisseaux,
+//     soins, blessures, formations, decouvertes, ressources, enAttente }
+function diffSnapshot(before) {
+  const r = {
+    deces: [], arrivees: [], candidats: [], chantiers: [], recherches: [], expeditions: [],
+    vaisseaux: [], soins: [], blessures: [], formations: [], decouvertes: [], ressources: {},
+    enAttente: (S.pendingDecisions || []).length
+  };
   for (const k of RESOURCES) {
-    const d = Math.round(after.res[k] - before.res[k]);
-    if (Math.abs(d) >= 5) resDelta[k] = d;
+    const d = Math.round((S.res[k] || 0) - (before.res[k] || 0));
+    if (Math.abs(d) >= 5) r.ressources[k] = d;
   }
-  if (Object.keys(resDelta).length > 0) {
-    const resStr = Object.entries(resDelta)
-      .map(([k,v]) => `${v >= 0 ? '+' : ''}${v} ${RES_LABELS[k]}`)
-      .join(' · ');
-    lines.push(`Ressources : ${resStr}`);
+  for (const m of S.crew) {
+    const b = before.crew.get(m.id);
+    if (!b) { if (m.statut !== 'mort') r.arrivees.push({ nom: m.name }); continue; }
+    if (m.statut === 'mort') {
+      if (b.statut !== 'mort') r.deces.push({ nom: m.name, cause: (m.deathCause || 'cause inconnue').replace(/\.$/, '') });
+      continue;
+    }
+    const now = (m.statuts || []).map(s => s.key);
+    for (const k of b.statuts) if (!now.includes(k)) r.soins.push({ nom: m.name, statut: statutNom(k) });
+    for (const k of now) if (!b.statuts.includes(k)) {
+      const st = m.statuts.find(s => s.key === k);
+      r.blessures.push({ nom: m.name, statut: st?.revealed === false ? 'un état suspect' : statutNom(k) });
+    }
+    for (const sk of SKILL_LIST) {
+      if ((m.skills?.[sk] || 0) > (b.skills[sk] || 0)) r.formations.push({ nom: m.name, competence: SKILL_LABELS[sk], niveau: m.skills[sk] });
+    }
   }
-  // Pertes
-  if (after.crewDead > before.crewDead) {
-    lines.push(`Pertes : ${after.crewDead - before.crewDead} membre(s) décédé(s)`);
+  for (const c of S.candidates) if (!before.candidates.has(c.id)) r.candidats.push({ nom: c.name, origine: c.origin?.label || '' });
+  for (const [id, m] of Object.entries(S.modules)) {
+    const lvl = m?.level || 0;
+    if (lvl > (before.modules[id] || 0)) r.chantiers.push({ module: MODULES[id]?.nom || id, niveau: lvl });
   }
-  // Candidats
-  if (after.candidates > before.candidates) {
-    lines.push(`Candidats reçus : ${after.candidates - before.candidates}`);
+  for (const id of Object.keys(S.techCompleted || {})) if (!before.techs.has(id)) r.recherches.push(TECH_TREE[id]?.nom || id);
+  for (const id of Object.keys(S.discoveries || {})) if (!before.discoveries.has(id)) r.decouvertes.push(BLUEPRINTS[id]?.nom || id);
+  for (const h of S.expHistory) {
+    if (h === before.expHistoryTop) break;
+    r.expeditions.push({ vaisseau: h.vesselName, lieu: h.bodyName, resume: h.result?.summary || '' });
   }
-  // Expéditions terminées
-  if (after.expHistory > before.expHistory) {
-    lines.push(`Expéditions terminées : ${after.expHistory - before.expHistory}`);
-  }
-  // Chantiers
-  if (before.buildDone !== null && S.build === null) {
-    lines.push(`Chantier de bâtiment achevé`);
-  }
-  if (before.vesselBuildDone !== null && S.vesselBuild === null) {
-    lines.push(`Vaisseau livré du chantier`);
-  }
-  // Formations
-  if (before.trainingCount > after.trainingCount) {
-    lines.push(`Formations achevées : ${before.trainingCount - after.trainingCount}`);
-  }
-  // Soins
-  if (before.treatmentCount > after.treatmentCount) {
-    lines.push(`Traitements terminés : ${before.treatmentCount - after.treatmentCount}`);
-  }
-  // Statuts apparus
-  if (after.statusCount > before.statusCount) {
-    lines.push(`Nouveaux incidents médicaux : ${after.statusCount - before.statusCount}`);
-  }
+  r.expeditions.reverse();
+  for (const v of S.fleet) if (!before.fleet.has(v.id)) r.vaisseaux.push(`${VESSELS[v.type]?.nom || v.type} ${v.name}`);
+  return r;
+}
+
+const listeFr = arr => arr.length <= 1 ? (arr[0] || '') : `${arr.slice(0, -1).join(', ')} et ${arr[arr.length - 1]}`;
+
+// Récit du rapport : phrases courtes, au présent, avec les noms (texte brut)
+function narrateReport(r) {
+  const faits = [];
+  for (const d of r.deces) faits.push(`${d.nom} nous a quittés — ${d.cause.charAt(0).toLowerCase() + d.cause.slice(1)}.`);
+  if (r.chantiers.length) faits.push(`Le chantier a livré ${listeFr(r.chantiers.map(c => `${c.module} (niv ${c.niveau})`))}.`);
+  if (r.recherches.length) faits.push(`Le laboratoire a achevé ${listeFr(r.recherches)}.`);
+  for (const e of r.expeditions) faits.push(`${e.vaisseau} est rentré de ${e.lieu}. ${e.resume}`.trim());
+  if (r.vaisseaux.length) faits.push(`Sortie d'usine : ${listeFr(r.vaisseaux)}.`);
+  if (r.decouvertes.length) faits.push(`Schémas découverts : ${listeFr(r.decouvertes)}.`);
+  for (const f of r.formations) faits.push(`${f.nom} progresse en ${f.competence} (niv ${f.niveau}).`);
+  if (r.soins.length) faits.push(`Rétablis : ${listeFr(r.soins.map(s => `${s.nom} (${s.statut.toLowerCase()})`))}.`);
+  if (r.blessures.length) faits.push(`À surveiller : ${listeFr(r.blessures.map(s => `${s.nom} (${s.statut.toLowerCase()})`))}.`);
+  if (r.arrivees.length) faits.push(`${listeFr(r.arrivees.map(a => a.nom))} ${r.arrivees.length > 1 ? 'ont rejoint' : 'a rejoint'} l'avant-poste.`);
+  if (r.candidats.length) faits.push(`${r.candidats.length > 1 ? 'Candidatures reçues' : 'Candidature reçue'} : ${listeFr(r.candidats.map(c => c.nom))}.`);
+  return faits;
+}
+
+// Lignes de synthèse (journal) : ressources, décisions automatiques, décisions en attente
+function summaryLines(r, autoEntries) {
+  const lines = [];
+  const res = Object.entries(r.ressources).map(([k, v]) => `${v >= 0 ? '+' : ''}${v} ${RES_LABELS[k]}`);
+  if (res.length) lines.push(`Ressources : ${res.join(' · ')}`);
+  lines.push(...autoResolvedLines(autoEntries));
+  if (r.enAttente) lines.push(`${r.enAttente} décision${r.enAttente > 1 ? 's' : ''} t'attend${r.enAttente > 1 ? 'ent' : ''}`);
   return lines;
 }
 
@@ -6505,11 +6950,9 @@ function autoResolvedLines(entries) {
   return lines;
 }
 
-// Libellé d'une durée réelle
-function realDurationLabel(hours, long = false) {
-  if (hours < 1) return `${Math.round(hours * 60)} ${long ? 'minutes' : 'min'}`;
-  if (hours < 24) return `${hours.toFixed(1)} ${long ? 'heures' : 'h'}`;
-  return `${(hours / 24).toFixed(1)} jours`;
+// Libellé d'une durée réelle (heures → « 45 min », « 9 h 20 », « 1 j 3 h »)
+function realDurationLabel(hours) {
+  return fmtDuree(hours * 3600);
 }
 
 // ---- Rattrapage du temps écoulé (hors ligne, page gelée, retour d'onglet) ----
@@ -6535,25 +6978,46 @@ export function catchUpOffline() {
     onProgress: (done, total) => progress?.update(done, total),
     onDone: done => {
       progress?.close();
-      finishCatchUp({ before, seqStart, elapsedHours, simulatedHours: done * MIN_PER_TICK / 60, capped });
+      finishCatchUp({ before, seqStart, elapsedHours, simulatedHours: done * MIN_PER_TICK / 3600, capped });
     }
   });
   if (!started) progress?.close();
   return started;
 }
 
+// Dernier rapport de retour (pour l'interface : getLastReturnReport)
+let _lastReturnReport = null;
+export function getLastReturnReport() { return _lastReturnReport; }
+
 function finishCatchUp({ before, seqStart, elapsedHours, simulatedHours, capped }) {
-  const summary = diffSnapshot(before, snapshotForCatchup()).concat(autoResolvedLines(autoResolvedSince(seqStart)));
+  // V1 : un événement garanti au retour d'une longue absence (s'il y en a un d'éligible)
+  let retourEvent = null;
+  if (elapsedHours * 3600 >= PACING.EVENT_ON_RETURN_AFTER) {
+    try { retourEvent = guaranteeReturnEvent(); } catch (e) { reportTickError('événement de retour', e); }
+  }
+  const data = diffSnapshot(before);
+  const autoEntries = autoResolvedSince(seqStart);
+  const faits = narrateReport(data);
+  const summary = summaryLines(data, autoEntries);
   syncPendingFlags();
   if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
     // Une seule entrée de journal pour résumer la période
-    const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS}h)` : '';
-    log('neutral', esc(`Reprise du contact après ${realDurationLabel(elapsedHours)}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`));
+    const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS} h)` : '';
+    const all = faits.concat(summary);
+    log('neutral', esc(`Reprise du contact après ${realDurationLabel(elapsedHours)}${cappedNote}.${all.length ? ' ' + all.join(' · ') : ''}`));
   }
   save();
   try { render(); } catch (e) { reportTickError('render', e); }
   if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
-    const report = { realElapsedHours: elapsedHours, simulatedHours, capped, summary };
+    // Rapport de retour : données structurées (pour l'interface) + récit
+    const report = {
+      realElapsedHours: elapsedHours, simulatedHours, capped,
+      ...data,
+      incidentsAuto: autoEntries.map(e => ({ type: e.kind, titre: e.titre, choix: e.choiceLabel })),
+      evenementRetour: retourEvent ? colonyEventTitle(retourEvent) : null,
+      faits, summary
+    };
+    _lastReturnReport = report;
     if (!decisionUiBusy()) showCatchupModal(report);
     else toast('Reprise du contact : le résumé est dans le journal.');
   }
@@ -6595,22 +7059,27 @@ function openCatchupProgress() {
   };
 }
 
-// Modale "bon retour" qui résume ce qui s'est passé pendant l'absence
+// Modale « Reprise du contact » : récit de l'absence (noms, décès racontés,
+// faits marquants), puis la synthèse (ressources, décisions).
 function showCatchupModal(report) {
   // En dessous de 5 minutes réelles, on ne montre rien (zéro friction)
   if (report.realElapsedHours < CATCHUP_REPORT_MIN_HOURS) return;
-
-  const summaryHTML = report.summary.length > 0
+  const faits = report.faits || [];
+  const lignes = report.summary || [];
+  const deathCount = (report.deces || []).length;
+  const recitHTML = faits.length
+    ? faits.map((f, i) => `<p style="margin:8px 0;${i < deathCount ? 'color:var(--rust)' : ''}">${esc(f)}</p>`).join('')
+    : '<p style="font-style:italic;color:var(--text-mute);margin-top:10px">L\'avant-poste a tenu sans encombre.</p>';
+  const summaryHTML = lignes.length > 0
     ? `<ul style="list-style:none;padding:0;margin:14px 0 0;">${
-        report.summary.map(line =>
+        lignes.map(line =>
           `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${esc(line)}</li>`
         ).join('')
       }</ul>`
-    : '<p style="font-style:italic;color:var(--text-mute);margin-top:10px">L\'avant-poste a tenu sans encombre.</p>';
-
+    : '';
   const cappedHTML = report.capped
     ? `<p style="font-family:var(--mono);font-size:11px;color:var(--amber);margin-top:14px;letter-spacing:0.04em;">
-         Note : simulation plafonnée à ${OFFLINE_MAX_HOURS}h pour préserver l'équilibre.
+         Note : simulation plafonnée à ${OFFLINE_MAX_HOURS} h.
        </p>`
     : '';
 
@@ -6622,8 +7091,9 @@ function showCatchupModal(report) {
         Absence : ${realDurationLabel(report.realElapsedHours, true)}
       </span>
       <span style="display:block;color:var(--text-dim);margin-bottom:4px;">
-        L'avant-poste a continué de tourner pendant ton absence. Voici ce qu'il s'est passé :
+        L'avant-poste a continué de tourner pendant ton absence.
       </span>
+      ${recitHTML}
       ${summaryHTML}
       ${cappedHTML}
     `,
@@ -6844,7 +7314,7 @@ function startGameLoop() {
   markSessionStart();   // l'horloge « session » repart de zéro
 
   try {
-    autoAssignAllFreeMembers();
+    autoAssignAllFreeMembers({ respectChoice: true });
   } catch (err) {
     console.error('[BOOT] Erreur autoAssign :', err);
   }

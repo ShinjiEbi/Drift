@@ -3,10 +3,10 @@
 // de propriétés (S.crew.push, S.res.metal--) est visible partout.
 // Les ré-assignations complètes (S = ...) passent par setS().
 
-import { VERSION, SAVE_KEY, SAVE_SCHEMA_VERSION, SAVE_BACKUP_MAX, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
-import { MODULES, MODULE_JOBS, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE } from './catalog.js';
-import { rngFor, rPick, rWeighted, rInt, fmtMin, esc } from './util.js';
-import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits } from './app.js';
+import { VERSION, SAVE_KEY, SAVE_SCHEMA_VERSION, SAVE_BACKUP_MAX, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, SKILL_LIST, PACING, YEAR_IN_GAME_MIN } from './constants.js';
+import { MODULES, MODULE_JOBS, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE, FABRICATIONS, VESSELS } from './catalog.js';
+import { rngFor, rPick, rWeighted, rInt, fmtDuree, esc, uid } from './util.js';
+import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits, tickAutoCare, genVesselName, salaryPerDay } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
 import { notif } from './notifications.js';
 
@@ -14,6 +14,44 @@ import { notif } from './notifications.js';
 
 export var S = null;
 export function setS(newS) { S = newS; }  // état courant
+
+// Équipage de départ (V1) : trois colons complémentaires, tirés comme des
+// candidats ordinaires puis ajustés à leur rôle. startRole permet au contenu
+// (prologue, scènes) de les désigner : 'pilote', 'ingenieur', 'medecin'.
+const STARTING_CREW = [
+  { startRole: 'pilote',    skills: { pilotage: 2, combat: 1, survie: 1 } },
+  { startRole: 'ingenieur', skills: { ingenierie: 2, science: 2 } },
+  { startRole: 'medecin',   skills: { medecine: 2, survie: 1 } },
+];
+
+// Candidat → membre d'équipage (même conversion pour le recrutement et le départ)
+function candidateToMember(c, gameMin) {
+  return {
+    ...c,
+    id: 'm_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36) + Math.floor(Math.random()*1296).toString(36),
+    joinedAt: gameMin,
+    birthGameMin: gameMin - (c.age || 30) * YEAR_IN_GAME_MIN,  // 0.18 — vieillissement
+    statut: 'libre',          // libre | travail | formation | infirmerie | expedition | diplomatie | mort
+    sante: 100,
+    statuts: [],              // [{ key, since, revealed, severityNow }]
+    sequels: [],              // séquelles permanentes [{ key, since }]
+    blessures: []             // legacy, gardé pour compat
+  };
+}
+
+function genStartingCrew() {
+  return STARTING_CREW.map(spec => {
+    const c = genCandidate();
+    for (const k of SKILL_LIST) c.skills[k] = spec.skills[k] || 0;
+    c.age = 26 + Math.floor(Math.random() * 16);
+    c.startRole = spec.startRole;
+    c.origin = { ...c.origin };
+    c.moral = 75;
+    c.loyaute = 70;
+    c.salary = Math.max(1, 1 + Math.max(...Object.values(c.skills)));
+    return candidateToMember(c, 0);
+  });
+}
 
 export function freshState() {
   // Génère une seed maître stable et lisible
@@ -34,12 +72,15 @@ export function freshState() {
     modules: {
       commandement: { level: 1 }    // pré-construit
     },
-    build: null,            // { id, targetLevel, totalMin, doneMin } ou null
-    crew: [],               // membres d'équipage actifs
+    build: null,            // { id, targetLevel, totalMin, doneMin, cost } ou null
+    buildQueue: [],         // V1 — chantiers en attente : [{ id, targetLevel, cost }] (coût déjà payé)
+    researchQueue: [],      // V1 — recherches en attente : [techId] (coût déjà payé)
+    crew: genStartingCrew(), // V1 — trois colons au départ (cf. STARTING_CREW)
     candidates: [],         // candidats en attente d'acceptation
     training: [],           // sessions de formation en cours
     treatments: [],         // soins en cours
-    fleet: [],              // vaisseaux possédés
+    // V1 — une vedette en état de marche, posée sur l'aire de fortune
+    fleet: [{ id: uid('v'), type: 'vedette', name: genVesselName('vedette'), available: true }],
     vesselBuild: null,      // chantier vaisseau en cours
     expeditions: [],        // expéditions en cours
     expHistory: [],         // historique des expéditions
@@ -70,7 +111,7 @@ export function freshState() {
     // 0.18 — relations sociales : { "id1|id2": affinity }
     relations: {},
     // 0.19 — cooldowns événements de colonie
-    nextEventMin: 24 * 60,    // 1er événement après 1j jeu
+    nextEventMin: PACING.EVENT_FIRST,
     lastHommageMin: -99999,
     lastVisitorMin: -99999,
     lastMerchantMin: -99999,
@@ -86,7 +127,7 @@ export function freshState() {
     autoAssign: true,       // auto-affecte les nouveaux colons aux postes éligibles
     galaxy: genGalaxy(masterSeed),
     nextRecruitMin: 0,
-    nextIncidentMin: 60*8,
+    nextIncidentMin: PACING.INCIDENT_FIRST,
     journal: [],
     flags: {},
     ui: {
@@ -98,8 +139,19 @@ export function freshState() {
   };
 }
 
-// Calcule prod/upkeep nets par minute pour chaque ressource
+// Part de la demande d'énergie couverte au dernier calcul (1 = pas de pénurie).
+// Valeur liée à l'objet d'état : un autre état (chargement, test) repart de 1.
+let _energyRatio = 1, _energyRatioFor = null;
+export function energyRatio() { return _energyRatioFor === S ? _energyRatio : 1; }
+
+// Calcule prod/upkeep nets PAR TICK (seconde réelle) pour chaque ressource.
 // Tient compte de l'efficacité de chaque bâtiment selon ses postes pourvus.
+// V1 :
+//  - un module sans personnel tourne au ralenti et CONSOMME COMME IL PRODUIT
+//    (entretien × rendement, plafonné à 1) — sauf les logements (habitat, quartiers) ;
+//  - pénurie d'énergie : si le stock ne couvre plus la demande, les modules qui
+//    consomment de l'énergie tournent à la part couverte (production et entretien) ;
+//  - vivres des colons en poste et salaires de tout l'équipage (biomasse).
 export function computeRates() {
   const rate = { metal:0, cristal:0, energie:0, biomasse:0, datacubes:0 };
   const cmdBonus = globalCommandBonus();
@@ -107,6 +159,8 @@ export function computeRates() {
   const tech = techEffectsAccumulated();
   const perm = permanentBonusesAccumulated();  // calculé une seule fois (et non par module)
 
+  const contribs = [];
+  let energyIn = 0, energyDemand = 0;
   for (const id of Object.keys(S.modules)) {
     const m = S.modules[id];
     const def = MODULES[id];
@@ -116,24 +170,50 @@ export function computeRates() {
     const eff = moduleEfficiency(id);
     // Bonus de tech ciblé sur ce module
     const moduleTechMult = tech.moduleProdMult[id] || 1;
+    const prod = {}, up = {};
+    // Production fixe en unités par heure réelle, sans personnel requis
+    // (filet du Centre de commandement : jamais de partie bloquée)
+    if (def.prodFixed) {
+      const p = def.prodFixed(m.level);
+      for (const k in p) prod[k] = (prod[k] || 0) + p[k] / 3600 * cmdMult;
+    }
     if (def.prod) {
       const p = def.prod(m.level);
       for (const k in p) {
         // Bonus global par ressource (ex. tech_metallurgie sur metal)
         const resMult = tech.resourceMult[k] || 1;
         const permMult = perm.resourceMult[k] || 1;
-        rate[k] += p[k] * PROD_MULT * eff.prodMult * cmdMult * moduleTechMult * resMult * permMult;
+        prod[k] = (prod[k] || 0) + p[k] * PROD_MULT * eff.prodMult * cmdMult * moduleTechMult * resMult * permMult;
       }
     }
     if (def.upkeep) {
       const u = def.upkeep(m.level);
-      for (const k in u) rate[k] -= u[k] * PROD_MULT * eff.upkeepMult;
+      const staffFactor = def.capCrew ? 1 : Math.min(1, eff.prodMult);
+      for (const k in u) up[k] = u[k] * PROD_MULT * eff.upkeepMult * staffFactor;
     }
+    energyIn += prod.energie || 0;
+    energyDemand += up.energie || 0;
+    contribs.push({ prod, up });
+  }
+  // Pénurie d'énergie : part de la demande couverte par le stock + la production
+  const stock = Math.max(0, S.res?.energie || 0);
+  let ratio = 1;
+  if (energyDemand > 0 && stock + energyIn < energyDemand) ratio = Math.max(0, Math.min(1, (stock + energyIn) / energyDemand));
+  _energyRatio = ratio;
+  _energyRatioFor = S;
+  for (const c of contribs) {
+    const f = (c.up.energie || 0) > 0 ? ratio : 1;
+    for (const k in c.prod) rate[k] += c.prod[k] * f;
+    for (const k in c.up) rate[k] -= c.up[k] * f;
   }
 
-  // Coût biomasse supplémentaire pour les colons affectés (vivres actifs)
+  // Vivres des colons en poste (indexés sur la production)
   const activeWorkers = S.crew.filter(m => m.statut === 'travail').length;
-  rate.biomasse -= activeWorkers * (EXPED_BIOMASSE_PER_HOUR * JOB_BIOMASSE_MULT) / 60 * tech.workerBiomasseMult;
+  rate.biomasse -= activeWorkers * PACING.FOOD_PER_WORKER * PROD_MULT * tech.workerBiomasseMult;
+  // Salaires (biomasse par jour réel) de tout l'équipage vivant
+  let salaries = 0;
+  for (const m of S.crew) if (m.statut !== 'mort') salaries += salaryPerDay(m);
+  rate.biomasse -= salaries / PACING.JOUR;
 
   // 0.28 : applique buffs/debuffs actifs (prodMult global)
   if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
@@ -171,26 +251,25 @@ export function capsAll() {
   return caps;
 }
 
-// Capacité d'un type de ressource avec bonus de tech
+// Capacité d'un type de ressource : base × techs + bonus des modules (capBonus :
+// mine, hydroponie, générateur, laboratoire, silo, mémoire cristalline)
 export function capOf(k) {
-  const tech = techEffectsAccumulated();
-  const base = (CAP[k] || 0) * (tech.capacityMult[k] || 1);
-  
-  // 0.25 : bonus capacité depuis modules avec capBonus (silo cryogénique, mémoire cristalline)
-  let modBonus = 0;
-  for (const id of Object.keys(S.modules || {})) {
-    const def = MODULES[id];
-    const m = S.modules[id];
-    if (def?.capBonus && m?.level > 0) {
-      const bonus = def.capBonus(m.level);
-      if (bonus[k]) modBonus += bonus[k];
-    }
-  }
-  return Math.floor(base + modBonus);
+  return capsAll()[k] || 0;
 }
 
-// Helper : durée réelle d'un chantier en minutes-jeu (avec multiplicateur)
-export const buildTime = (id, lvl) => MODULES[id].time(lvl) * BUILD_TIME_MULT;
+// Durée réelle (ticks = secondes) du chantier d'un module au niveau lvl (cf. PACING)
+export const buildTime = (id, lvl) => MODULES[id].time(lvl);
+
+// Calendrier affiché : « Jour N » = jours réels depuis la fondation (temps simulé).
+// → { jour, heure, minute } ; jour commence à 1.
+export function calendarOf(gameMin) {
+  const t = Math.max(0, Math.floor(Number(gameMin) || 0));
+  return {
+    jour: Math.floor(t / PACING.JOUR) + 1,
+    heure: Math.floor((t % PACING.JOUR) / PACING.HEURE),
+    minute: Math.floor((t % PACING.HEURE) / PACING.MINUTE)
+  };
+}
 
 // Capacité équipage totale (utilisée plus tard)
 export function crewCap() {
@@ -202,16 +281,52 @@ export function crewCap() {
   return c;
 }
 
-// Vérifie prérequis pour upgrade vers nextLevel
+// ---- Chantiers et file d'attente (V1) ----
+// S.build = chantier en cours ; S.buildQueue = chantiers suivants (BUILD_QUEUE_MAX au
+// plus), coût débité à l'ajout, remboursé à l'annulation dans la limite du stockage.
+// Un niveau en file compte pour les prérequis et le niveau suivant proposé.
+export const BUILD_QUEUE_MAX = PACING.BUILD_QUEUE_MAX;
+
+// Niveau qu'aura un module une fois le chantier en cours et la file terminés
+export function plannedLevel(id) {
+  let lvl = S.modules[id]?.level || 0;
+  if (S.build?.id === id) lvl = Math.max(lvl, S.build.targetLevel);
+  for (const q of S.buildQueue || []) if (q.id === id) lvl = Math.max(lvl, q.targetLevel);
+  return lvl;
+}
+
+function payCost(cost) {
+  for (const k in cost) {
+    if (k === 'datacubes_alien') S.alienDatacubes = (S.alienDatacubes || 0) - cost[k];
+    else S.res[k] -= cost[k];
+  }
+}
+
+// Rembourse un coût dans la limite du stockage (ne réduit jamais un stock existant)
+export function refundCost(cost, frac = 1) {
+  const caps = capsAll();
+  for (const k in cost || {}) {
+    const amount = Math.floor((cost[k] || 0) * frac);
+    if (amount <= 0) continue;
+    if (k === 'datacubes_alien') { S.alienDatacubes = (S.alienDatacubes || 0) + amount; continue; }
+    const cur = S.res[k] || 0;
+    S.res[k] = Math.max(cur, Math.min(caps[k] ?? Infinity, cur + amount));
+  }
+}
+
+// Vérifie si le niveau suivant (après le chantier en cours et la file) peut être
+// lancé ou mis en file. → { ok, why } ou { ok, cost, time, nextLevel, queued }
 export function canBuild(id) {
   const def = MODULES[id];
   if (!def) return { ok:false, why:'Module inconnu' };
-  const cur = S.modules[id]?.level || 0;
-  const next = cur + 1;
+  const next = plannedLevel(id) + 1;
   const maxLvl = def.maxLevel + (techEffectsAccumulated().moduleMaxLevelDelta[id] || 0);
-  if (next > maxLvl) return { ok:false, why:`Niveau max atteint` };
-  if (S.build) return { ok:false, why:'Chantier déjà en cours' };
-  
+  if (next > maxLvl) return { ok:false, why: plannedLevel(id) > (S.modules[id]?.level || 0) ? 'Niveau max atteint (en file)' : 'Niveau max atteint' };
+  const busy = !!S.build;
+  if (busy && (S.buildQueue || []).length >= BUILD_QUEUE_MAX) {
+    return { ok:false, why:`File de chantiers pleine (${BUILD_QUEUE_MAX})` };
+  }
+
   // 0.25 : module tier 2 — requiert une tech débloqueuse
   if (def.requireTech) {
     if (!S.techCompleted || !S.techCompleted[def.requireTech]) {
@@ -219,10 +334,10 @@ export function canBuild(id) {
       return { ok:false, why:`Requiert la tech ${techNom}` };
     }
   }
-  
+
   const req = def.prereq(next);
   for (const k in req) {
-    if ((S.modules[k]?.level || 0) < req[k]) {
+    if (plannedLevel(k) < req[k]) {
       return { ok:false, why:`Requiert ${MODULES[k].nom} niv ${req[k]}` };
     }
   }
@@ -239,30 +354,90 @@ export function canBuild(id) {
       return { ok:false, why:`Ressources insuffisantes (${RES_LABELS[k]})` };
     }
   }
-  return { ok:true, cost, time: buildTime(id, next), nextLevel: next };
+  return { ok:true, cost, time: buildTime(id, next), nextLevel: next, queued: busy };
 }
 
-// Lance la construction
-export function startBuild(id) {
+function beginBuild(id, targetLevel, cost) {
+  S.build = { id, targetLevel, totalMin: buildTime(id, targetLevel), doneMin: 0, cost: { ...cost } };
+}
+
+// Lance le chantier, ou le met en file si un chantier est en cours. → { ok, why, queued }
+export function enqueueBuild(id) {
   const r = canBuild(id);
-  if (!r.ok) { toast(r.why); return; }
-  for (const k in r.cost) {
-    // 0.25 : datacubes_alien dans S.alienDatacubes
-    if (k === 'datacubes_alien') {
-      S.alienDatacubes = (S.alienDatacubes || 0) - r.cost[k];
-    } else {
-      S.res[k] -= r.cost[k];
-    }
+  if (!r.ok) return { ok: false, why: r.why };
+  payCost(r.cost);
+  const nom = MODULES[id].nom;
+  if (!S.build) {
+    beginBuild(id, r.nextLevel, r.cost);
+    const action = r.nextLevel === 1 ? 'Construction' : 'Amélioration';
+    log('neutral', `${action} engagée : <em>${nom}</em> (niv ${r.nextLevel}). Durée estimée : ${fmtDuree(r.time)}.`);
+  } else {
+    if (!Array.isArray(S.buildQueue)) S.buildQueue = [];
+    S.buildQueue.push({ id, targetLevel: r.nextLevel, cost: { ...r.cost } });
+    log('neutral', `Chantier mis en file : <em>${nom}</em> (niv ${r.nextLevel}), ${S.buildQueue.length}ᵉ en attente.`);
   }
-  S.build = {
-    id,
-    targetLevel: r.nextLevel,
-    totalMin: r.time,
-    doneMin: 0
-  };
-  const action = r.nextLevel === 1 ? 'Construction' : 'Amélioration';
-  log('neutral', `${action} engagée : <em>${MODULES[id].nom}</em> (niv ${r.nextLevel}). Durée estimée : ${fmtMin(r.time)}.`);
   render();
+  return { ok: true, why: '', queued: r.queued };
+}
+
+// Compatibilité : l'interface historique appelle startBuild (qui met en file si besoin)
+export function startBuild(id) {
+  const r = enqueueBuild(id);
+  if (!r.ok) toast(r.why);
+  return r;
+}
+
+// Retire un chantier de la file (et les niveaux suivants du même module, qui en
+// dépendent) ; coût remboursé dans la limite du stockage. → { ok, why }
+export function cancelQueuedBuild(index) {
+  const q = S.buildQueue || [];
+  const item = q[index];
+  if (!item) return { ok: false, why: 'Chantier introuvable' };
+  const removed = q.filter((x, i) => i === index || (i > index && x.id === item.id && x.targetLevel > item.targetLevel));
+  S.buildQueue = q.filter(x => !removed.includes(x));
+  for (const x of removed) refundCost(x.cost);
+  log('neutral', `Chantier retiré de la file : <em>${MODULES[item.id]?.nom || item.id}</em> (niv ${item.targetLevel}). Ressources rendues.`);
+  render();
+  return { ok: true, why: '' };
+}
+
+// Annule le chantier en cours (remboursé dans la limite du stockage) ; la file
+// passe au suivant. Les niveaux suivants du même module en file sont annulés aussi.
+export function cancelBuild() {
+  const b = S.build;
+  if (!b) return { ok: false, why: 'Aucun chantier en cours' };
+  refundCost(b.cost || MODULES[b.id]?.cost(b.targetLevel) || {});
+  const later = (S.buildQueue || []).filter(x => x.id === b.id && x.targetLevel > b.targetLevel);
+  S.buildQueue = (S.buildQueue || []).filter(x => !later.includes(x));
+  for (const x of later) refundCost(x.cost);
+  S.build = null;
+  log('warn', `Chantier annulé : <em>${MODULES[b.id]?.nom || b.id}</em> (niv ${b.targetLevel}). Ressources rendues.`);
+  startNextQueuedBuild();
+  render();
+  return { ok: true, why: '' };
+}
+
+// Démarre le premier chantier valide de la file. Un chantier devenu impossible
+// (prérequis perdus, niveau max) est remboursé ; un module endommagé entre-temps
+// reconstruit d'abord son niveau perdu.
+function startNextQueuedBuild() {
+  const q = S.buildQueue || [];
+  while (!S.build && q.length) {
+    const item = q.shift();
+    const def = MODULES[item.id];
+    const cur = S.modules[item.id]?.level || 0;
+    const target = Math.min(item.targetLevel, cur + 1);
+    const maxLvl = (def?.maxLevel || 0) + (techEffectsAccumulated().moduleMaxLevelDelta[item.id] || 0);
+    const req = def ? def.prereq(target) : {};
+    const missing = def ? Object.keys(req).find(k => (S.modules[k]?.level || 0) < req[k]) : 'module';
+    if (!def || target <= cur || target > maxLvl || missing) {
+      refundCost(item.cost);
+      log('warn', `Chantier en file abandonné : <em>${def?.nom || item.id}</em> (niv ${item.targetLevel})${missing && def ? ` — requiert ${MODULES[missing]?.nom || missing} niv ${req[missing]}` : ''}. Ressources rendues.`);
+      continue;
+    }
+    beginBuild(item.id, target, item.cost);
+    log('neutral', `Chantier suivant engagé : <em>${def.nom}</em> (niv ${target}). Durée estimée : ${fmtDuree(S.build.totalMin)}.`);
+  }
 }
 
 // Termine la construction en cours
@@ -275,7 +450,7 @@ export function finishBuild() {
   if (def.flag) S.flags[def.flag] = true;
   // Init du compteur de recrutement à la première construction de la Balise
   if (b.id === 'balise_recrutement' && b.targetLevel === 1) {
-    S.nextRecruitMin = S.meta.gameMin + 30;  // premier candidat dans 30 min jeu
+    S.nextRecruitMin = S.meta.gameMin + 30 * PACING.MINUTE;  // premier candidat dans ~30 min
     log('success', "<em>Balise de recrutement</em> en ligne. Premier signal attendu sous peu.");
   } else {
     log('success', `<em>${def.nom}</em> opérationnel au niveau ${b.targetLevel}.`);
@@ -284,7 +459,9 @@ export function finishBuild() {
   notif.buildDone(def.nom, b.targetLevel);
   S.build = null;
   // Nouveau bâtiment / niveau supérieur = nouveaux postes ouverts → tente l'auto-affectation
-  autoAssignAllFreeMembers();
+  autoAssignAllFreeMembers({ respectChoice: true });
+  // V1 : la file prend le relais
+  startNextQueuedBuild();
 }
 
 // ============================================================
@@ -476,7 +653,37 @@ export function genGalaxy(masterSeed) {
   }
   // Trie par distance pour l'affichage
   systems.sort((a, b) => a.distance - b.distance);
+  ensureStartingNeighbours(systems, masterSeed);
   return { seed: masterSeed, systems };
+}
+
+// V1 — voisinage de départ garanti (déterministe pour une graine donnée) :
+//  - au moins un système cartographié dès l'atterrissage (première expédition) ;
+//  - une civilisation active à portée de la vedette (anneau 0,8-1,8 pc), dont le
+//    système est connu d'emblée (signal capté à l'atterrissage) : une faction est
+//    rencontrable sans antenne.
+function ensureStartingNeighbours(systems, masterSeed) {
+  if (!systems.length) return;
+  const rng = rngFor(masterSeed, 'voisinage');
+  if (!systems.some(s => s.scanned)) systems[0].scanned = true;
+  const near = systems.filter(s => s.distance <= 1.8);
+  const civ = near.find(s => s.bodies.some(b => b.vie === 'civ_active'));
+  if (civ) { civ.scanned = true; return; }
+  const ring = systems.filter(s => s.distance >= 0.8 && s.distance <= 1.8);
+  const pool = ring.length ? ring : systems.slice(1, 4);
+  const sys = pool[Math.floor(rng() * Math.min(3, pool.length))] || systems[0];
+  let body = sys.bodies.find(b => b.type === 'planete') || sys.bodies[0];
+  if (body.type !== 'planete') {
+    // Une station, une épave ou une lune deviennent une planète tempérée habitée
+    body.type = 'planete';
+    if (!BIOMES[body.biome]) body.biome = 'toundra';
+    body.gravite = 'standard';
+    delete body.flavor;
+  }
+  body.vie = 'civ_active';
+  body.atmosphere = 'respirable';
+  if (body.danger === 'ia_hostile' || body.danger === 'anomalie' || body.danger === 'pathogene') body.danger = 'aucun';
+  sys.scanned = true;
 }
 
 // ---- Composition de description narrative ----
@@ -640,8 +847,8 @@ export function genCandidate() {
     age: 22 + Math.floor(Math.random() * 36),
     origin: rollPick(ORIGINS),
     stats, skills, traits,
-    salary,                  // bio par cycle (24h jeu)
-    spawnedAt: S.meta.gameMin,
+    salary,                  // points de prétention : salaryPerDay() = biomasse par jour réel
+    spawnedAt: S?.meta?.gameMin || 0,
     moral: 70 + Math.floor(Math.random() * 20),
     loyaute: 40 + Math.floor(Math.random() * 30)
   };
@@ -720,8 +927,28 @@ function tickResources(silent) {
     }
     S.res[k] = next;
   }
-  if (energyShortfall && !silent && tickCount % 30 === 0) {
-    log('warn', "Pénurie d'énergie : modules dépendants en sous-régime.");
+  // V1 : la pénurie d'énergie a un effet réel (computeRates : modules consommateurs
+  // ralentis) ; on le signale au journal une fois par épisode de pénurie.
+  if (energyRatio() < 0.999) {
+    if (!S.flags.energyShortSince) {
+      S.flags.energyShortSince = S.meta.gameMin;
+      if (!silent) log('warn', `Pénurie d'énergie : les modules consommateurs tournent à ${Math.round(_energyRatio * 100)} %.`);
+    }
+  } else if (S.flags.energyShortSince && (S.res.energie || 0) > 1) {
+    delete S.flags.energyShortSince;
+  }
+  void energyShortfall;
+  // V1 : biomasse à zéro alors que la colonie consomme → vivres et salaires
+  // impayés : le moral baisse peu à peu.
+  if ((S.res.biomasse || 0) <= 0.001 && rate.biomasse < 0) {
+    if (!S.flags.unpaidSince) {
+      S.flags.unpaidSince = S.meta.gameMin;
+      if (!silent) log('warn', "Plus de biomasse : vivres rationnés et salaires impayés. Le moral de l'équipage baisse.");
+    }
+    const loss = PACING.UNPAID_MORAL_PER_HOUR / PACING.HEURE;
+    for (const m of S.crew) if (m.statut !== 'mort') m.moral = Math.max(0, (m.moral || 0) - loss);
+  } else if (S.flags.unpaidSince && (S.res.biomasse || 0) > 1) {
+    delete S.flags.unpaidSince;
   }
 }
 
@@ -772,7 +999,7 @@ function tickMemberStatuts() {
 
 // Incidents — taux réduit en mode silencieux (rattrapage)
 function tickIncidentRoll(silent) {
-  if (S.crew.length === 0 || !S.modules.habitat) return;
+  if (!S.modules.habitat || !S.crew.some(m => m.statut !== 'mort')) return;
   const incidentRate = silent ? OFFLINE_INCIDENT_RATE : 1.0;
   if (Math.random() < incidentRate) rollColonyIncident(silent);
 }
@@ -794,11 +1021,20 @@ function tickScan(silent) {
   }
 }
 
+// Recrutement (V1) : lent — ~1 candidat toutes les 5 h au niveau 1 de la balise,
+// plus vite aux niveaux supérieurs ; 2 à 3 candidats en attente au plus.
+export function recruitIntervalTicks(lvl = S?.modules?.balise_recrutement?.level || 1) {
+  return Math.round(PACING.RECRUIT_INTERVAL / (1 + PACING.RECRUIT_LEVEL_SPEEDUP * (Math.max(1, lvl) - 1)));
+}
+export function recruitQueueMax(lvl = S?.modules?.balise_recrutement?.level || 1) {
+  const t = PACING.RECRUIT_QUEUE;
+  return t[Math.max(1, Math.min(t.length - 1, lvl))];
+}
 function tickRecruitment(silent) {
   if (!S.modules.balise_recrutement || !S.flags.recrutement) return;
   const lvl = S.modules.balise_recrutement.level;
-  const intervalMin = 1440 / lvl;
-  const maxQueue = 2 * lvl;
+  const interval = recruitIntervalTicks(lvl);
+  const maxQueue = recruitQueueMax(lvl);
   if (S.candidates.length < maxQueue && S.meta.gameMin >= S.nextRecruitMin) {
     const c = genCandidate();
     S.candidates.push(c);
@@ -806,11 +1042,11 @@ function tickRecruitment(silent) {
       log('neutral', `Signal reçu : <em>${esc(c.name)}</em> (${esc(c.origin.label)}) propose ses services.`);
       notif.candidate(c.name, c.origin.label);
     }
-    const variance = intervalMin * 0.3 * (Math.random() * 2 - 1);
-    S.nextRecruitMin = S.meta.gameMin + intervalMin + variance;
+    const variance = interval * PACING.RECRUIT_JITTER * (Math.random() * 2 - 1);
+    S.nextRecruitMin = S.meta.gameMin + interval + variance;
   }
   if (S.nextRecruitMin < S.meta.gameMin && S.candidates.length >= maxQueue) {
-    S.nextRecruitMin = S.meta.gameMin + intervalMin;
+    S.nextRecruitMin = S.meta.gameMin + interval;
   }
 }
 
@@ -863,6 +1099,7 @@ export function tickOnce(opts = {}) {
   step('missions diplomatiques', tickDiplomaticMissions);
   step('formations', tickTraining);
   step('traitements', tickTreatments);
+  step('soins automatiques', tickAutoCare);            // V1 : infirmerie avec soignant
   step('statuts médicaux', tickMemberStatuts);
   step('incidents', tickIncidentRoll, silent);
   step('antenne', tickScan, silent);
@@ -1020,17 +1257,7 @@ export function acceptCandidate(id) {
   }
   S.candidates.splice(idx, 1);
   // Conversion candidat → membre actif
-  const member = {
-    ...c,
-    id: 'm_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
-    joinedAt: S.meta.gameMin,
-    birthGameMin: S.meta.gameMin - (c.age || 30) * 43200,  // 0.18 — vieillissement
-    statut: 'libre',          // libre | formation | infirmerie | expedition | mort
-    sante: 100,
-    statuts: [],              // [{ key, since, revealed, severityNow }]
-    sequels: [],              // séquelles permanentes [{ key, since }]
-    blessures: []             // legacy, gardé pour compat
-  };
+  const member = candidateToMember(c, S.meta.gameMin);
   S.crew.push(member);
   log('success', `<em>${esc(member.name)}</em> rejoint l'avant-poste. Origine : ${esc(member.origin?.label || 'inconnue')}.`);
   // 0.26 : notification dédiée
@@ -1253,7 +1480,7 @@ function normalizeContainers(d) {
   const gm = d.meta.gameMin;
   for (const k of ['crew', 'candidates', 'training', 'treatments', 'fleet', 'expeditions', 'expHistory',
     'research', 'fabrication', 'diplomaticMissions', 'activeBuffs', 'historicalMarks',
-    'pendingChainIncidents', 'pendingDecisions', 'journal']) {
+    'pendingChainIncidents', 'pendingDecisions', 'journal', 'buildQueue', 'researchQueue']) {
     if (!Array.isArray(d[k])) d[k] = [];
   }
   for (const k of ['flags', 'modules', 'assignments', 'discoveries', 'techCompleted', 'relations', 'arcs',
@@ -1273,7 +1500,7 @@ function normalizeContainers(d) {
   if (typeof d.nextIncidentMin !== 'number') d.nextIncidentMin = gm + 60 * 8;
   if (typeof d.alienDatacubes !== 'number') d.alienDatacubes = 0;
   // 0.19 : événements de colonie — cooldowns
-  if (typeof d.nextEventMin !== 'number') d.nextEventMin = gm + 24 * 60;
+  if (typeof d.nextEventMin !== 'number') d.nextEventMin = gm + PACING.EVENT_FIRST;
   if (typeof d.lastHommageMin !== 'number') d.lastHommageMin = -99999;
   if (typeof d.lastVisitorMin !== 'number') d.lastVisitorMin = -99999;
   if (typeof d.lastMerchantMin !== 'number') d.lastMerchantMin = -99999;
@@ -1322,9 +1549,18 @@ function normalizeCrew(d) {
   const gm = d.meta.gameMin;
   for (const m of d.crew) {
     if (typeof m.sante !== 'number') m.sante = 100;
-    // 0.18 : vieillissement
-    if (typeof m.birthGameMin !== 'number') m.birthGameMin = gm - (m.age || 30) * 43200;  // 30j × 24h × 60min
+    // 0.18 : vieillissement (échelle de l'année propre au format de la sauvegarde :
+    // l'étape de migration « temps réel » convertit ensuite les anciennes années)
+    if (typeof m.birthGameMin !== 'number') m.birthGameMin = gm - (m.age || 30) * yearScaleOf(d);
   }
+}
+
+// Durée d'une année dans le format de la sauvegarde : 30 jours de jeu (43 200 ticks)
+// avant le schéma 2, 7 jours réels ensuite.
+const LEGACY_YEAR = 30 * 24 * 60;
+function yearScaleOf(d) {
+  const schema = Number.isInteger(d?.meta?.schemaVersion) ? d.meta.schemaVersion : 0;
+  return schema < 2 ? LEGACY_YEAR : YEAR_IN_GAME_MIN;
 }
 
 // Galaxie : générée la première fois qu'on charge une save antérieure à 0.5
@@ -1435,11 +1671,88 @@ function migratePosteInfo(d) {
   }
 }
 
+// ---- Schéma 2 (V1) : rythme en temps réel ----
+// Les travaux en cours gardent leur avancement (fraction faite) et prennent la
+// durée de la V1 ; rien n'est perdu. Âges et ancienneté sont conservés en années.
+const scaleWork = (w, newTotal) => {
+  if (!w || !Number.isFinite(newTotal) || newTotal <= 0) return;
+  const total = Number(w.totalMin) || 0;
+  const frac = total > 0 ? Math.max(0, Math.min(1, (Number(w.doneMin) || 0) / total)) : 0;
+  w.totalMin = Math.round(newTotal);
+  w.doneMin = frac * w.totalMin;
+};
+
+function migrateRealTimeWork(d) {
+  const gm = d.meta.gameMin || 0;
+  // Chantier de module
+  if (d.build && MODULES[d.build.id]) {
+    scaleWork(d.build, MODULES[d.build.id].time(d.build.targetLevel));
+    if (!d.build.cost) d.build.cost = MODULES[d.build.id].cost(d.build.targetLevel);
+  }
+  // Recherches, fabrications : unités du catalogue × TIME_UNIT (au lieu de × 3)
+  for (const r of d.research) { const t = TECH_TREE[r?.techId]; if (t) scaleWork(r, t.cost.time * BUILD_TIME_MULT); }
+  for (const f of d.fabrication) { const fab = FABRICATIONS[f?.fabId]; if (fab) scaleWork(f, fab.time * BUILD_TIME_MULT); }
+  // Vaisseau en chantier
+  if (d.vesselBuild && VESSELS[d.vesselBuild.type]) scaleWork(d.vesselBuild, VESSELS[d.vesselBuild.type].buildHours * 60 * BUILD_TIME_MULT);
+  // Formations (heures du programme × 60 → × TRAINING_UNIT) et soins (catalogue × 10)
+  for (const t of d.training) if (t) scaleWork(t, (Number(t.totalMin) || 0) * PACING.TRAINING_UNIT / 60);
+  for (const t of d.treatments) if (t) scaleWork(t, (Number(t.totalMin) || 0) * 10);
+  // Expéditions en vol : nouvelle durée du trajet pour la même distance, avancement gardé
+  for (const e of d.expeditions) {
+    if (!e || !(Number(e.oneWayMin) > 0)) continue;
+    const vessel = d.fleet.find(v => v.id === e.vesselId);
+    const speed = VESSELS[vessel?.type]?.speed || 1;
+    const dist = Number(e.bodyDistance) || 0;
+    const oldOneWay = Number(e.oneWayMin);
+    const bonus = dist > 0 ? oldOneWay / (dist * 180 * speed) : 1;   // bonus du hangar et des techs de l'époque
+    const newOneWay = Math.round(PACING.EXPED_BASE + dist * PACING.EXPED_PER_PC * speed * (Number.isFinite(bonus) && bonus > 0 ? bonus : 1));
+    if (e.phase === 'aller' || e.phase === 'retour') e.elapsedMin = (Number(e.elapsedMin) || 0) * newOneWay / oldOneWay;
+    e.oneWayMin = newOneWay;
+    e.onSiteMin = PACING.EXPED_ONSITE;
+  }
+  // Missions diplomatiques : 1-2 jours de jeu → 4-8 h réelles, avancement gardé
+  for (const mis of d.diplomaticMissions) {
+    if (!mis || !(Number(mis.duration) > 0)) continue;
+    const frac = Math.max(0, Math.min(1, (gm - (Number(mis.startedAt) || gm)) / mis.duration));
+    mis.duration = Math.round(mis.duration * 10);
+    mis.startedAt = gm - frac * mis.duration;
+  }
+}
+
+function migrateRealTimeCrew(d) {
+  const gm = d.meta.gameMin || 0;
+  for (const m of d.crew) {
+    // Âge conservé : années de 30 jours de jeu → années de 7 jours réels
+    // (un défunt garde l'âge qu'il avait à sa mort)
+    if (typeof m.birthGameMin === 'number') {
+      const ref = (m.statut === 'mort' && typeof m.diedAt === 'number') ? m.diedAt : gm;
+      m.birthGameMin = ref - ((ref - m.birthGameMin) / LEGACY_YEAR) * YEAR_IN_GAME_MIN;
+    }
+    // Ancienneté conservée (années dans le poste)
+    if (m.posteInfo && typeof m.posteInfo.depuis === 'number') {
+      m.posteInfo.depuis = gm - ((gm - m.posteInfo.depuis) / LEGACY_YEAR) * YEAR_IN_GAME_MIN;
+    }
+  }
+}
+
+// Minuteries remises à l'échelle réelle (l'ancien rythme les plaçait à quelques minutes)
+function migrateRealTimeTimers(d) {
+  const gm = d.meta.gameMin || 0;
+  d.nextIncidentMin = gm + PACING.INCIDENT_GAP_MIN / 2;
+  d.nextEventMin = gm + PACING.HEURE;
+  if ((d.modules?.balise_recrutement?.level || 0) > 0) d.nextRecruitMin = gm + 30 * PACING.MINUTE;
+}
+
 const MIGRATIONS = [
   { to: 1, steps: [
     ['incidents en file', migrateQueuedIncidents],
     ['champs obsolètes', migrateDeadFields],
     ['ancienneté des postes', migratePosteInfo],
+  ] },
+  { to: 2, steps: [
+    ['travaux en cours (temps réel)', migrateRealTimeWork],
+    ['âges et ancienneté (temps réel)', migrateRealTimeCrew],
+    ['minuteries (temps réel)', migrateRealTimeTimers],
   ] },
 ];
 
@@ -1545,7 +1858,7 @@ export function exportRawSave(raw) {
 }
 
 function describeSave(d) {
-  const day = Math.floor((d.meta?.gameMin || 0) / 1440) + 1;
+  const day = calendarOf(d.meta?.gameMin || 0).jour;
   const alive = (d.crew || []).filter(m => m && m.statut !== 'mort').length;
   return `« ${esc(d.meta?.colonyName || 'Avant-poste')} » — jour ${day}, ${alive} colon${alive > 1 ? 's' : ''}`;
 }
@@ -1618,6 +1931,7 @@ export function resetGame() {
       cancelCatchUp();
       try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* stockage inaccessible */ }
       S = freshState();
+      autoAssignAllFreeMembers();   // V1 : l'équipage de départ prend ses postes
       seedJournal();
       _ticksSinceSave = 0;
       markSessionStart();

@@ -120,8 +120,13 @@ try {
     const dt = (Date.now() - t0) / 1000;
     const r = await page.evaluate(async () => {
       const { S } = await import('./src/state.js');
+      const app = await import('./src/app.js');
       const gaps = window.__gaps.slice(5);
+      const rep = app.getLastReturnReport();
       return {
+        report: rep && { faits: Array.isArray(rep.faits), deces: Array.isArray(rep.deces), ev: rep.evenementRetour, enAttente: rep.enAttente },
+        pendingKinds: S.pendingDecisions.map(d => d.kind + ':' + d.refId),
+        minorQueued: S.pendingDecisions.filter(d => d.kind === 'incident' && (app.INCIDENTS[d.refId]?.severity || 1) <= 1 && d.offline).length,
         gm: S.meta.gameMin, pending: S.pendingDecisions.length,
         maxGap: Math.max(...gaps), incidentModals: window.__incidentModals, progress: window.__progressSeen,
         modal: document.querySelector('#modal').textContent,
@@ -132,7 +137,10 @@ try {
     check(simulated >= 43200 && simulated <= 43200 + dt + 5, `12 h simulées sans double comptage (+${simulated} min de jeu, ${dt.toFixed(1)} s réelles)`);
     check(r.progress, 'barre de progression affichée pendant le rattrapage');
     check(r.maxGap < 250, `page réactive pendant le rattrapage (blocage max ${r.maxGap.toFixed(0)} ms)`);
-    check(r.incidentModals === 0 && r.pending === 0, 'aucune fenêtre d\'incident ouverte ni mise en attente');
+    check(r.incidentModals === 0 && r.pending <= 3, `aucune fenêtre d'incident pendant le rattrapage ; ${r.pending} décision(s) gardée(s) pour le retour (${r.pendingKinds.join(', ')})`);
+    check(r.minorQueued === 0, 'hors ligne, les incidents mineurs ne sont pas mis en attente');
+    check(r.report?.faits && r.report?.deces && r.report.enAttente === r.pending, 'rapport de retour : récit et données (getLastReturnReport)');
+    check(!r.report?.ev || r.pendingKinds.some(k => k.startsWith('event:')), `événement garanti au retour (${r.report?.ev || 'aucun éligible'})`);
     check(/Incidents gérés automatiquement/.test(r.modal) && r.autoLogs > 0, `incidents appliqués automatiquement (${r.autoLogs} entrées de journal)`);
     b.noErrors(page, 'aucune erreur de page');
     await ctx.close();

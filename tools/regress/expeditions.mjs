@@ -153,7 +153,7 @@ try {
     };
     sec('f3', () => {
       const r = { first: visit(), second: visit() };
-      S.meta.gameMin += 31 * 1440;   // le site se reconstitue en 30 jours
+      S.meta.gameMin += 3 * 86400 + 60;   // V1 : le site se reconstitue en 3 jours réels (PACING.LOOT_RECOVERY)
       r.later = visit();
       return r;
     });
@@ -242,7 +242,7 @@ try {
   if (res.f3?.error) fail('exception : ' + res.f3.error);
   check(first.mult === 1 && first.metal === 20 && first.repDelta === 2 && first.back, `1re visite : butin complet (métal ${first.metal}), réputation +${first.repDelta}`);
   check(second.mult < 0.3 && second.metal > 0 && second.metal <= 6 && second.repDelta === 0 && second.back, `2e visite : butin réduit (×${second.mult?.toFixed(2)}, métal ${second.metal}), réputation +${second.repDelta}`);
-  check(later.mult === 1 && later.metal === 20 && later.repDelta === 2, `après 31 jours : site reconstitué (métal ${later.metal}, réputation +${later.repDelta})`);
+  check(later.mult === 1 && later.metal === 20 && later.repDelta === 2, `après 3 jours : site reconstitué (métal ${later.metal}, réputation +${later.repDelta})`);
 
   console.log('M14 — jets risqués');
   check(res.m14 && /^Jet Vigueur/.test(res.m14) && !/undefined/.test(res.m14), `journal : « ${res.m14} »`);

@@ -49,19 +49,22 @@ async function prepare() {
     window.__intervals.forEach(id => clearInterval(id));
     const st = await import('./src/state.js');
     const app = await import('./src/app.js');
+    window.__YEAR = (await import('./src/constants.js')).YEAR_IN_GAME_MIN;
     window.__t = {
       st, app,
       fresh() {
         st.setS(st.freshState());
         const S = st.S;
+        S.crew = []; S.fleet = [];  // V1 : sans l'équipage ni la vedette de départ
         S.nextEventMin = 1e12;      // pas d'événement de colonie parasite
+        S.nextIncidentMin = 1e12;
         S.autoAssign = false;
         S.res = { metal: 500, cristal: 500, energie: 500, biomasse: 500, datacubes: 200 };
         return S;
       },
       mk(over = {}) {
         const c = st.genCandidate();
-        const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * 43200,
+        const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * window.__YEAR,
           statut: 'libre', sante: 100, moral: 70, loyaute: 60, statuts: [], sequels: [], ...over };
         m.skills = { ...c.skills, ...(over.skills || {}) };
         st.S.crew.push(m);
@@ -93,17 +96,17 @@ try {
     const pat = mk({ statut: 'infirmerie' });
     const now = S.meta.gameMin;
     pat.statuts = [
-      { key: 'blessure_legere', since: now - (48 * 60 - 2), revealed: true, diagnosed: true, statMod: {} },
-      { key: 'infection', since: now - (72 * 60 - 30), revealed: true, diagnosed: true, statMod: {} }
+      { key: 'blessure_legere', since: now - (app.STATUTS.blessure_legere.untreated.afterMin - 2), revealed: true, diagnosed: true, statMod: {} },
+      { key: 'infection', since: now - (app.STATUTS.infection.untreated.afterMin - 30), revealed: true, diagnosed: true, statMod: {} }
     ];
     app.startTreatment(pat.id, 1);
     const started = S.treatments.length === 1 && S.treatments[0].statutKey === 'infection';
     ticks(10);   // la blessure légère guérit seule → l'infection passe à l'index 0
     const shifted = pat.statuts.length === 1 && pat.statuts[0].key === 'infection'
       && S.treatments.length === 1 && S.treatments[0].statusIdx === 0;
-    ticks(60);   // dépasse le délai de 72 h : le patient en traitement ne doit pas mourir
+    ticks(60);   // dépasse le délai mortel de l'infection : le patient en traitement ne doit pas mourir
     const alive = pat.statut !== 'mort';
-    ticks(8 * 60);
+    ticks(S.treatments[0]?.totalMin || 0);
     return { started, shifted, alive, cured: pat.statuts.length === 0 && pat.statut !== 'mort', noLeftover: S.treatments.length === 0, st: !!st };
   });
 
@@ -211,7 +214,7 @@ try {
     const m = mk();
     app.inflictStatus(m, 'mutation', 'test');
     const hiddenFirst = m.statuts[0]?.revealed === false && m.statuts[0]?.diagnosed === false;
-    S.meta.gameMin += 24 * 60;
+    S.meta.gameMin += app.STATUTS.mutation.revealAfter;
     app.progressMemberStatuts(m);
     return { hiddenFirst, revealedLater: m.statuts[0]?.revealed === true && m.statuts[0]?.diagnosed === true };
   });
@@ -221,7 +224,7 @@ try {
     const { app, fresh, mk } = window.__t;
     const S = fresh();
     const m = mk({ traits: ['survivant'] });
-    m.statuts = [{ key: 'parasite', since: S.meta.gameMin - 60 * 24 * 7 - 1, revealed: true, diagnosed: true, statMod: {} }];
+    m.statuts = [{ key: 'parasite', since: S.meta.gameMin - app.STATUTS.parasite.untreated.afterMin - 1, revealed: true, diagnosed: true, statMod: {} }];
     const orig = Math.random;
     Math.random = () => 0;                      // le Survivant « esquiverait » à coup sûr une exposition
     try { app.progressMemberStatuts(m); } finally { Math.random = orig; }
@@ -242,6 +245,58 @@ try {
     S.fleet.push({ id: 'v_med', type: 'vedette', name: 'Test', available: true });
     const r = app.canLaunchExpedition({ vesselId: 'v_med', bodyId: sys.bodies[0].id, crewIds: [docId] });
     return { treating: !!docId && app.isTreatingDoctor(docId), blocked: r.ok === false && /traitement/.test(r.why || '') ? true : r };
+  });
+
+  // V1 — délais mortels en heures réelles : une blessure grave tue en 12 h, pas en 24 min
+  await scenario('V1 : blessure grave mortelle après 12 h réelles (cause racontée)', () => {
+    const { app, fresh, mk, ticks } = window.__t;
+    const S = fresh();
+    const m = mk({ statut: 'libre' });
+    app.inflictStatus(m, 'blessure_grave', 'test');
+    ticks(2 * 3600);
+    const aliveAfter2h = m.statut !== 'mort';
+    S.meta.gameMin += app.STATUTS.blessure_grave.untreated.afterMin;
+    ticks(1);
+    return { delay12h: app.STATUTS.blessure_grave.untreated.afterMin === 12 * 3600, aliveAfter2h, dead: m.statut === 'mort',
+      cause: /Blessure grave/.test(m.deathCause || '') };
+  });
+
+  // V1 — soins en un geste : admission, diagnostic et traitement
+  await scenario('V1 : soigner() admet, diagnostique et traite', () => {
+    const { st, app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 3 };
+    S.flags.recherche = true;
+    const doc = mk({ skills: { medecine: 3 } });
+    app.assignMember(doc.id, 'infirmerie', 0);
+    const pat = mk({ statut: 'libre' });
+    pat.statuts = [{ key: 'blessure_grave', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    const orig = Math.random; Math.random = () => 0.99;
+    let r;
+    try { r = app.soigner(pat.id); } finally { Math.random = orig; }
+    const none = app.soigner(doc.id);
+    return { ok: r.ok === true && r.admis === true && r.traitements === 1, admitted: pat.statut === 'infirmerie',
+      treated: !!app.treatmentOf(pat.id, 'blessure_grave'), refusedHealthy: none.ok === false && !!none.why, st: !!st };
+  });
+
+  // V1 — soins automatiques : infirmerie avec soignant en poste, sans clic (même hors ligne)
+  await scenario('V1 : soins automatiques avec un soignant en poste', () => {
+    const { app, fresh, mk, ticks } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 2 };
+    S.modules.mine_surface = { level: 1 };
+    const doc = mk({ skills: { medecine: 2 } });
+    app.assignMember(doc.id, 'infirmerie', 0);
+    const worker = mk({ skills: { survie: 1 } });
+    app.assignMember(worker.id, 'mine_surface', 0);
+    worker.statuts = [{ key: 'infection', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    // Sans soignant : rien ne se passe
+    const S2pat = mk({ statut: 'libre' });
+    ticks(60);
+    const auto = worker.statut === 'infirmerie' && !!app.treatmentOf(worker.id, 'infection');
+    const reserved = app.memberAssignment(worker.id)?.modKey === 'mine_surface';
+    ticks(S.treatments[0]?.totalMin || 0);
+    return { auto, reserved, cured: worker.statuts.length === 0, backToWork: worker.statut === 'travail', idle: S2pat.statut === 'libre' };
   });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);

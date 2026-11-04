@@ -115,8 +115,24 @@ GitHub Pages : le dépôt est publié tel quel (https://shinjiebi.github.io/Drif
 
 ## Temps de jeu
 
-Une seconde réelle = une minute de jeu. Le temps écoulé pendant que l'onglet
-est caché ou l'app fermée est rattrapé au retour (12 h au plus), par tranches,
-avec une barre de progression. Pendant ce rattrapage, les incidents et
-événements sont résolus automatiquement avec le choix le plus prudent ; en
-jeu, ils attendent dans une file de décisions sauvegardée.
+Le jeu se joue en temps réel : **1 tick = 1 seconde réelle** (`S.meta.gameMin`
+compte les ticks, nom historique). Toutes les durées (chantiers, recherche,
+expéditions, soins, incidents, recrutement, vieillissement…) sont définies dans
+la table `PACING` de `src/constants.js`, source unique du rythme ; « Jour N »
+compte les jours réels depuis la fondation (`calendarOf()` dans `state.js`).
+
+Le temps écoulé pendant que l'onglet est caché ou l'app fermée est rattrapé au
+retour (12 h au plus), par tranches, avec une barre de progression. Pendant ce
+rattrapage, seuls les incidents mineurs sont résolus automatiquement ; les
+incidents sérieux et les événements attendent le joueur dans la file des
+décisions (3 au plus). Les chantiers (file de 3) et la recherche (1 en file)
+continuent, l'infirmerie soigne seule si un soignant est en poste, et un
+rapport « Reprise du contact » raconte l'absence.
+
+Outils de réglage :
+
+```sh
+node tools/check-economy.mjs                  # aucun coût au-dessus du stockage atteignable
+node tools/sim.mjs --scenario regulier --seed 1 --out r.json   # bot joueur (actif, regulier, rare)
+node tools/sim.mjs --report r1.json r2.json   # tableau comparatif
+```
