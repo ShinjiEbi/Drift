@@ -54,7 +54,8 @@ import {
   STATUTS, canTrain, canTreat, admitToInfirmary, dischargeMember, fillTemplate,
   startDiagnostic, startTreatment,
   memberCombatStats, combatAllyAction, combatEndTurn,
-  ancienneteBonus
+  ancienneteBonus,
+  pumpDecisions, canDiagnose, activeChronicle, currentChronicleEpisode
 } from './app.js';
 
 
@@ -369,19 +370,29 @@ function renderAlertBar() {
   if (txt.textContent !== label) txt.textContent = label;
 }
 
-// Collecte les alertes à afficher
+// Collecte les alertes à afficher. Chaque alerte peut porter une action
+// (clé de ALERT_ACTIONS) : un clic sur sa ligne, dans la modale, y mène.
 function collectAlerts() {
   const alerts = [];
-  // Incidents en cours (modale d'incident en attente)
-  if (S.pendingIncident) {
-    alerts.push({ text: 'Incident en attente de décision', critical: true, action: 'incident' });
+  // Décisions en attente (incidents, événements de colonie) : file persistée
+  // S.pendingDecisions = [{ kind: 'incident'|'event', … }] ; à défaut, les
+  // indicateurs S.pendingIncident / S.pendingColonyEvent.
+  const pending = Array.isArray(S.pendingDecisions) ? S.pendingDecisions : [
+    ...(S.pendingIncident ? [{ kind: 'incident' }] : []),
+    ...(S.pendingColonyEvent ? [{ kind: 'event' }] : []),
+  ];
+  if (pending.length > 0) {
+    const incidents = pending.filter(d => d?.kind === 'incident').length;
+    const text = pending.length > 1
+      ? `${pending.length} décisions en attente`
+      : incidents ? 'Incident en attente de décision' : 'Événement de colonie en attente de décision';
+    alerts.push({ text, critical: incidents > 0, action: 'decisions' });
   }
-  // Événements de colonie en attente
-  if (S.pendingColonyEvent) {
-    alerts.push({ text: 'Événement de colonie en cours', critical: false, action: 'event' });
-  }
-  // Blessés graves non soignés
-  const wounded = (S.crew || []).filter(m => m.statut !== 'mort' && m.statut !== 'infirmerie' && (m.statuts || []).some(s => s.severity === 'grave' || s.severity === 'critique'));
+  // Blessés graves non soignés (statut sévère ou mortel s'il n'est pas traité)
+  const wounded = (S.crew || []).filter(m => m.statut !== 'mort' && m.statut !== 'infirmerie' && (m.statuts || []).some(s => {
+    const def = STATUTS[s.key];
+    return def ? (def.severity >= 3 || def.untreated?.become === 'mort') : (s.severity === 'grave' || s.severity === 'critique');
+  }));
   if (wounded.length > 0) {
     alerts.push({ text: `${wounded.length} blessé${wounded.length > 1 ? 's' : ''} grave${wounded.length > 1 ? 's' : ''} sans soin`, critical: true, action: 'medical' });
   }
@@ -392,24 +403,22 @@ function collectAlerts() {
   if (hydroLevel === 0 && biomasse < biomasseCap * 0.3) {
     alerts.push({
       text: biomasse < 20
-        ? `Biomasse critique (${biomasse}). Construis une hydroponie d'urgence`
-        : `Biomasse basse (${biomasse}). Pense à construire une hydroponie`,
+        ? `Biomasse critique (${fmt(biomasse)}). Construis une hydroponie d'urgence`
+        : `Biomasse basse (${fmt(biomasse)}). Pense à construire une hydroponie`,
       critical: biomasse < 20,
       action: 'build_hydro'
     });
   }
-  // 0.28 — Effets temporaires actifs (buffs/debuffs)
+  // 0.28 — Effets temporaires (buffs/debuffs) : une ligne par effet
   if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
     const now = S.meta?.gameMin || 0;
-    const active = S.activeBuffs.filter(b => b.expiresAt > now);
-    if (active.length > 0) {
-      const minutesLeft = Math.min(...active.map(b => b.expiresAt - now));
-      const hoursLeft = Math.round(minutesLeft / 60);
-      const negCount = active.filter(b => b.value && b.value < 1).length;
-      const text = active.length === 1
-        ? `${active[0].label || 'Effet actif'} · ${hoursLeft}h`
-        : `${active.length} effets actifs · prochain ${hoursLeft}h`;
-      alerts.push({ text, critical: negCount > 0, action: 'effects' });
+    for (const b of S.activeBuffs.filter(b => b.expiresAt > now)) {
+      const remaining = Math.max(0, b.expiresAt - now);
+      alerts.push({
+        text: `${b.label || 'Effet en cours'} · ${Math.max(1, Math.round(remaining / 60))}h restantes`,
+        critical: b.type === 'prodMult' && b.value < 1,
+        action: 'effects'
+      });
     }
   }
 
@@ -420,7 +429,7 @@ function collectAlerts() {
   });
   if (disabled.length > 0) {
     const names = disabled.map(id => MODULES[id]?.nom || id).join(', ');
-    alerts.push({ text: `Modules hors service : ${names}`, critical: true, action: 'modules' });
+    alerts.push({ text: `Modules hors service : ${names}`, critical: true, action: 'modules', target: disabled[0] });
   }
 
   // Colons libres sans poste
@@ -434,21 +443,32 @@ function collectAlerts() {
     const labels = fullRes.map(k => RES_LABELS[k]).join(', ');
     alerts.push({ text: `Stocks saturés : ${labels}`, critical: false, action: 'stocks' });
   }
-  // 0.28 — Buffs/debuffs actifs
-  if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
-    const now = S.meta?.gameMin || 0;
-    const active = S.activeBuffs.filter(b => b.expiresAt > now);
-    for (const b of active) {
-      const remaining = Math.max(0, b.expiresAt - now);
-      const sign = b.type === 'prodMult' && b.value < 1 ? 'critical' : false;
-      alerts.push({
-        text: `${b.label || 'Effet en cours'} (${Math.round(remaining/60)}h restantes)`,
-        critical: sign,
-        action: null
-      });
-    }
-  }
   return alerts;
+}
+
+// Où mène chaque alerte. Renvoie null si l'action n'est pas disponible.
+const ALERT_ACTIONS = {
+  decisions: () => openNextDecision,
+  medical:  () => () => gotoView('crew', S.modules.infirmerie ? 'soins' : 'personnel'),
+  build_hydro: () => () => gotoView('modules', 'construction', '#modulesList .module[data-id="hydroponie"]'),
+  effects:  () => () => gotoView('overview', null, '#resourcesGrid'),
+  modules:  a => () => gotoView('modules', 'construction', `#modulesList .module[data-id="${CSS.escape(a.target || '')}"]`),
+  assign:   () => () => gotoView('modules', 'assignments'),
+  stocks:   () => () => gotoView('overview', null, '#resourcesGrid'),
+};
+// Ré-affiche la prochaine décision en attente (après fermeture de la liste)
+function openNextDecision() {
+  try { pumpDecisions(); } catch (err) { console.error('[alertes] pumpDecisions :', err); }
+}
+// Affiche une vue et y fait défiler jusqu'à un élément (ou en haut)
+function gotoView(tab, sub, targetSel) {
+  selectTab(tab);
+  if (sub) selectSubtab(tab, sub);
+  requestAnimationFrame(() => {
+    const el = targetSel && document.querySelector(targetSel);
+    if (el) el.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    else window.scrollTo({ top: 0 });
+  });
 }
 
 // Modale qui liste toutes les alertes en détail
@@ -456,12 +476,15 @@ function showAlertsModal(alerts) {
   const m = $('#modal');
   const bg = $('#modalBg');
   if (!m || !bg) return;
-  const html = alerts.map(a => {
+  // Une ligne avec une destination devient un bouton : elle ferme la modale et y mène
+  const gos = alerts.map(a => (a.action && ALERT_ACTIONS[a.action]?.(a)) || null);
+  const html = alerts.map((a, i) => {
     const cls = a.critical ? 'critical' : '';
-    return `<div class="alert-row ${cls}">
-      <span class="alert-icon">${a.critical ? '⚠' : '◦'}</span>
-      <span class="alert-text">${esc(a.text)}</span>
-    </div>`;
+    const inner = `<span class="alert-icon" aria-hidden="true">${a.critical ? '⚠' : '◦'}</span>
+      <span class="alert-text">${esc(a.text)}</span>`;
+    return gos[i]
+      ? `<button type="button" class="alert-row ${cls}" data-alert-idx="${i}">${inner}<span class="alert-go" aria-hidden="true">›</span></button>`
+      : `<div class="alert-row ${cls}">${inner}</div>`;
   }).join('');
   m.classList.add('alerts-modal');
   m.innerHTML = `
@@ -473,9 +496,16 @@ function showAlertsModal(alerts) {
     </div>
   `;
   bg.classList.add('show');
-  $('#alertsClose')?.addEventListener('click', () => {
+  const close = () => {
     bg.classList.remove('show');
     m.classList.remove('alerts-modal');
+  };
+  $('#alertsClose')?.addEventListener('click', close);
+  m.querySelectorAll('[data-alert-idx]').forEach(row => {
+    row.addEventListener('click', () => {
+      close();
+      gos[Number(row.dataset.alertIdx)]?.();
+    });
   });
 }
 
@@ -1867,7 +1897,7 @@ function openResearchModal(techId) {
   if (e.expeditionAlienLootMult) effectsLines.push(`Loot ruines alien : ×${e.expeditionAlienLootMult.toFixed(2)}`);
   if (e.expeditionThreatBonus) effectsLines.push(`Menace effective : ${e.expeditionThreatBonus > 0 ? '+' : ''}${e.expeditionThreatBonus}`);
   if (e.expeditionCombatBonus) effectsLines.push(`Bonus combat équipage : +${e.expeditionCombatBonus}`);
-  if (e.expeditionToxicImmune) effectsLines.push(`Immunité aux atmosphères toxiques`);
+  if (e.expeditionToxicImmune) effectsLines.push(`Immunité aux contaminations en expédition`);
   if (e.vesselFuelMult) effectsLines.push(`Carburant expé : ×${e.vesselFuelMult.toFixed(2)}`);
   if (e.vesselSpeedMult) effectsLines.push(`Durée voyage : ×${e.vesselSpeedMult.toFixed(2)}`);
   if (e.scanRangeBonus) effectsLines.push(`Portée scan : +${e.scanRangeBonus}`);
@@ -2497,6 +2527,9 @@ function renderExpeditions() {
         .map(id => esc(S.crew.find(c => c.id === id)?.name || '?'))
         .join(', ');
 
+      // Chronique : séquence non linéaire, pas de compteur « scène n / N »
+      const isChron = !!exp.chronicleSceneId || exp.scenes?.[0] === '__chron_intro__';
+      const sceneLabel = isChron ? 'chronique' : `scène ${esc(Number(exp.sceneIdx) + 1)}/${exp.scenes.length}`;
       // Bouton Reprendre si on est sur place et qu'une décision est attendue
       let actionBtn = '';
       if (exp.phase === 'sur_place' && exp.awaitingChoice) {
@@ -2507,17 +2540,15 @@ function renderExpeditions() {
             ⚔ Combat en cours · ${roundLabel} · ${phase}
           </button>`;
         } else {
-          const sceneNum = esc(Number(exp.sceneIdx) + 1);
-          const sceneTotal = exp.scenes.length;
           actionBtn = `<button class="cta-btn" data-resume-exp="${esc(exp.id)}" style="margin-top:10px;padding:10px;font-size:11px;">
-            Reprendre la mission · scène ${sceneNum}/${sceneTotal}
+            Reprendre la mission · ${sceneLabel}
           </button>`;
         }
       }
 
       // Pour la phase sur_place, on n'affiche pas la barre puisque le temps ne progresse pas
       const progressHTML = exp.phase === 'sur_place'
-        ? `<div class="eprog"><div class="lbl">${exp.combat?.active ? `⚔ Combat · Round ${esc(exp.combat.round)}` : `Scène ${esc(Number(exp.sceneIdx) + 1)}/${exp.scenes.length} · décision attendue`}</div></div>`
+        ? `<div class="eprog"><div class="lbl">${exp.combat?.active ? `⚔ Combat · Round ${esc(exp.combat.round)}` : `${isChron ? 'Chronique' : `Scène ${esc(Number(exp.sceneIdx) + 1)}/${exp.scenes.length}`} · décision attendue`}</div></div>`
         : `<div class="eprog">
             <div class="bar" style="width:${pct}%"></div>
             <div class="lbl">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
@@ -2845,6 +2876,15 @@ function renderSceneOverlay() {
 
   // Progression : pastilles (cachées pour les scènes de chronique, séquence non-linéaire)
   const isChronScene = scene.chronicleEpisode || scene.id === '__chron_intro__';
+  // Titre : pour une chronique, son nom et celui de l'épisode (pas l'id technique)
+  let sceneTitle = String(scene.id).replace(/_/g, ' ');
+  if (isChronScene) {
+    const chron = activeChronicle(body);
+    const ep = currentChronicleEpisode(body);
+    const parts = [chron?.nom, ep?.title].filter(Boolean);
+    if (parts.length) sceneTitle = parts.join(' · ');
+    else if (scene.id === '__chron_intro__') sceneTitle = 'Chronique';
+  }
   const dots = isChronScene ? '<span class="chron-badge">CHRONIQUE</span>' : exp.scenes.map((_, i) => {
     if (i < exp.sceneIdx) return '<span class="dot done"></span>';
     if (i === exp.sceneIdx) return '<span class="dot current"></span>';
@@ -2946,8 +2986,8 @@ function renderSceneOverlay() {
   $('#sceneInner').innerHTML = `
     <div class="scene-header">
       <div class="sh-loc">${esc(sys?.name || '?')} › ${esc(body?.name || '?')}</div>
-      <div class="sh-title">${esc(String(scene.id).replace(/_/g, ' '))}</div>
-      <div class="sh-sub">${esc(vessel?.name || '?')} · scène ${esc(Number(exp.sceneIdx) + 1)} / ${exp.scenes.length}</div>
+      <div class="sh-title">${esc(sceneTitle)}</div>
+      <div class="sh-sub">${esc(vessel?.name || '?')}${isChronScene ? '' : ` · scène ${esc(Number(exp.sceneIdx) + 1)} / ${exp.scenes.length}`}</div>
       <div class="sh-progress">${dots}</div>
     </div>
     <div class="scene-body">${safeHTML(text)}</div>
@@ -3398,7 +3438,7 @@ function renderPersonCard(p, opts = {}) {
       <div class="pname">${esc(p.name)}</div>
       <div class="pmeta">${esc(displayAge)} ans</div>
     </div>
-    <div class="origin">${esc(p.origin?.label ?? '')}<small>${esc(p.origin?.notes ?? '')}</small></div>
+    <div class="origin">${esc(p.origin?.label || '')}<small>${esc(p.origin?.notes || '')}</small></div>
     <div class="stats-row">${statsHTML}</div>
     <div class="skills-row">${skillsHTML}</div>
     ${traitsHTML ? `<div class="traits">${traitsHTML}</div>` : ''}
@@ -3785,13 +3825,14 @@ function renderPatientCard(member, admitted) {
     patientActions = `<div class="patient-actions">
       <button class="discharge" data-act="discharge" data-mid="${esc(member.id)}">Faire sortir</button>
     </div>`;
-  } else if (statuts.length > 0 && member.statut === 'libre') {
+  } else if (statuts.length > 0 && ['libre', 'travail', 'formation'].includes(member.statut)) {
+    // Présent à la base (libre, à son poste — réservé pendant les soins — ou en formation)
     patientActions = `<div class="patient-actions">
       <button class="admit" data-act="admit" data-mid="${esc(member.id)}" ${canAdmit ? '' : 'disabled'}>
         ${canAdmit ? "Admettre à l'infirmerie" : 'Lits pleins'}
       </button>
     </div>`;
-  } else if (member.statut !== 'libre' && statuts.length > 0) {
+  } else if (statuts.length > 0) {
     patientActions = `<div class="patient-actions">
       <button disabled>Indisponible (${esc(member.statut)})</button>
     </div>`;
@@ -3851,17 +3892,14 @@ function renderStatusRow(member, status, idx, admitted) {
   let actionsHTML = '';
   if (admitted && !treatment) {
     if (isUnknown) {
-      // Bouton diagnostic
-      const det = def.detect;
-      const labOk = !det.needLab || S.flags.recherche;
-      const docOk = bestAvailableDoctor();
-      const cost = det.needLab ? '2 datacubes' : 'gratuit';
-      let tooltip = `Diag (${cost})`;
-      let dis = '';
-      if (!labOk) { dis = 'disabled'; tooltip = 'Labo requis'; }
-      else if (!docOk) { dis = 'disabled'; tooltip = 'Aucun médecin'; }
+      // Bouton diagnostic : désactivé avec la raison si l'examen est impossible
+      const r = canDiagnose(member.id, idx);
+      const costStr = r.ok
+        ? (Object.entries(r.cost || {}).map(([k, v]) => `${v} ${RES_LABELS[k] || k}`).join(' · ') || 'gratuit')
+        : '';
+      const label = r.ok ? `Diag (${costStr})` : (r.reason || 'Diagnostic impossible');
       actionsHTML = `<div class="statut-actions">
-        <button class="diagnose" data-act="diagnose" data-mid="${esc(member.id)}" data-s="${idx}" ${dis}>${tooltip}</button>
+        <button class="diagnose" data-act="diagnose" data-mid="${esc(member.id)}" data-s="${idx}" title="${esc(label)}" ${r.ok ? '' : 'disabled'}>${esc(label)}</button>
       </div>`;
     } else {
       // Bouton traitement
@@ -3870,7 +3908,7 @@ function renderStatusRow(member, status, idx, admitted) {
       const costStr = tdef ? Object.entries(tdef.cost).map(([k,v]) => `${RES_LABELS[k]} ${v}`).join(' · ') : '';
       let label = r.ok ? `Traiter (${costStr})` : esc(r.reason);
       actionsHTML = `<div class="statut-actions">
-        <button class="treat" data-act="treat" data-mid="${esc(member.id)}" data-s="${idx}" ${r.ok ? '' : 'disabled'}>${label}</button>
+        <button class="treat" data-act="treat" data-mid="${esc(member.id)}" data-s="${idx}" title="${label}" ${r.ok ? '' : 'disabled'}>${label}</button>
       </div>`;
     }
   } else if (!admitted && !isUnknown) {
@@ -4201,7 +4239,7 @@ export function showModal({ title, body, primaryLabel='OK', primaryClass='primar
     </div>
   `;
   bg.classList.add('show');
-  const close = () => bg.classList.remove('show');
+  const close = () => { bg.classList.remove('show'); m.className = 'modal'; };
   if (!hideCancel) $('#modalCancel').addEventListener('click', close);
   $('#modalOk').addEventListener('click', () => {
     const v = withInput ? $('#modalInput').value : null;
@@ -4269,6 +4307,8 @@ function onModalOpen() {
   }
 }
 function onModalClose() {
+  const m = $('#modal');
+  if (m) m.className = 'modal';
   syncInert();
   const back = _modalOpener;
   _modalOpener = null;
