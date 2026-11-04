@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tools/regress/fmt.mjs — test unitaire des formateurs de src/util.js (F1).
 // Usage : node tools/regress/fmt.mjs   (code de sortie 1 en cas d'échec)
-import { fmt, fmtMin } from '../../src/util.js';
+import { fmt, fmtMin, fmtDuree } from '../../src/util.js';
 
 const cases = [
   // [fonction, entrée, attendu]
@@ -20,6 +20,15 @@ const cases = [
   [fmtMin, -12, '0s'],
   [fmtMin, NaN, '—'],
   [fmtMin, undefined, '—'],
+  [fmtDuree, 0, '0 s'],
+  [fmtDuree, 45, '45 s'],
+  [fmtDuree, 59.2, '1 min'],
+  [fmtDuree, 720, '12 min'],
+  [fmtDuree, 3600, '1 h'],
+  [fmtDuree, 7500, '2 h 05'],
+  [fmtDuree, 86400, '1 j'],
+  [fmtDuree, 97200, '1 j 3 h'],
+  [fmtDuree, NaN, '—'],
   [fmt, 0, '0'],
   [fmt, 5.25, '5.3'],
   [fmt, 7, '7'],
