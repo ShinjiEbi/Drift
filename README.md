@@ -1,93 +1,113 @@
 # DRIFT — Avant-poste
 
-Jeu narratif de gestion de colonie spatiale, single-page app HTML/JS vanilla.
+Jeu narratif de gestion de colonie spatiale. Application web (PWA) en
+JavaScript vanilla, modules ES, **sans build** : les fichiers du dépôt sont
+servis tels quels.
 
-## Structure (modularisée R4)
+## Structure
 
 ```
-drift/
-├── index.html              ← squelette HTML minimal (232 l.)
-├── styles.css              ← tout le CSS (3581 l.)
-├── src/
-│   ├── constants.js        ← VERSION, multiplicateurs, libellés (83 l.)
-│   ├── util.js             ← RNG, $, $$, fmt, fmtMin (66 l.)
-│   ├── catalog.js          ← MODULES, VESSELS, ITEMS, BLUEPRINTS,
-│   │                          TECH_TREE, FABRICATIONS, SCENES,
-│   │                          BIOMES, TRAITS, etc. (1912 l.)
-│   ├── data-arcs-factions.js  ← ARCS, FACTION_TYPES (253 l.)
-│   ├── state.js            ← S, freshState, save, load, migrations,
-│   │                          galaxie, candidats, tickOnce (973 l.)
-│   ├── ui.js               ← render() et toutes les vues +
-│   │                          modales, helpers DOM, log, toast (3136 l.)
-│   └── app.js              ← logique de domaine (jobs, modules,
-│                              ressources, médical, expéditions,
-│                              événements, arcs, factions) (4096 l.)
-└── README.md
+index.html               squelette HTML (en-tête, onglets, vues, modale)
+styles.css               toute la mise en forme
+manifest.json            manifeste PWA
+sw.js                    service worker (cache hors-ligne versionné)
+fonts/                   polices hébergées localement (Newsreader, JetBrains Mono, licences OFL)
+icons/                   icônes PWA
+src/
+  constants.js           VERSION, multiplicateurs, libellés
+  util.js                RNG seedé, $/$$, formats, esc() (échappement HTML), uid()
+  catalog.js             données : MODULES, VESSELS, ITEMS, BLUEPRINTS, TECH_TREE,
+                         FABRICATIONS, SCENES, BIOMES, TRAITS, ENEMY_TYPES…
+  chronicles.js          chroniques planétaires (scènes, fins, personnages)
+  data-arcs-factions.js  ARCS et FACTION_TYPES
+  state.js               état S, temps de jeu, sauvegarde, migrations, galaxie
+  app.js                 logique : postes, médical, recherche, incidents, événements,
+                         arcs, diplomatie, expéditions, combat, démarrage
+  ui.js                  rendu des vues, modales, journal, toasts
+  notifications.js       notifications système
+  pwa.js                 enregistrement du service worker, bandeau de mise à jour,
+                         bouton d'installation
+tools/                   outils de développement (voir « Tests »)
 ```
 
-**Modules ES** avec imports/exports propres. Pas de build, pas de
-npm, juste un serveur HTTP local pour le dev.
+`app.js`, `state.js` et `ui.js` s'importent mutuellement. Les modules ES le
+permettent grâce aux *live bindings* ; `boot()` est différé pour s'exécuter
+une fois tous les modules évalués.
+
+La page applique une politique de sécurité (CSP) : pas de script inline, pas
+d'attribut `on…=`, pas de ressource externe. Toute chaîne venant de la
+sauvegarde (noms de colons, factions, systèmes…) doit passer par `esc()` avant
+d'être insérée en HTML.
 
 ## Lancer en local
 
-**VS Code Live Server** (recommandé)
-1. Installer l'extension `Live Server` (Ritwick Dey)
-2. Clic droit sur `index.html` → "Open with Live Server"
+Il faut un serveur HTTP (les modules ES ne marchent pas en `file://`).
 
-**Python** (terminal)
 ```sh
-cd drift
 python3 -m http.server 8000
 # puis ouvrir http://localhost:8000
 ```
 
-**Node.js** (terminal)
+Ou `npx serve`, ou l'extension VS Code « Live Server ».
+
+## Tests
+
+Les outils de développement ont besoin de Node 22 et de `npm ci`
+(le jeu lui-même n'en dépend pas).
+
 ```sh
-npx serve drift
+npm ci
+npm run lint          # ESLint (variables non définies, clés en double…)
+npm run check:data    # références croisées des données (items, scènes, techs…)
+npm run sw:check      # le cache hors-ligne correspond bien aux fichiers publiés
+npm run smoke         # test de fumée dans Chromium : onglets, 10 jours simulés, rechargement
+npm run test:regress  # tests de non-régression (tools/regress/)
+npm test              # tout ce qui précède
 ```
+
+`smoke` et `test:regress` utilisent Playwright, qui n'est pas une dépendance
+du projet : installez-le avec `npm i --no-save playwright && npx playwright install chromium`,
+ou pointez `NODE_PATH` vers une installation globale.
+
+La CI GitHub (`.github/workflows/tests.yml`) lance `npm test` à chaque push.
+
+## Publier une version
+
+1. Incrémenter `VERSION` dans `src/constants.js` et compléter `CHANGELOG.md`.
+2. Lancer `npm run sw:write`. **Obligatoire après toute modification d'un
+   fichier publié** (src/, index.html, styles.css, manifeste, icônes, polices) :
+   la version du cache hors-ligne est calculée à partir du contenu des fichiers.
+   Sans cela, les joueurs gardent l'ancienne version.
+3. Lancer `npm test`.
+4. Commiter `sw.js` avec le reste, puis pousser.
+
+Côté joueur, la nouvelle version se télécharge en arrière-plan, puis un
+bandeau propose « Recharger ». S'il l'ignore, elle s'applique au prochain
+lancement complet de l'app.
 
 ## Déploiement
 
-GitHub Pages : pousse le dossier `drift/` tel quel. Les modules ES
-sont servis correctement par n'importe quel serveur web statique.
+GitHub Pages : le dépôt est publié tel quel (https://shinjiebi.github.io/Drift/).
 
 ## Sauvegarde
 
-Les saves sont stockées dans `localStorage` sous la clé `drift_save_v1`.
-Migration automatique entre versions au chargement.
+- Stockée dans `localStorage` sous la clé `drift_save_v1`, à chaque fin de
+  tick automatique (toutes les 10 s) et à la fermeture de la page.
+- `meta.schemaVersion` numérote le format. Les migrations (`migrate()` dans
+  `state.js`) sont ordonnées et appliquées au chargement **et** à l'import.
+- Avant toute migration, et si une sauvegarde est illisible, une copie brute
+  est gardée sous `drift_save_v1_backup_<horodatage>` (3 au plus). Une
+  sauvegarde illisible n'est jamais écrasée : le joueur choisit entre
+  l'exporter, en importer une autre ou recommencer.
+- Les chaînes chargées ou importées sont assainies (pas de `<`, `>`, `"` ;
+  le journal ne garde que `em/strong/b/i/br`).
+- Un seul onglet peut faire tourner la partie : un deuxième onglet ouvert
+  passe en lecture seule.
 
-## Architecture
+## Temps de jeu
 
-Découpage final en 7 modules JS :
-
-- **constants.js** — constantes scalaires (VERSION, multiplicateurs,
-  libellés)
-- **util.js** — helpers purs : PRNG seedé, alias DOM, formatters
-- **catalog.js** — données statiques : MODULES, VESSELS, ITEMS,
-  BLUEPRINTS, TECH_TREE, FABRICATIONS, SCENES (73), BIOMES, TRAITS, etc.
-- **data-arcs-factions.js** — données ARCS et FACTION_TYPES
-- **state.js** — état du jeu (S exposé en var pour hoisting compatible
-  avec les imports circulaires), persistance, migrations, génération
-  de galaxie, candidats, vieillissement, tickOnce
-- **ui.js** — render(), toutes les vues (renderOverview, renderModules,
-  renderCrew, etc.), modales, log, toast, hookXxx pour les events
-- **app.js** — logique de domaine : jobs, modules, ressources,
-  fabrication, médical, expéditions, événements, arcs, factions
-
-**Dépendances circulaires** : app.js, state.js et ui.js s'importent
-mutuellement. Les modules ES gèrent ça via les *live bindings* — chaque
-import est une référence dynamique. `boot()` est différé via
-`DOMContentLoaded` ou `setTimeout(boot, 0)` pour s'exécuter après que
-tous les modules soient évalués.
-
-## Pour continuer la modularisation
-
-Le module `app.js` (4096 lignes) contient encore plusieurs responsabilités
-mélangées qui pourraient être extraites :
-- **expedition.js** : lancement, scènes, choices (~1500 l.)
-- **events.js** : incidents + colony events (~1500 l.)
-- **arcs.js** + **factions.js** : logique narrative (~700 l.)
-- **medical.js** : statuts, traitements, séquelles (~400 l.)
-
-Mais l'étape R4 est suffisante pour permettre d'ajouter des features
-sans naviguer dans le fichier monolithique d'origine.
+Une seconde réelle = une minute de jeu. Le temps écoulé pendant que l'onglet
+est caché ou l'app fermée est rattrapé au retour (12 h au plus), par tranches,
+avec une barre de progression. Pendant ce rattrapage, les incidents et
+événements sont résolus automatiquement avec le choix le plus prudent ; en
+jeu, ils attendent dans une file de décisions sauvegardée.

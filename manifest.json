@@ -2,6 +2,7 @@
   "name": "DRIFT",
   "short_name": "DRIFT",
   "description": "Jeu narratif de colonie spatiale. Établis un avant-poste, recrute un équipage, explore la galaxie, déchiffre les chroniques planétaires.",
+  "id": "/Drift/index.html",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

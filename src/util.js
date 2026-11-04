@@ -3,17 +3,25 @@
 
 // Format des nombres
 export const fmt = n => {
+  n = Number(n);
+  if (!Number.isFinite(n)) return '0';  // valeur absente ou corrompue : pas d'exception au rendu
   if (n >= 100000) return (n/1000).toFixed(0) + 'k';
   if (n >= 10000)  return (n/1000).toFixed(1) + 'k';
   if (n >= 100)    return Math.floor(n).toString();
   return n.toFixed(1).replace(/\.0$/, '');
 };
 
-// Format durée minutes-jeu → texte
+// Format durée minutes-jeu → texte (« 30s », « 45 min », « 2h », « 2h05 »).
+// On arrondit à la minute supérieure AVANT de découper en heures/minutes,
+// sinon 119.5 donnait « 1h60 » et 59.5 « 60 min ».
 export const fmtMin = m => {
+  m = Number(m);
+  if (!Number.isFinite(m)) return '—';
+  if (m <= 0) return '0s';
   if (m < 1) return Math.ceil(m*60) + 's';
-  if (m < 60) return Math.ceil(m) + ' min';
-  const h = Math.floor(m/60), r = Math.ceil(m%60);
+  const total = Math.ceil(m);
+  if (total < 60) return total + ' min';
+  const h = Math.floor(total/60), r = total % 60;
   return h + 'h' + (r ? r.toString().padStart(2,'0') : '');
 };
 
@@ -64,3 +72,16 @@ export function rInt(min, max, rng = Math.random) {
 
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+// Échappe une chaîne pour l'insérer dans du HTML (texte ou attribut).
+// À utiliser pour toute donnée venant de la sauvegarde : noms de colons,
+// de factions, de systèmes, de vaisseaux…
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c]);
+
+// Identifiant unique : préfixe + horodatage + compteur + aléa.
+// Le compteur évite les collisions quand plusieurs objets sont créés
+// dans la même milliseconde.
+let _uidCounter = 0;
+export const uid = prefix =>
+  `${prefix}_${Date.now().toString(36)}_${(_uidCounter++).toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;

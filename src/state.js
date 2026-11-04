@@ -3,10 +3,10 @@
 // de propriétés (S.crew.push, S.res.metal--) est visible partout.
 // Les ré-assignations complètes (S = ...) passent par setS().
 
-import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
-import { MODULES, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE } from './catalog.js';
-import { rngFor, rPick, rWeighted, rInt, fmtMin } from './util.js';
-import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, autoAssignAllFreeMembers, autoAssignMember } from './app.js';
+import { VERSION, SAVE_KEY, SAVE_SCHEMA_VERSION, SAVE_BACKUP_MAX, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BIOMASSE_MULT, SKILL_LIST } from './constants.js';
+import { MODULES, MODULE_JOBS, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE } from './catalog.js';
+import { rngFor, rPick, rWeighted, rInt, fmtMin, esc } from './util.js';
+import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, EXPED_TIME_PER_PC, EXPED_ONSITE_MIN, EXPED_BIOMASSE_PER_HOUR, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
 import { notif } from './notifications.js';
 
@@ -21,6 +21,7 @@ export function freshState() {
   return {
     meta: {
       version: VERSION,
+      schemaVersion: SAVE_SCHEMA_VERSION,  // format de sauvegarde (cf. migrate)
       created: Date.now(),
       colonyName: 'Avant-poste',
       gameMin: 0,           // minutes jeu écoulées
@@ -57,9 +58,13 @@ export function freshState() {
     activeBuffs: [],
     // 0.28 — marques historiques de la colonie (entrées du journal de longue durée)
     historicalMarks: [],
-    // 0.28 — incidents en chaîne en attente
+    // 0.28 — incidents en chaîne en attente : [{ incidentId, triggerAt }]
     pendingChainIncidents: [],
-    queuedIncidents: [],
+    // 0.33 — décisions (incidents / événements) en attente du joueur, persistées :
+    // [{ id, kind:'incident'|'event', refId, victimId?, actorIds?, createdAt }]
+    pendingDecisions: [],
+    pendingIncident: null,     // miroir lu par le bandeau d'alertes (ui.js)
+    pendingColonyEvent: null,  // idem
     // 0.14 — atelier (file de fabrications)
     fabrication: [],        // [{ id, fabId, totalMin, doneMin, startedAt }]
     // 0.18 — relations sociales : { "id1|id2": affinity }
@@ -76,14 +81,6 @@ export function freshState() {
     // 0.21 — diplomatie
     factions: {},             // { factionId: { id, type, name, reputation, ... } }
     diplomaticMissions: [],   // [{ id, factionId, memberId, startedAt, duration }]
-    // 0.29 — diplomatie étendue (préparation routes/alliances pour 0.30+)
-    diplomacy: {
-      routes: [],         // [{ id, factionId, vesselId, established, deliveredCount }]
-      alliances: [],      // [{ factionId, since, terms }]
-      treaties: []        // [{ factionId, type, since }]
-    },
-    // 0.26 — notifications
-    notifications: [],
     // 0.9.0 — affectations aux postes : map "modKey:slotIdx" → memberId
     assignments: {},
     autoAssign: true,       // auto-affecte les nouveaux colons aux postes éligibles
@@ -108,6 +105,7 @@ export function computeRates() {
   const cmdBonus = globalCommandBonus();
   const cmdMult = 1 + cmdBonus * 0.03;   // +3% par poste commandement pourvu
   const tech = techEffectsAccumulated();
+  const perm = permanentBonusesAccumulated();  // calculé une seule fois (et non par module)
 
   for (const id of Object.keys(S.modules)) {
     const m = S.modules[id];
@@ -120,7 +118,6 @@ export function computeRates() {
     const moduleTechMult = tech.moduleProdMult[id] || 1;
     if (def.prod) {
       const p = def.prod(m.level);
-      const perm = permanentBonusesAccumulated();
       for (const k in p) {
         // Bonus global par ressource (ex. tech_metallurgie sur metal)
         const resMult = tech.resourceMult[k] || 1;
@@ -154,6 +151,24 @@ export function computeRates() {
   }
 
   return rate;
+}
+
+// Capacités de toutes les ressources en un seul passage (bonus de tech
+// calculés une fois) — utilisé par tickOnce pour éviter 5 recalculs par tick.
+export function capsAll() {
+  const tech = techEffectsAccumulated();
+  const caps = {};
+  for (const k of RESOURCES) caps[k] = (CAP[k] || 0) * (tech.capacityMult[k] || 1);
+  for (const id of Object.keys(S.modules || {})) {
+    const def = MODULES[id];
+    const m = S.modules[id];
+    if (def?.capBonus && m?.level > 0) {
+      const bonus = def.capBonus(m.level);
+      for (const k of RESOURCES) if (bonus[k]) caps[k] += bonus[k];
+    }
+  }
+  for (const k of RESOURCES) caps[k] = Math.floor(caps[k]);
+  return caps;
 }
 
 // Capacité d'un type de ressource avec bonus de tech
@@ -649,29 +664,40 @@ export function aliveCrew() {
 
 export let tickCount = 0;
 
-// tickOnce — exécute UNE minute de simulation. Sans render.
-// opts.silent=true → réduit/coupe les logs et ralentit certains événements
-// pour les sessions de rattrapage hors ligne (évite l'inflation).
-export function tickOnce(opts = {}) {
-  const silent = !!opts.silent;
-  const incidentRate = silent ? OFFLINE_INCIDENT_RATE : 1.0;
+// ---- Robustesse : erreurs pendant la simulation ----
+// Chaque sous-système de tickOnce est isolé : une erreur dans l'un n'empêche
+// ni les autres de tourner, ni la sauvegarde automatique. Les erreurs sont
+// comptées ; au-delà de quelques-unes, un toast unique prévient le joueur.
+const _tickErrors = {};
+let _tickErrorTotal = 0;
+let _tickErrorToastShown = false;
+export function reportTickError(where, err) {
+  _tickErrorTotal++;
+  const n = (_tickErrors[where] = (_tickErrors[where] || 0) + 1);
+  if (n <= 3 || n % 1000 === 0) console.error(`[TICK] Erreur dans « ${where} » (×${n}) :`, err);
+  if (!_tickErrorToastShown && _tickErrorTotal >= 3) {
+    _tickErrorToastShown = true;
+    try { toast("Une erreur est survenue dans la simulation. Le jeu continue ; exporte ta sauvegarde par précaution."); } catch (e) { /* UI indisponible */ }
+  }
+}
+function step(where, fn, arg) {
+  try { fn(arg); } catch (e) { reportTickError(where, e); }
+}
 
-  // Avance temps
-  S.meta.gameMin += MIN_PER_TICK;
-  if (!silent) S.meta.sessionMs += TICK_MS;
-
-  // Production / consommation
+// ---- Sous-systèmes de tickOnce ----
+function tickResources(silent) {
   const rate = computeRates();
+  const caps = capsAll();   // une seule évaluation des bonus de capacité par tick
   let energyShortfall = false;
   if (!S.flags.capWarned) S.flags.capWarned = {};  // 0.26.1 — dédoublonne les notifs cap saturé
   if (!S.overflow) S.overflow = { metal: 0, cristal: 0, energie: 0, biomasse: 0, datacubes: 0 };  // 0.28
   for (const k of RESOURCES) {
-    let next = S.res[k] + rate[k];
+    let next = (S.res[k] || 0) + rate[k];
     if (next < 0) {
       if (k === 'energie') energyShortfall = true;
       next = 0;
     }
-    const cap = capOf(k);
+    const cap = caps[k];
     if (next > cap) {
       // 0.26.1 : notification quand on commence à perdre de la prod par saturation
       if (rate[k] > 0 && !silent) {
@@ -697,142 +723,280 @@ export function tickOnce(opts = {}) {
   if (energyShortfall && !silent && tickCount % 30 === 0) {
     log('warn', "Pénurie d'énergie : modules dépendants en sous-régime.");
   }
+}
 
-  // Avance chantier
-  if (S.build) {
-    S.build.doneMin += MIN_PER_TICK;
-    if (S.build.doneMin >= S.build.totalMin) finishBuild();
-  }
-  // Avance chantier vaisseau
-  if (S.vesselBuild) {
-    S.vesselBuild.doneMin += MIN_PER_TICK;
-    if (S.vesselBuild.doneMin >= S.vesselBuild.totalMin) finishVesselBuild();
-  }
-  // Avance les expéditions
-  tickExpeditions();
-  // Avance recherches en cours (0.13)
-  tickResearch();
-  // Avance fabrications atelier (0.14)
-  tickFabrication();
-  // Évolution sociale et vieillissement (0.18)
-  tickRelations();
-  tickRelationMoraleEffects();
-  tickAging();
-  // Événements de colonie (0.19)
-  tickColonyEvents(opts.silent);
-  // Arcs narratifs (0.20)
-  tickArcs();
-  // Diplomatie (0.21)
-  tickFactions();
-  tickDiplomaticMissions();
+function tickBuild() {
+  if (!S.build) return;
+  S.build.doneMin += MIN_PER_TICK;
+  if (S.build.doneMin >= S.build.totalMin) finishBuild();
+}
 
-  // Avance formations
-  if (S.training.length > 0) {
-    const finished = [];
-    for (const t of S.training) {
-      t.doneMin += MIN_PER_TICK;
-      if (t.doneMin >= t.totalMin) finished.push(t);
-    }
-    for (const t of finished) {
-      finishTraining(t);
-      const idx = S.training.indexOf(t);
-      if (idx >= 0) S.training.splice(idx, 1);
-    }
-  }
-  // Avance traitements
-  if (S.treatments.length > 0) {
-    const finished = [];
-    for (const t of S.treatments) {
-      t.doneMin += MIN_PER_TICK;
-      if (t.doneMin >= t.totalMin) finished.push(t);
-    }
-    for (const t of finished) {
-      finishTreatment(t);
-      const idx = S.treatments.indexOf(t);
-      if (idx >= 0) S.treatments.splice(idx, 1);
-    }
-  }
-  // Statuts (révélations, complications, contagion)
-  for (const m of S.crew) {
-    progressMemberStatuts(m);
-  }
-  // Incidents — taux réduit en mode silencieux
-  if (S.crew.length > 0 && S.modules.habitat) {
-    if (Math.random() < incidentRate) rollColonyIncident();
-  }
-  // Scan toutes les 60 min jeu
-  if (S.modules.antenne && tickCount % 60 === 0) {
-    const lvl = S.modules.antenne.level;
-    const range = 1 + lvl * 1.4 + (techEffectsAccumulated().scanRangeBonus || 0);
-    let newlyScanned = 0;
-    for (const sys of S.galaxy.systems) {
-      if (!sys.scanned && sys.distance <= range) {
-        sys.scanned = true;
-        newlyScanned++;
-      }
-    }
-    if (newlyScanned > 0 && !silent) {
-      log('neutral', `Antenne : <em>${newlyScanned}</em> nouveau(x) système(s) cartographié(s).`);
-    }
-  }
-  // Recrutement
-  if (S.modules.balise_recrutement && S.flags.recrutement) {
-    const lvl = S.modules.balise_recrutement.level;
-    const intervalMin = 1440 / lvl;
-    const maxQueue = 2 * lvl;
-    if (S.candidates.length < maxQueue && S.meta.gameMin >= S.nextRecruitMin) {
-      const c = genCandidate();
-      S.candidates.push(c);
-      if (!silent) {
-        log('neutral', `Signal reçu : <em>${c.name}</em> (${c.origin.label}) propose ses services.`);
-        notif.candidate(c.name, c.origin.label);
-      }
-      const variance = intervalMin * 0.3 * (Math.random() * 2 - 1);
-      S.nextRecruitMin = S.meta.gameMin + intervalMin + variance;
-    }
-    if (S.nextRecruitMin < S.meta.gameMin && S.candidates.length >= maxQueue) {
-      S.nextRecruitMin = S.meta.gameMin + intervalMin;
-    }
-  }
+function tickVesselBuild() {
+  if (!S.vesselBuild) return;
+  S.vesselBuild.doneMin += MIN_PER_TICK;
+  if (S.vesselBuild.doneMin >= S.vesselBuild.totalMin) finishVesselBuild();
+}
 
-  // 0.28 : nettoyage des buffs/debuffs expirés
-  if (Array.isArray(S.activeBuffs) && S.activeBuffs.length > 0) {
-    const now = S.meta.gameMin || 0;
-    const before = S.activeBuffs.length;
-    S.activeBuffs = S.activeBuffs.filter(b => b.expiresAt > now);
-    if (S.activeBuffs.length < before && !silent) {
-      log('neutral', "Un effet temporaire s'est dissipé.");
-    }
+function tickTraining() {
+  if (S.training.length === 0) return;
+  const finished = [];
+  for (const t of S.training) {
+    t.doneMin += MIN_PER_TICK;
+    if (t.doneMin >= t.totalMin) finished.push(t);
   }
+  for (const t of finished) {
+    finishTraining(t);
+    const idx = S.training.indexOf(t);
+    if (idx >= 0) S.training.splice(idx, 1);
+  }
+}
 
-  // 0.28 : déclenchement différé d'incidents en chaîne
-  if (Array.isArray(S.pendingChainIncidents) && S.pendingChainIncidents.length > 0) {
-    const now = S.meta.gameMin || 0;
-    const toTrigger = S.pendingChainIncidents.filter(p => p.triggerAt <= now);
-    if (toTrigger.length > 0) {
-      S.pendingChainIncidents = S.pendingChainIncidents.filter(p => p.triggerAt > now);
-      if (!silent) {
-        for (const t of toTrigger) {
-          try {
-            // Déclenche immédiatement l'incident — la fonction triggerIncident est dans app.js
-            // mais on n'a pas d'accès direct ici. On marque pour le prochain tick d'incidents.
-            S.queuedIncidents = S.queuedIncidents || [];
-            S.queuedIncidents.push(t.incidentId);
-          } catch(e) {}
-        }
-      }
+function tickTreatments() {
+  if (S.treatments.length === 0) return;
+  const finished = [];
+  for (const t of S.treatments) {
+    t.doneMin += MIN_PER_TICK;
+    if (t.doneMin >= t.totalMin) finished.push(t);
+  }
+  for (const t of finished) {
+    finishTreatment(t);
+    const idx = S.treatments.indexOf(t);
+    if (idx >= 0) S.treatments.splice(idx, 1);
+  }
+}
+
+// Statuts (révélations, complications, contagion)
+function tickMemberStatuts() {
+  for (const m of S.crew) progressMemberStatuts(m);
+}
+
+// Incidents — taux réduit en mode silencieux (rattrapage)
+function tickIncidentRoll(silent) {
+  if (S.crew.length === 0 || !S.modules.habitat) return;
+  const incidentRate = silent ? OFFLINE_INCIDENT_RATE : 1.0;
+  if (Math.random() < incidentRate) rollColonyIncident(silent);
+}
+
+// Scan toutes les 60 min jeu
+function tickScan(silent) {
+  if (!S.modules.antenne || tickCount % 60 !== 0) return;
+  const lvl = S.modules.antenne.level;
+  const range = 1 + lvl * 1.4 + (techEffectsAccumulated().scanRangeBonus || 0);
+  let newlyScanned = 0;
+  for (const sys of S.galaxy.systems) {
+    if (!sys.scanned && sys.distance <= range) {
+      sys.scanned = true;
+      newlyScanned++;
     }
   }
+  if (newlyScanned > 0 && !silent) {
+    log('neutral', `Antenne : <em>${newlyScanned}</em> nouveau(x) système(s) cartographié(s).`);
+  }
+}
+
+function tickRecruitment(silent) {
+  if (!S.modules.balise_recrutement || !S.flags.recrutement) return;
+  const lvl = S.modules.balise_recrutement.level;
+  const intervalMin = 1440 / lvl;
+  const maxQueue = 2 * lvl;
+  if (S.candidates.length < maxQueue && S.meta.gameMin >= S.nextRecruitMin) {
+    const c = genCandidate();
+    S.candidates.push(c);
+    if (!silent) {
+      log('neutral', `Signal reçu : <em>${esc(c.name)}</em> (${esc(c.origin.label)}) propose ses services.`);
+      notif.candidate(c.name, c.origin.label);
+    }
+    const variance = intervalMin * 0.3 * (Math.random() * 2 - 1);
+    S.nextRecruitMin = S.meta.gameMin + intervalMin + variance;
+  }
+  if (S.nextRecruitMin < S.meta.gameMin && S.candidates.length >= maxQueue) {
+    S.nextRecruitMin = S.meta.gameMin + intervalMin;
+  }
+}
+
+// 0.28 : nettoyage des buffs/debuffs expirés
+function tickBuffs(silent) {
+  if (!Array.isArray(S.activeBuffs) || S.activeBuffs.length === 0) return;
+  const now = S.meta.gameMin || 0;
+  const before = S.activeBuffs.length;
+  S.activeBuffs = S.activeBuffs.filter(b => b.expiresAt > now);
+  if (S.activeBuffs.length < before && !silent) {
+    log('neutral', "Un effet temporaire s'est dissipé.");
+  }
+}
+
+// 0.28 : incidents en chaîne arrivés à échéance.
+// En direct, l'incident rejoint la file des décisions du joueur ;
+// en silencieux (rattrapage), il est résolu automatiquement.
+function tickChainIncidents(silent) {
+  if (!Array.isArray(S.pendingChainIncidents) || S.pendingChainIncidents.length === 0) return;
+  const now = S.meta.gameMin || 0;
+  const due = S.pendingChainIncidents.filter(p => p.triggerAt <= now);
+  if (due.length === 0) return;
+  S.pendingChainIncidents = S.pendingChainIncidents.filter(p => p.triggerAt > now);
+  for (const p of due) step('incident en chaîne', id => triggerIncident(id, silent), p.incidentId);
+}
+
+// tickOnce — exécute UNE minute de simulation. Sans render.
+// opts.silent=true → réduit/coupe les logs et ralentit certains événements
+// pour les sessions de rattrapage hors ligne (évite l'inflation) ; les
+// incidents et événements y sont résolus automatiquement.
+export function tickOnce(opts = {}) {
+  const silent = !!opts.silent;
+
+  // Avance le temps en premier : une erreur plus loin ne bloque pas l'horloge
+  // (et l'horloge n'avance qu'une fois par tick).
+  S.meta.gameMin += MIN_PER_TICK;
+
+  step('ressources', tickResources, silent);
+  step('chantier', tickBuild);
+  step('chantier vaisseau', tickVesselBuild);
+  step('expéditions', tickExpeditions);
+  step('recherche', tickResearch);                      // 0.13
+  step('atelier', tickFabrication);                     // 0.14
+  step('relations', tickRelations);                     // 0.18
+  step('moral relationnel', tickRelationMoraleEffects);
+  step('vieillissement', tickAging);
+  step('événements de colonie', tickColonyEvents, silent);  // 0.19
+  step('arcs', tickArcs);                               // 0.20
+  step('factions', tickFactions);                       // 0.21
+  step('missions diplomatiques', tickDiplomaticMissions);
+  step('formations', tickTraining);
+  step('traitements', tickTreatments);
+  step('statuts médicaux', tickMemberStatuts);
+  step('incidents', tickIncidentRoll, silent);
+  step('antenne', tickScan, silent);
+  step('recrutement', tickRecruitment, silent);
+  step('effets temporaires', tickBuffs, silent);
+  step('incidents en chaîne', tickChainIncidents, silent);
 
   tickCount++;
 }
 
-// tick — appelé par setInterval, simule 1 minute jeu et render.
+// ============================================================
+// 5b. HORLOGE — temps réel → temps de jeu, rattrapage
+// ============================================================
+// 1 seconde réelle = 1 tick = MIN_PER_TICK minute(s) de jeu.
+// S.meta.lastTickRealMs = instant réel jusqu'auquel la simulation est à jour.
+// C'est la SEULE référence : tick(), le retour au premier plan et le
+// rattrapage hors ligne la lisent et l'avancent, jamais deux fois le même tick.
+
+const LIVE_TICKS_MAX = 5;            // ticks dus simulés « en direct » par appel ; le surplus en silencieux
+const SYNC_TICKS_MAX = 60;           // onglet visible : au-delà, rattrapage par morceaux (page réactive)
+const SYNC_TICKS_MAX_HIDDEN = 1800;  // onglet caché : bloquer quelques centaines de ms ne gêne personne
+let _ticksSinceSave = 0;
+let _sessionStartMs = Date.now();
+let _simPaused = false;              // onglet secondaire, sauvegarde illisible, import en cours…
+let _catchUp = null;                 // rattrapage en cours : { total, done, timer, … }
+
+export function markSessionStart() {
+  _sessionStartMs = Date.now();
+  if (S?.meta) S.meta.sessionMs = 0;
+}
+export function setSimPaused(v) {
+  _simPaused = !!v;
+  if (_simPaused) cancelCatchUp();
+}
+export function isSimPaused() { return _simPaused; }
+export function isCatchingUp() { return _catchUp !== null; }
+
+function pageHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+// Un tick protégé : si tickOnce échoue AVANT d'avoir avancé l'horloge,
+// on l'avance quand même (sinon le jeu se fige) — jamais deux fois.
+function runTick(silent) {
+  const before = S.meta.gameMin;
+  try {
+    tickOnce({ silent });
+  } catch (e) {
+    reportTickError('tickOnce', e);
+    if (S?.meta && S.meta.gameMin === before) S.meta.gameMin = (before || 0) + MIN_PER_TICK;
+  }
+}
+
+// tick — appelé par le minuteur (plusieurs fois par seconde). Simule tous
+// les ticks dus depuis lastTickRealMs (accumulateur) : un onglet en
+// arrière-plan dont le minuteur est ralenti à 1 appel/min ne perd plus de temps.
+// Renvoie le nombre de ticks simulés.
 export function tick() {
-  tickOnce({ silent: false });
-  S.meta.lastTickRealMs = Date.now();
-  if (tickCount % AUTOSAVE_EVERY === 0) save();
-  render();
+  if (!S?.meta || _simPaused || _catchUp) return 0;
+  const now = Date.now();
+  S.meta.sessionMs = Math.max(0, now - _sessionStartMs);
+  if (!Number.isFinite(S.meta.lastTickRealMs)) S.meta.lastTickRealMs = now;
+  const elapsed = now - S.meta.lastTickRealMs;
+  if (elapsed < 0) {
+    // Horloge système reculée : on recale sans simuler
+    S.meta.lastTickRealMs = now;
+    return 0;
+  }
+  const n = Math.floor(elapsed / TICK_MS);
+  if (n === 0) return 0;
+  const hidden = pageHidden();
+  if (n > (hidden ? SYNC_TICKS_MAX_HIDDEN : SYNC_TICKS_MAX)) {
+    // Gros écart (reprise, page gelée puis réveillée…) : rattrapage par
+    // morceaux avec résumé. Onglet caché : on attend son retour au premier plan.
+    if (!hidden) {
+      try { catchUpOffline(); }
+      catch (e) { reportTickError('rattrapage', e); S.meta.lastTickRealMs = now; }
+    }
+    return 0;
+  }
+  for (let i = 0; i < n; i++) runTick(i < n - LIVE_TICKS_MAX);
+  S.meta.lastTickRealMs += n * TICK_MS;   // += et non = now : on garde les fractions de seconde
+  _ticksSinceSave += n;
+  if (_ticksSinceSave >= AUTOSAVE_EVERY) {
+    _ticksSinceSave = 0;
+    save();
+  }
+  try { render(); } catch (e) { reportTickError('render', e); }
+  return n;
+}
+
+// Rattrapage par morceaux : simule `ticks` ticks en silencieux, par tranches
+// de ~12 ms (onglet visible) pour garder la page réactive. lastTickRealMs
+// avance avec chaque tranche : une sauvegarde faite pendant le rattrapage
+// reste cohérente, et tick() ne fait rien tant qu'il n'est pas terminé.
+// Si l'écart dépasse `ticks` (plafond OFFLINE_MAX_HOURS), le surplus est abandonné.
+export function runCatchUp(ticks, { onProgress, onDone } = {}) {
+  if (_catchUp || !S?.meta) return false;
+  const now = Date.now();
+  const due = Math.max(0, Math.floor((now - S.meta.lastTickRealMs) / TICK_MS));
+  const total = Math.max(0, Math.min(ticks, due, OFFLINE_MAX_HOURS * 3600));
+  if (due > total) S.meta.lastTickRealMs = now - total * TICK_MS;
+  const job = { total, done: 0, savedAt: 0, timer: null };
+  _catchUp = job;
+  const slice = () => {
+    if (_catchUp !== job) return;   // annulé (onglet repris ailleurs, nouvelle partie…)
+    const budget = pageHidden() ? 200 : 12;
+    const t0 = performance.now();
+    while (job.done < job.total) {
+      const batch = Math.min(20, job.total - job.done);
+      for (let i = 0; i < batch; i++) runTick(true);
+      job.done += batch;
+      S.meta.lastTickRealMs += batch * TICK_MS;
+      if (performance.now() - t0 >= budget) break;
+    }
+    if (job.done - job.savedAt >= 3600) { job.savedAt = job.done; save(); }
+    try { onProgress?.(job.done, job.total); } catch (e) { reportTickError('rattrapage (progression)', e); }
+    if (job.done >= job.total) {
+      _catchUp = null;
+      _ticksSinceSave = 0;
+      save();
+      try { onDone?.(job.done); } catch (e) { reportTickError('rattrapage (fin)', e); }
+      return;
+    }
+    job.timer = setTimeout(slice, 0);
+  };
+  job.timer = setTimeout(slice, 0);
+  return true;
+}
+
+export function cancelCatchUp() {
+  if (!_catchUp) return;
+  clearTimeout(_catchUp.timer);
+  _catchUp = null;
 }
 
 // ============================================================
@@ -868,7 +1032,7 @@ export function acceptCandidate(id) {
     blessures: []             // legacy, gardé pour compat
   };
   S.crew.push(member);
-  log('success', `<em>${member.name}</em> rejoint l'avant-poste. Origine : ${member.origin.label}.`);
+  log('success', `<em>${esc(member.name)}</em> rejoint l'avant-poste. Origine : ${esc(member.origin?.label || 'inconnue')}.`);
   // 0.26 : notification dédiée
   notif.recruited(member.name);
   // Auto-affectation au meilleur poste libre éligible
@@ -881,7 +1045,7 @@ export function refuseCandidate(id) {
   if (idx < 0) return;
   const c = S.candidates[idx];
   S.candidates.splice(idx, 1);
-  log('neutral', `Candidature de <em>${c.name}</em> écartée.`);
+  log('neutral', `Candidature de <em>${esc(c.name)}</em> écartée.`);
   render();
 }
 
@@ -947,157 +1111,501 @@ export function formationBonuses() {
   return { speedMult, failChanceDelta };
 }
 
+// ============================================================
+// 9. PERSISTANCE — sauvegarde, chargement, migrations, import/export
+// ============================================================
+
+const BACKUP_PREFIX = SAVE_KEY + '_backup_';
+let _saveLock = null;          // raison du verrou : 'autre-onglet', 'sauvegarde-illisible', 'import'…
+let _saveFailNotified = false;
+
+// Verrou d'écriture : tant qu'il est posé, save() n'écrit rien (onglet
+// secondaire, sauvegarde illisible en attente du choix du joueur, import en cours).
+export function lockSaves(reason) { _saveLock = reason || 'verrou'; }
+export function unlockSaves() { _saveLock = null; }
+export function savesLocked() { return _saveLock; }
+
 export function save() {
+  if (!S?.meta || _saveLock) return false;
   S.meta.lastSave = Date.now();
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(S));
+    _saveFailNotified = false;
+    return true;
   } catch (e) {
     console.warn('Sauvegarde échouée', e);
+    // Quota dépassé, stockage bloqué (SecurityError)… : on prévient une fois
+    // (de nouveau seulement après une sauvegarde réussie).
+    if (!_saveFailNotified) {
+      _saveFailNotified = true;
+      try { toast("⚠ Sauvegarde impossible (stockage plein ou bloqué). Exporte ta partie pour ne rien perdre."); } catch (e2) { /* UI indisponible */ }
+    }
+    return false;
   }
 }
 
-export function load() {
+// ---- Copies de secours (clés SAVE_KEY_backup_<horodatage>) ----
+export function listBackups() {
+  const out = [];
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    // Migration douce : champs ajoutés en 0.2.0 / 0.3.0 / 0.4.0 / 0.5.0
-    if (!data.crew) data.crew = [];
-    if (!data.candidates) data.candidates = [];
-    if (!data.training) data.training = [];
-    if (!data.treatments) data.treatments = [];
-    if (typeof data.nextRecruitMin !== 'number') data.nextRecruitMin = 0;
-    if (typeof data.nextIncidentMin !== 'number') data.nextIncidentMin = data.meta.gameMin + 60*8;
-    if (!data.flags) data.flags = {};
-    // Migration équipage : ajouter statuts[] et sante si manquants
-    for (const m of data.crew) {
-      if (!m.statuts) m.statuts = [];
-      if (typeof m.sante !== 'number') m.sante = 100;
-      if (!m.sequels) m.sequels = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(BACKUP_PREFIX)) out.push({ key, at: Number(key.slice(BACKUP_PREFIX.length)) || 0 });
     }
-    // Galaxie : générée la première fois qu'on charge une save antérieure à 0.5
-    if (!data.galaxy) {
-      if (!data.meta.seed) data.meta.seed = 'drift-legacy-' + (data.meta.created || Date.now()).toString(36);
-      data.galaxy = genGalaxy(data.meta.seed);
-    }
-    if (!data.ui) data.ui = { galaxyView:'list', galaxySubtab:'cartographie', currentSystemId:null, currentBodyId:null };
-    if (!data.ui.galaxySubtab) data.ui.galaxySubtab = 'cartographie';
-    // 0.6.0
-    if (!data.fleet) data.fleet = [];
-    if (data.vesselBuild === undefined) data.vesselBuild = null;
-    if (!data.expeditions) data.expeditions = [];
-    if (!data.expHistory) data.expHistory = [];
-    // 0.7.0 : temps réel
-    if (!data.meta.lastTickRealMs) data.meta.lastTickRealMs = data.meta.lastSave || Date.now();
-    // 0.9.0 : postes
-    if (!data.assignments) data.assignments = {};
-    if (typeof data.autoAssign !== 'boolean') data.autoAssign = true;
-    // 0.11 : inventaire
-    if (!data.inventory) {
-      data.inventory = {};
-      // Optionnel : on peut récupérer les items des expéditions historiques pour pré-remplir l'inventaire
-      if (Array.isArray(data.expHistory)) {
-        for (const h of data.expHistory) {
-          const items = h.result?.items;
-          if (Array.isArray(items) && items.length > 0) {
-            for (const raw of items) {
-              const def = ITEM_NAME_TO_ID[raw] || (ITEMS[raw] ? raw : null);
-              if (def) data.inventory[def] = (data.inventory[def] || 0) + 1;
-            }
-          }
-        }
-      }
-    }
-    // 0.12 : bibliothèque de schémas
-    if (!data.discoveries) data.discoveries = {};
-    // Si la save contenait déjà des blueprints en inventaire (improbable), les marquer comme découverts
-    if (data.inventory) {
-      for (const id in data.inventory) {
-        if (BLUEPRINTS[id] && !data.discoveries[id]) {
-          data.discoveries[id] = { firstFoundAt: data.meta.gameMin || 0, source: 'récupéré' };
-        }
-      }
-    }
-    // 0.13 : tech tree
-    if (!data.techCompleted) data.techCompleted = {};
-    if (!data.research) data.research = [];
-    if (typeof data.alienDatacubes !== 'number') data.alienDatacubes = 0;
-    // 0.14 : atelier
-    if (!data.fabrication) data.fabrication = [];
-    // 0.18 : relations sociales
-    if (!data.relations) data.relations = {};
-    // Pour les colons existants, calcule birthGameMin si absent
-    if (data.crew) {
-      for (const m of data.crew) {
-        if (typeof m.birthGameMin !== 'number') {
-          m.birthGameMin = (data.meta?.gameMin || 0) - (m.age || 30) * 43200;  // 30j × 24h × 60min
-        }
-      }
-    }
-    // 0.19 : événements de colonie — initialise les cooldowns
-    if (typeof data.nextEventMin !== 'number') data.nextEventMin = (data.meta?.gameMin || 0) + 24 * 60;
-    if (typeof data.lastHommageMin !== 'number') data.lastHommageMin = -99999;
-    if (typeof data.lastVisitorMin !== 'number') data.lastVisitorMin = -99999;
-    if (typeof data.lastMerchantMin !== 'number') data.lastMerchantMin = -99999;
-    // 0.20 : arcs narratifs
-    if (!data.arcs) data.arcs = {};
-    if (!data.unlockedLegendaryTechs) data.unlockedLegendaryTechs = {};
-    if (!data.permanentBonuses) data.permanentBonuses = {};
-    // 0.21 : diplomatie
-    if (!data.factions) data.factions = {};
-    if (!data.diplomaticMissions) data.diplomaticMissions = [];
-    // 0.22 : postes persistants — pas de migration de données nécessaire,
-    // S.assignments existait déjà. Les colons existants en mission/soin
-    // n'avaient pas de poste assigné, ils en obtiendront un au retour via returnToBase.
-    // 0.24 : chroniques planétaires — pas de migration nécessaire,
-    // body.chronicle est ajouté à la première visite par tryAssignChronicle()
-    // 0.26 : système de notifications
-    if (!Array.isArray(data.notifications)) data.notifications = [];
-    // 0.28 : overflow ressources
-    if (!data.overflow) data.overflow = { metal: 0, cristal: 0, energie: 0, biomasse: 0, datacubes: 0 };
-    // 0.28 : buffs actifs (debuffs temporaires)
-    if (!Array.isArray(data.activeBuffs)) data.activeBuffs = [];
-    // 0.28 : marques historiques de la colonie
-    if (!Array.isArray(data.historicalMarks)) data.historicalMarks = [];
-    // 0.28 : incidents en chaîne en attente
-    if (!Array.isArray(data.pendingChainIncidents)) data.pendingChainIncidents = [];
-    if (!Array.isArray(data.queuedIncidents)) data.queuedIncidents = [];
-    // 0.29 : diplomatie étendue
-    if (!data.diplomacy) data.diplomacy = { routes: [], alliances: [], treaties: [] };
-    data.meta.version = VERSION;
-    return data;
-  } catch (e) { return null; }
+  } catch (e) { /* stockage inaccessible */ }
+  return out.sort((a, b) => a.at - b.at);
 }
 
-export function exportSave() {
-  save();
-  const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
+// Copie une sauvegarde brute sous une clé de secours. Garde au plus
+// SAVE_BACKUP_MAX copies (les plus anciennes sont supprimées) et ne duplique
+// pas une copie identique. Renvoie la clé, ou null si la copie a échoué.
+export function backupRaw(raw) {
+  if (typeof raw !== 'string' || raw === '') return null;
+  try {
+    const existing = listBackups();
+    for (const b of existing) if (localStorage.getItem(b.key) === raw) return b.key;
+    let at = Date.now();
+    while (existing.some(b => b.at === at)) at++;
+    while (existing.length >= SAVE_BACKUP_MAX) localStorage.removeItem(existing.shift().key);
+    const key = BACKUP_PREFIX + at;
+    localStorage.setItem(key, raw);
+    return key;
+  } catch (e) {
+    console.warn('[SAVE] Copie de secours impossible', e);
+    return null;
+  }
+}
+
+export function downloadText(text, filename) {
+  const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const stamp = new Date().toISOString().slice(0,16).replace(/[-:T]/g,'');
   a.href = url;
-  a.download = `drift_save_${stamp}.json`;
+  a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const fileStamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+
+// ---- Chargement ----
+// Distingue « pas de sauvegarde » et « sauvegarde illisible » :
+//   { status:'none' }
+//   { status:'ok', data, warnings, newer, fromVersion }
+//   { status:'error', raw, error, backupKey }   ← rien n'est écrasé : au joueur de choisir
+export function loadSave() {
+  let raw;
+  try {
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch (e) {
+    // Stockage bloqué : on joue sans sauvegarde (save() préviendra le joueur)
+    console.warn('[SAVE] Stockage local inaccessible', e);
+    return { status: 'none', storageError: e };
+  }
+  if (raw === null || raw === '') return { status: 'none' };
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    return loadFailure(raw, new Error('sauvegarde tronquée ou illisible (' + e.message + ')'));
+  }
+  try {
+    const schema = Number.isInteger(data?.meta?.schemaVersion) ? data.meta.schemaVersion : 0;
+    // Avant de migrer une sauvegarde d'un format antérieur, on en garde une copie
+    if (schema < SAVE_SCHEMA_VERSION) backupRaw(raw);
+    const info = migrate(data);
+    return { status: 'ok', data: info.data, warnings: info.errors, newer: info.newer, fromVersion: info.fromVersion };
+  } catch (e) {
+    return loadFailure(raw, e);
+  }
+}
+
+function loadFailure(raw, error) {
+  console.error('[SAVE] Sauvegarde illisible :', error);
+  return { status: 'error', raw, error, backupKey: backupRaw(raw) };
+}
+
+// Compatibilité : renvoie l'état chargé, ou null (absente OU illisible).
+// Ne jamais enchaîner sur une sauvegarde après un null sans vérifier
+// loadSave().status — on écraserait une sauvegarde illisible.
+export function load() {
+  const r = loadSave();
+  return r.status === 'ok' ? r.data : null;
+}
+
+// ---- Migrations ----
+// migrate(data) est appelée au chargement ET à l'import. Elle :
+//   1. valide la forme minimale (sinon lève une erreur) ;
+//   2. normalise l'état (NORMALIZE, idempotent, à chaque chargement) ;
+//   3. applique les migrations ordonnées dont le schéma cible dépasse celui
+//      de la sauvegarde (MIGRATIONS) ;
+//   4. assainit les chaînes (XSS : la sauvegarde peut venir d'un fichier importé).
+// Chaque étape est isolée : un champ qui ne se migre pas n'empêche pas de
+// charger le reste ; les erreurs sont renvoyées dans `errors`.
+// Une sauvegarde d'un schéma PLUS RÉCENT est chargée telle quelle (champs
+// inconnus conservés) avec newer=true pour avertir le joueur.
+
+const STAT_KEYS = ['vigueur', 'dexterite', 'intellect', 'sangfroid', 'charisme'];
+
+function normalizeContainers(d) {
+  const gm = d.meta.gameMin;
+  for (const k of ['crew', 'candidates', 'training', 'treatments', 'fleet', 'expeditions', 'expHistory',
+    'research', 'fabrication', 'diplomaticMissions', 'activeBuffs', 'historicalMarks',
+    'pendingChainIncidents', 'pendingDecisions', 'journal']) {
+    if (!Array.isArray(d[k])) d[k] = [];
+  }
+  for (const k of ['flags', 'modules', 'assignments', 'discoveries', 'techCompleted', 'relations', 'arcs',
+    'unlockedLegendaryTechs', 'permanentBonuses', 'factions']) {
+    if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
+  }
+  for (const k of RESOURCES) {
+    const v = Number(d.res[k]);
+    d.res[k] = Number.isFinite(v) ? v : 0;
+  }
+  if (!d.overflow || typeof d.overflow !== 'object') d.overflow = {};
+  for (const k of RESOURCES) if (!Number.isFinite(d.overflow[k])) d.overflow[k] = 0;
+  if (d.build === undefined) d.build = null;
+  if (d.vesselBuild === undefined) d.vesselBuild = null;
+  if (typeof d.autoAssign !== 'boolean') d.autoAssign = true;
+  if (typeof d.nextRecruitMin !== 'number') d.nextRecruitMin = 0;
+  if (typeof d.nextIncidentMin !== 'number') d.nextIncidentMin = gm + 60 * 8;
+  if (typeof d.alienDatacubes !== 'number') d.alienDatacubes = 0;
+  // 0.19 : événements de colonie — cooldowns
+  if (typeof d.nextEventMin !== 'number') d.nextEventMin = gm + 24 * 60;
+  if (typeof d.lastHommageMin !== 'number') d.lastHommageMin = -99999;
+  if (typeof d.lastVisitorMin !== 'number') d.lastVisitorMin = -99999;
+  if (typeof d.lastMerchantMin !== 'number') d.lastMerchantMin = -99999;
+}
+
+function normalizeMeta(d) {
+  const m = d.meta;
+  if (!Number.isFinite(m.gameMin)) m.gameMin = Number(m.gameMin) || 0;
+  // 0.7.0 : temps réel
+  if (!Number.isFinite(m.lastTickRealMs)) m.lastTickRealMs = Number.isFinite(m.lastSave) && m.lastSave > 0 ? m.lastSave : Date.now();
+  if (!Number.isFinite(m.sessionMs)) m.sessionMs = 0;
+  if (typeof m.colonyName !== 'string' || !m.colonyName.trim()) m.colonyName = 'Avant-poste';
+  if (!m.created) m.created = Date.now();
+}
+
+// Colons et candidats : forme minimale (E11 : un personnage de chronique créé
+// par une version antérieure n'a pas d'objet `origin`).
+function normalizePerson(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
+  if (typeof p.name !== 'string') p.name = String(p.name ?? 'Inconnu');
+  if (!Array.isArray(p.statuts)) p.statuts = [];
+  if (!Array.isArray(p.sequels)) p.sequels = [];
+  if (!Array.isArray(p.traits)) p.traits = [];
+  if (!p.skills || typeof p.skills !== 'object' || Array.isArray(p.skills)) p.skills = {};
+  for (const k of SKILL_LIST) if (typeof p.skills[k] !== 'number') p.skills[k] = 0;
+  if (!p.stats || typeof p.stats !== 'object' || Array.isArray(p.stats)) p.stats = {};
+  for (const k of STAT_KEYS) if (typeof p.stats[k] !== 'number') p.stats[k] = 5;
+  if (typeof p.origin === 'string') {
+    const known = ORIGINS.find(o => o.id === p.origin);
+    p.origin = known ? { ...known } : null;
+  }
+  if (!p.origin || typeof p.origin !== 'object') p.origin = { id: 'chronique', label: 'Chronique', notes: '' };
+  if (typeof p.origin.label !== 'string') p.origin.label = 'Chronique';
+  if (typeof p.origin.notes !== 'string') p.origin.notes = '';
+  if (typeof p.moral !== 'number') p.moral = 60;
+  if (typeof p.loyaute !== 'number') p.loyaute = 50;
+  return true;
+}
+
+function normalizeCrew(d) {
+  // Personnages de chronique créés par une version ≤ 0.32 : leur origine vient de
+  // leur chronique. À faire avant normalizePerson, qui poserait une origine générique.
+  try { normalizeChronicleRecruits(d); } catch (e) { console.warn('[MIGRATION] Recrues de chronique :', e); }
+  d.crew = d.crew.filter(normalizePerson);
+  d.candidates = d.candidates.filter(normalizePerson);
+  const gm = d.meta.gameMin;
+  for (const m of d.crew) {
+    if (typeof m.sante !== 'number') m.sante = 100;
+    // 0.18 : vieillissement
+    if (typeof m.birthGameMin !== 'number') m.birthGameMin = gm - (m.age || 30) * 43200;  // 30j × 24h × 60min
+  }
+}
+
+// Galaxie : générée la première fois qu'on charge une save antérieure à 0.5
+function normalizeGalaxy(d) {
+  if (d.galaxy && Array.isArray(d.galaxy.systems)) return;
+  if (!d.meta.seed) d.meta.seed = 'drift-legacy-' + (Number(d.meta.created) || Date.now()).toString(36);
+  d.galaxy = genGalaxy(d.meta.seed);
+}
+
+function normalizeUi(d) {
+  if (!d.ui || typeof d.ui !== 'object' || Array.isArray(d.ui)) d.ui = {};
+  if (!['list', 'system', 'body'].includes(d.ui.galaxyView)) d.ui.galaxyView = 'list';
+  if (!d.ui.galaxySubtab) d.ui.galaxySubtab = 'cartographie';
+  if (d.ui.currentSystemId === undefined) d.ui.currentSystemId = null;
+  if (d.ui.currentBodyId === undefined) d.ui.currentBodyId = null;
+  // Une vue système/corps pointant vers un système inconnu planterait au rendu
+  const sys = d.ui.currentSystemId ? d.galaxy.systems.find(s => s.id === d.ui.currentSystemId) : null;
+  if ((d.ui.currentSystemId && !sys) || (d.ui.galaxyView !== 'list' && !sys)) {
+    d.ui.galaxyView = 'list';
+    d.ui.currentSystemId = null;
+    d.ui.currentBodyId = null;
+  } else if (d.ui.galaxyView === 'body' && !(sys.bodies || []).some(bd => bd.id === d.ui.currentBodyId)) {
+    d.ui.galaxyView = 'system';
+    d.ui.currentBodyId = null;
+  }
+}
+
+// 0.11 : inventaire — pré-rempli depuis l'historique d'expéditions pour les vieilles saves
+function normalizeInventory(d) {
+  if (d.inventory && typeof d.inventory === 'object' && !Array.isArray(d.inventory)) return;
+  d.inventory = {};
+  for (const h of d.expHistory) {
+    const items = h?.result?.items;
+    if (!Array.isArray(items)) continue;
+    for (const rawItem of items) {
+      const id = ITEM_NAME_TO_ID[rawItem] || (ITEMS[rawItem] ? rawItem : null);
+      if (id) d.inventory[id] = (d.inventory[id] || 0) + 1;
+    }
+  }
+}
+
+// 0.12 : un schéma présent dans l'inventaire est forcément découvert
+function normalizeDiscoveries(d) {
+  for (const id in d.inventory) {
+    if (BLUEPRINTS[id] && !d.discoveries[id]) {
+      d.discoveries[id] = { firstFoundAt: d.meta.gameMin || 0, source: 'récupéré' };
+    }
+  }
+}
+
+// 0.33 : file des décisions — entrées valides seulement, miroirs pour ui.js
+function normalizeDecisions(d) {
+  d.pendingDecisions = d.pendingDecisions.filter(x =>
+    x && typeof x === 'object' && (x.kind === 'incident' || x.kind === 'event') && typeof x.refId === 'string');
+  for (const x of d.pendingDecisions) if (!x.id) x.id = 'dec_' + Math.random().toString(36).slice(2, 10);
+  d.pendingIncident = d.pendingDecisions.find(x => x.kind === 'incident')?.refId || null;
+  d.pendingColonyEvent = d.pendingDecisions.find(x => x.kind === 'event')?.refId || null;
+}
+
+const NORMALIZE = [
+  ['méta', normalizeMeta],
+  ['conteneurs', normalizeContainers],
+  ['équipage', normalizeCrew],
+  ['galaxie', normalizeGalaxy],
+  ['interface', normalizeUi],
+  ['inventaire', normalizeInventory],
+  ['bibliothèque de schémas', normalizeDiscoveries],
+  ['décisions en attente', normalizeDecisions],
+];
+
+// ---- Étapes de migration ordonnées (schéma 0 → 1 → …) ----
+
+// 0.28 → 0.33 : S.queuedIncidents (mécanique quasi morte) est remplacée par
+// pendingChainIncidents (échéance) + pendingDecisions (file du joueur).
+function migrateQueuedIncidents(d) {
+  if (Array.isArray(d.queuedIncidents)) {
+    for (const id of d.queuedIncidents) {
+      if (typeof id === 'string') d.pendingChainIncidents.push({ incidentId: id, triggerAt: d.meta.gameMin || 0 });
+    }
+  }
+  delete d.queuedIncidents;
+}
+
+// Champs jamais lus (0.26 notifications → push uniquement ; 0.29 diplomacy préparatoire)
+function migrateDeadFields(d) {
+  delete d.notifications;
+  delete d.diplomacy;
+}
+
+// 0.32 : posteInfo (ancienneté) n'était créé qu'à l'affectation : les colons
+// déjà en poste dans une vieille sauvegarde n'en avaient pas.
+function migratePosteInfo(d) {
+  const gm = d.meta.gameMin || 0;
+  for (const key in d.assignments) {
+    const m = d.crew.find(c => c.id === d.assignments[key]);
+    if (!m || m.posteInfo) continue;
+    const [modKey, idxStr] = key.split(':');
+    const slotIdx = parseInt(idxStr, 10);
+    const job = MODULE_JOBS[modKey]?.[slotIdx];
+    if (!job) continue;
+    m.posteInfo = {
+      modKey,
+      slotIdx,
+      titre: job.label,
+      role: job.role,
+      depuis: typeof m.joinedAt === 'number' ? m.joinedAt : gm
+    };
+  }
+}
+
+const MIGRATIONS = [
+  { to: 1, steps: [
+    ['incidents en file', migrateQueuedIncidents],
+    ['champs obsolètes', migrateDeadFields],
+    ['ancienneté des postes', migratePosteInfo],
+  ] },
+];
+
+// ---- Assainissement (XSS) ----
+// L'interface insère beaucoup de chaînes de l'état en innerHTML. Une sauvegarde
+// importée peut contenir n'importe quoi : on neutralise < > " dans toutes les
+// chaînes (et clés), sauf le texte du journal, qui est du HTML légitime (<em>…) :
+// on n'y garde que quelques balises sans attribut et on échappe le reste.
+// Idempotent (appelé à chaque chargement).
+const NEUTRAL_CHARS = { '<': '‹', '>': '›', '"': '”' };
+const neutralize = s => (/[<>"]/.test(s) ? s.replace(/[<>"]/g, c => NEUTRAL_CHARS[c]) : s);
+const escAngles = s => s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const JOURNAL_ALLOWED_TAGS = /<\/?(?:em|strong|b|i)>|<br\s*\/?>/gi;
+
+export function sanitizeJournalHTML(s) {
+  if (typeof s !== 'string') s = String(s ?? '');
+  if (!/[<>]/.test(s)) return s;
+  let out = '';
+  let last = 0;
+  for (const m of s.matchAll(JOURNAL_ALLOWED_TAGS)) {
+    out += escAngles(s.slice(last, m.index)) + m[0].toLowerCase().replace(/\s+/g, '');
+    last = m.index + m[0].length;
+  }
+  return out + escAngles(s.slice(last));
+}
+
+function sanitizeDeep(v, depth) {
+  if (typeof v === 'string') return neutralize(v);
+  if (!v || typeof v !== 'object') return v;
+  if (depth > 40) return null;   // imbrication anormale
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) v[i] = sanitizeDeep(v[i], depth + 1);
+    return v;
+  }
+  for (const k of Object.keys(v)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') { delete v[k]; continue; }
+    const val = sanitizeDeep(v[k], depth + 1);
+    if (/[<>"]/.test(k)) {
+      delete v[k];
+      const nk = neutralize(k);
+      if (!Object.prototype.hasOwnProperty.call(v, nk)) v[nk] = val;
+    } else {
+      v[k] = val;
+    }
+  }
+  return v;
+}
+
+export function sanitizeState(d) {
+  const journal = Array.isArray(d.journal) ? d.journal : [];
+  d.journal = [];
+  sanitizeDeep(d, 0);
+  d.journal = journal.filter(e => e && typeof e === 'object' && !Array.isArray(e)).map(e => {
+    const txt = sanitizeJournalHTML(e.txt);
+    delete e.txt;
+    sanitizeDeep(e, 1);
+    e.txt = txt;
+    return e;
+  });
+  return d;
+}
+
+export function migrate(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('format invalide (objet attendu)');
+  if (!data.meta || typeof data.meta !== 'object' || Array.isArray(data.meta)) throw new Error('format invalide (meta manquant)');
+  if (!data.res || typeof data.res !== 'object' || Array.isArray(data.res)) throw new Error('format invalide (ressources manquantes)');
+  const errors = [];
+  const run = (label, fn) => {
+    try { fn(data); } catch (e) {
+      console.warn(`[SAVE] Migration « ${label} » échouée :`, e);
+      errors.push(`${label} : ${e?.message || e}`);
+    }
+  };
+  const fromSchema = Number.isInteger(data.meta.schemaVersion) ? data.meta.schemaVersion : 0;
+  const fromVersion = typeof data.meta.version === 'string' ? data.meta.version : null;
+  const newer = fromSchema > SAVE_SCHEMA_VERSION;
+
+  for (const [label, fn] of NORMALIZE) run(label, fn);
+  for (const mig of MIGRATIONS) {
+    if (mig.to <= fromSchema) continue;
+    for (const [label, fn] of mig.steps) run(label, fn);
+  }
+  run('assainissement', sanitizeState);
+
+  // Version : on garde la trace de la version d'origine
+  if (fromVersion && fromVersion !== VERSION) data.meta.previousVersion = fromVersion;
+  data.meta.version = VERSION;
+  data.meta.schemaVersion = Math.max(fromSchema, SAVE_SCHEMA_VERSION);
+  return { data, errors, newer, fromVersion, fromSchema };
+}
+
+// ---- Export / import ----
+export function exportSave() {
+  if (!S?.meta) { toast('Aucune partie à exporter'); return; }
+  save();
+  downloadText(JSON.stringify(S, null, 2), `drift_save_${fileStamp()}.json`);
   toast('Sauvegarde exportée');
 }
 
-export function importSave(file) {
+// Télécharge une sauvegarde brute (illisible) telle quelle.
+export function exportRawSave(raw) {
+  downloadText(String(raw ?? ''), `drift_save_endommagee_${fileStamp()}.json`);
+}
+
+function describeSave(d) {
+  const day = Math.floor((d.meta?.gameMin || 0) / 1440) + 1;
+  const alive = (d.crew || []).filter(m => m && m.statut !== 'mort').length;
+  return `« ${esc(d.meta?.colonyName || 'Avant-poste')} » — jour ${day}, ${alive} colon${alive > 1 ? 's' : ''}`;
+}
+
+// Importe un fichier : validation + migration, puis confirmation avant de
+// remplacer la partie, puis rechargement propre de la page.
+// opts.onCancel : appelé si le joueur renonce (écran de sauvegarde illisible).
+export function importSave(file, opts = {}) {
   const reader = new FileReader();
+  reader.onerror = () => toast('Échec import : fichier illisible');
   reader.onload = e => {
+    let info;
     try {
-      const data = JSON.parse(e.target.result);
-      if (!data?.meta || !data?.res) throw new Error('Format invalide');
-      S = data;
-      save();
-      render();
-      toast('Sauvegarde restaurée');
-      log('neutral', 'Mémoire restaurée depuis archive externe.');
+      info = migrate(JSON.parse(e.target.result));
     } catch (err) {
-      toast('Échec import : ' + err.message);
+      toast('Échec import : ' + (err?.message || err));
+      return;
     }
+    const d = info.data;
+    const parts = [`<p>Sauvegarde importée : ${describeSave(d)}${info.fromVersion ? ` (version ${esc(info.fromVersion)})` : ''}.</p>`];
+    parts.push(S?.meta
+      ? `<p>Elle remplacera la partie en cours : ${describeSave(S)}. Une copie de secours de la partie en cours restera dans ce navigateur.</p>`
+      : `<p>Elle remplacera la sauvegarde actuelle (une copie de secours en est gardée).</p>`);
+    if (info.newer) parts.push(`<p style="color:var(--amber)">⚠ Cette sauvegarde vient d'une version plus récente du jeu : certaines données pourraient ne pas être prises en compte.</p>`);
+    if (info.errors.length) parts.push(`<p style="color:var(--amber)">⚠ ${info.errors.length} élément(s) n'ont pas pu être convertis (${esc(info.errors.slice(0, 3).join(' ; '))}).</p>`);
+    try { document.getElementById('modal').className = 'modal'; } catch (e2) { /* pas de DOM */ }
+    showModal({
+      title: 'Remplacer la partie en cours ?',
+      body: parts.join(''),
+      bodyIsHTML: true,
+      primaryLabel: 'Remplacer',
+      primaryClass: 'danger',
+      onPrimary: () => commitImport(d)
+    });
+    if (opts.onCancel) document.getElementById('modalCancel')?.addEventListener('click', opts.onCancel);
   };
   reader.readAsText(file);
+}
+
+function commitImport(d) {
+  // Copie de secours de la partie actuelle (à jour) avant de la remplacer
+  try {
+    save();
+    const cur = localStorage.getItem(SAVE_KEY);
+    if (cur) backupRaw(cur);
+  } catch (e) { /* stockage inaccessible : l'écriture ci-dessous échouera aussi */ }
+  d.meta.lastTickRealMs = Date.now();   // pas de rattrapage de la période export → import
+  d.meta.lastSave = Date.now();
+  d.journal.push({ t: d.meta.gameMin || 0, kind: 'neutral', txt: 'Mémoire restaurée depuis archive externe.' });
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(d));
+  } catch (err) {
+    toast('Échec import : stockage plein ou indisponible');
+    return;
+  }
+  // La partie en mémoire ne doit plus rien écrire (pagehide) : on recharge
+  lockSaves('import');
+  setSimPaused(true);
+  toast('Sauvegarde restaurée');
+  setTimeout(() => location.reload(), 300);
 }
 
 export function resetGame() {
@@ -1107,9 +1615,12 @@ export function resetGame() {
     primaryLabel: 'Confirmer',
     primaryClass: 'danger',
     onPrimary: () => {
-      localStorage.removeItem(SAVE_KEY);
+      cancelCatchUp();
+      try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* stockage inaccessible */ }
       S = freshState();
       seedJournal();
+      _ticksSinceSave = 0;
+      markSessionStart();
       save();
       render();
       toast('Nouvelle fondation établie');

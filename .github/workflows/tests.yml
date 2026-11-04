@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Dépendances de développement
+        run: npm ci
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Cohérence des données
+        run: npm run check:data
+
+      - name: Version du cache hors-ligne
+        run: npm run sw:check
+
+      - name: Navigateur de test
+        run: |
+          npm i --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Test de fumée
+        run: npm run smoke
+
+      - name: Tests de non-régression
+        run: npm run test:regress

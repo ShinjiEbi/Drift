@@ -1,9 +1,20 @@
 // constants.js — constantes globales (versions, multiplicateurs, libellés)
 // Extrait depuis app.js lors de la modularisation
 
-export const VERSION = '0.32.0';
+export const VERSION = '0.33.0';
 
 export const SAVE_KEY = 'drift_save_v1';
+
+// Version du FORMAT de sauvegarde (entier). Incrémentée à chaque migration
+// de données. Les sauvegardes ≤ 0.32 n'en ont pas (= schéma 0).
+export const SAVE_SCHEMA_VERSION = 1;
+
+// Copies de secours gardées dans localStorage (clés SAVE_KEY + '_backup_<horodatage>')
+export const SAVE_BACKUP_MAX = 3;
+
+// File des décisions (incidents / événements) en attente du joueur :
+// au-delà, les plus anciennes sont résolues automatiquement.
+export const MAX_PENDING_DECISIONS = 5;
 
 export const TICK_MS = 1000;
 

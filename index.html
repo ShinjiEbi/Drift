@@ -2,8 +2,14 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>DRIFT — Avant-poste</title>
+
+<!-- Sécurité : aucune ressource externe, aucun script inline (tout le JS est
+     dans src/). 'unsafe-inline' pour les styles : l'interface utilise des
+     attributs style="…". -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
 
 <!-- PWA manifest -->
 <link rel="manifest" href="./manifest.json">
@@ -34,72 +40,77 @@
 <meta property="og:image" content="./icons/icon-512.png">
 <meta property="og:type" content="website">
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Polices hébergées localement (pas de requête vers Google, disponibles hors-ligne) -->
+<link rel="preload" href="./fonts/newsreader-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="./fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="./fonts/fonts.css">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 <div id="app">
 
   <header class="top">
-    <div class="brand">DRIFT<span class="dot"></span><span id="colonyName">Avant-poste</span></div>
+    <div class="brand">DRIFT<span class="dot" aria-hidden="true"></span><span id="colonyName">Avant-poste</span></div>
     <div class="session-clock">
       <b id="gameTime">J1 · 00:00</b>
       <span id="realTime">session 0:00</span>
     </div>
-    <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil">⤓</button>
+    <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil" aria-label="Installer DRIFT sur ton appareil"><span aria-hidden="true">⤓</span></button>
   </header>
 
-  <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
-  <div class="res-bar" id="resBar">
-    <div class="res-bar-cell" data-res="metal">
-      <span class="rb-label">Me</span>
-      <span class="rb-value" id="rbMetal">0</span>
+  <!-- Barres collantes (un seul bloc : elles ne se chevauchent plus au défilement) -->
+  <div class="topbars">
+    <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
+    <div class="res-bar" id="resBar" role="group" aria-label="Ressources">
+      <div class="res-bar-cell" data-res="metal">
+        <span class="rb-label">Me</span>
+        <span class="rb-value" id="rbMetal">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="cristal">
+        <span class="rb-label">Cr</span>
+        <span class="rb-value" id="rbCristal">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="energie">
+        <span class="rb-label">En</span>
+        <span class="rb-value" id="rbEnergie">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="biomasse">
+        <span class="rb-label">Bio</span>
+        <span class="rb-value" id="rbBiomasse">0</span>
+      </div>
+      <div class="res-bar-cell" data-res="datacubes">
+        <span class="rb-label">Dc</span>
+        <span class="rb-value" id="rbDatacubes">0</span>
+      </div>
+      <div class="res-bar-sep" aria-hidden="true"></div>
+      <div class="res-bar-cell pop">
+        <span class="rb-label">Pop</span>
+        <span class="rb-value" id="rbPop">0</span>
+      </div>
     </div>
-    <div class="res-bar-cell" data-res="cristal">
-      <span class="rb-label">Cr</span>
-      <span class="rb-value" id="rbCristal">0</span>
-    </div>
-    <div class="res-bar-cell" data-res="energie">
-      <span class="rb-label">En</span>
-      <span class="rb-value" id="rbEnergie">0</span>
-    </div>
-    <div class="res-bar-cell" data-res="biomasse">
-      <span class="rb-label">Bio</span>
-      <span class="rb-value" id="rbBiomasse">0</span>
-    </div>
-    <div class="res-bar-cell" data-res="datacubes">
-      <span class="rb-label">Dc</span>
-      <span class="rb-value" id="rbDatacubes">0</span>
-    </div>
-    <div class="res-bar-sep"></div>
-    <div class="res-bar-cell pop">
-      <span class="rb-label">Pop</span>
-      <span class="rb-value" id="rbPop">0</span>
-    </div>
-  </div>
 
-  <!-- 0.23 — Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
-  <div class="alert-bar" id="alertBar" style="display:none;">
-    <span class="ab-icon">⚠</span>
-    <span class="ab-text" id="alertText">Alertes</span>
-    <span class="ab-arrow">▸</span>
-  </div>
+    <!-- 0.23 — Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
+    <div class="alert-bar" id="alertBar" style="display:none;" role="button" tabindex="0" aria-haspopup="dialog">
+      <span class="ab-icon" aria-hidden="true">⚠</span>
+      <span class="ab-text" id="alertText">Alertes</span>
+      <span class="ab-arrow" aria-hidden="true">▸</span>
+    </div>
 
-  <nav class="tabs">
-    <button data-tab="overview" class="active" data-icon="🏛"><span class="tab-icon">🏛</span><span class="tab-label">Vue</span></button>
-    <button data-tab="modules" data-icon="⚙"><span class="tab-icon">⚙</span><span class="tab-label">Modules</span></button>
-    <button data-tab="crew" id="tab-crew" data-icon="👥"><span class="tab-icon">👥</span><span class="tab-label">Équipage</span><span class="tab-badge" id="crewBadge"></span></button>
-    <button data-tab="galaxy" id="tab-galaxy" data-icon="🛰"><span class="tab-icon">🛰</span><span class="tab-label">Galaxie</span><span class="tab-badge" id="galaxyBadge"></span></button>
-    <button data-tab="stocks" data-icon="📦"><span class="tab-icon">📦</span><span class="tab-label">Stocks</span></button>
-    <button data-tab="arcs" id="tab-arcs" data-icon="📜"><span class="tab-icon">📜</span><span class="tab-label">Chroniques</span><span class="tab-badge" id="arcsBadge"></span></button>
-    <button data-tab="journal" data-icon="📓"><span class="tab-icon">📓</span><span class="tab-label">Journal</span></button>
-  </nav>
+    <!-- Onglets : en haut sur ordinateur, barre fixe en bas sur mobile (libellés courts) -->
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button data-tab="overview" id="tab-overview" class="active" role="tab" aria-selected="true" aria-controls="view-overview"><span class="tab-icon" aria-hidden="true">🏛</span><span class="tab-label">Vue</span></button>
+      <button data-tab="modules" id="tab-modules" role="tab" aria-selected="false" aria-controls="view-modules" tabindex="-1"><span class="tab-icon" aria-hidden="true">⚙</span><span class="tab-label">Modules</span></button>
+      <button data-tab="crew" id="tab-crew" role="tab" aria-selected="false" aria-controls="view-crew" tabindex="-1"><span class="tab-icon" aria-hidden="true">👥</span><span class="tab-label tab-long">Équipage</span><span class="tab-short" aria-hidden="true">Équipe</span><span class="tab-badge" id="crewBadge"></span></button>
+      <button data-tab="galaxy" id="tab-galaxy" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1"><span class="tab-icon" aria-hidden="true">🛰</span><span class="tab-label">Galaxie</span><span class="tab-badge" id="galaxyBadge"></span></button>
+      <button data-tab="stocks" id="tab-stocks" role="tab" aria-selected="false" aria-controls="view-stocks" tabindex="-1"><span class="tab-icon" aria-hidden="true">📦</span><span class="tab-label">Stocks</span></button>
+      <button data-tab="arcs" id="tab-arcs" role="tab" aria-selected="false" aria-controls="view-arcs" tabindex="-1"><span class="tab-icon" aria-hidden="true">📜</span><span class="tab-label tab-long">Chroniques</span><span class="tab-short" aria-hidden="true">Chron.</span><span class="tab-badge" id="arcsBadge"></span></button>
+      <button data-tab="journal" id="tab-journal" role="tab" aria-selected="false" aria-controls="view-journal" tabindex="-1"><span class="tab-icon" aria-hidden="true">📓</span><span class="tab-label">Journal</span></button>
+    </nav>
+  </div>
 
   <main>
     <!-- VUE D'ENSEMBLE -->
-    <section class="view active" id="view-overview">
+    <section class="view active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
       <h2 class="eyebrow">État de la colonie</h2>
       <h1 class="head" id="overviewName">Avant-poste</h1>
       <div class="subhead" id="overviewSub">Cycle de fondation</div>
@@ -110,13 +121,13 @@
     </section>
 
     <!-- MODULES (hub avec sous-onglets) -->
-    <section class="view" id="view-modules">
-      <nav class="subtabs">
-        <button data-subtab-mod="construction" class="active">Construction</button>
-        <button data-subtab-mod="assignments">Affectations<span class="tab-badge" id="assignBadge"></span></button>
+    <section class="view" id="view-modules" role="tabpanel" aria-labelledby="tab-modules">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab-mod="construction" class="active" role="tab" aria-controls="subview-construction" aria-selected="true">Construction</button>
+        <button data-subtab-mod="assignments" role="tab" aria-controls="subview-assignments" aria-selected="false" tabindex="-1">Affectations<span class="tab-badge" id="assignBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-construction">
+      <div class="subview active" id="subview-construction" role="tabpanel">
         <h2 class="eyebrow">Infrastructures disponibles</h2>
         <h1 class="head">Modules</h1>
         <div class="subhead">Construction séquentielle, un chantier à la fois</div>
@@ -132,7 +143,7 @@
         </div>
       </div>
 
-      <div class="subview" id="subview-assignments">
+      <div class="subview" id="subview-assignments" role="tabpanel">
         <h2 class="eyebrow">Vie de la base</h2>
         <h1 class="head">Affectations</h1>
         <div class="subhead" id="assignSub">Assigne ton équipage aux postes des bâtiments</div>
@@ -142,29 +153,29 @@
     </section>
 
     <!-- ÉQUIPAGE (hub avec sous-onglets) -->
-    <section class="view" id="view-crew">
-      <nav class="subtabs">
-        <button data-subtab="personnel" class="active">Personnel</button>
-        <button data-subtab="recruit" id="subtab-recruit">Recrut.<span class="tab-badge" id="recruitBadge"></span></button>
-        <button data-subtab="formation" id="subtab-formation">Formation</button>
-        <button data-subtab="soins" id="subtab-soins" disabled>Soins</button>
+    <section class="view" id="view-crew" role="tabpanel" aria-labelledby="tab-crew">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab="personnel" class="active" role="tab" aria-controls="subview-personnel" aria-selected="true">Personnel</button>
+        <button data-subtab="recruit" id="subtab-recruit" role="tab" aria-controls="subview-recruit" aria-selected="false" tabindex="-1">Recrut.<span class="tab-badge" id="recruitBadge"></span></button>
+        <button data-subtab="formation" id="subtab-formation" role="tab" aria-controls="subview-formation" aria-selected="false" tabindex="-1">Formation</button>
+        <button data-subtab="soins" id="subtab-soins" disabled role="tab" aria-controls="subview-soins" aria-selected="false" tabindex="-1">Soins</button>
       </nav>
 
-      <div class="subview active" id="subview-personnel">
+      <div class="subview active" id="subview-personnel" role="tabpanel">
         <h2 class="eyebrow">Personnel actif</h2>
         <h1 class="head" id="crewTitle">Équipage</h1>
         <div class="subhead" id="crewSub">Personne à bord pour l'instant</div>
         <div id="crewList"></div>
       </div>
 
-      <div class="subview" id="subview-recruit">
+      <div class="subview" id="subview-recruit" role="tabpanel">
         <h2 class="eyebrow">Candidatures reçues</h2>
         <h1 class="head">Recrutement</h1>
         <div class="subhead" id="recruitSub">Construis une <em>Balise de recrutement</em> pour recevoir des candidats</div>
         <div id="candidateList"></div>
       </div>
 
-      <div class="subview" id="subview-formation">
+      <div class="subview" id="subview-formation" role="tabpanel">
         <h2 class="eyebrow">Centre de formation</h2>
         <h1 class="head">Formation</h1>
         <div class="subhead" id="formationSub">Construis un Centre de formation</div>
@@ -173,7 +184,7 @@
         <button id="btnNewTraining" class="cta-btn" style="display:none;">Lancer une formation</button>
       </div>
 
-      <div class="subview" id="subview-soins">
+      <div class="subview" id="subview-soins" role="tabpanel">
         <h2 class="eyebrow">Infirmerie</h2>
         <h1 class="head">Soins</h1>
         <div class="subhead" id="soinsSub">Construis une Infirmerie</div>
@@ -187,38 +198,38 @@
     </section>
 
     <!-- GALAXIE (hub avec sous-onglets) -->
-    <section class="view" id="view-galaxy">
-      <nav class="subtabs">
-        <button data-subtab-galaxy="cartographie" class="active">Cartographie</button>
-        <button data-subtab-galaxy="fleet" id="subtab-fleet">Vaisseaux</button>
-        <button data-subtab-galaxy="expeditions" id="subtab-expeditions">Expéd.<span class="tab-badge" id="expBadge"></span></button>
-        <button data-subtab-galaxy="diplomatie" id="subtab-diplomatie">Diplomatie<span class="tab-badge" id="diploBadge"></span></button>
+    <section class="view" id="view-galaxy" role="tabpanel" aria-labelledby="tab-galaxy">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab-galaxy="cartographie" class="active" role="tab" aria-controls="subview-cartographie" aria-selected="true">Cartographie</button>
+        <button data-subtab-galaxy="fleet" id="subtab-fleet" role="tab" aria-controls="subview-fleet" aria-selected="false" tabindex="-1">Vaisseaux</button>
+        <button data-subtab-galaxy="expeditions" id="subtab-expeditions" role="tab" aria-controls="subview-expeditions" aria-selected="false" tabindex="-1">Expéd.<span class="tab-badge" id="expBadge"></span></button>
+        <button data-subtab-galaxy="diplomatie" id="subtab-diplomatie" role="tab" aria-controls="subview-diplomatie" aria-selected="false" tabindex="-1">Diplomatie<span class="tab-badge" id="diploBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-cartographie">
+      <div class="subview active" id="subview-cartographie" role="tabpanel">
         <div id="galaxyContent"></div>
       </div>
 
-      <div class="subview" id="subview-fleet">
+      <div class="subview" id="subview-fleet" role="tabpanel">
         <h2 class="eyebrow">Flotte stationnée</h2>
         <h1 class="head">Vaisseaux</h1>
         <div class="subhead" id="fleetSub">Construis un Hangar pour entreposer des vaisseaux</div>
         <div id="fleetStatus"></div>
         <div id="fleetList"></div>
-        <h3 class="section-h" id="fleetCatalogHead" style="display:none;">Modèles disponibles</h3>
+        <h3 class="section-h" id="fleetCatalogHead" hidden>Modèles disponibles</h3>
         <div id="fleetCatalog"></div>
       </div>
 
-      <div class="subview" id="subview-expeditions">
+      <div class="subview" id="subview-expeditions" role="tabpanel">
         <h2 class="eyebrow">Missions actives & passées</h2>
         <h1 class="head">Expéditions</h1>
         <div class="subhead" id="expSub">Aucune expédition pour l'instant</div>
         <div id="expActiveList"></div>
-        <h3 class="section-h" id="expHistoryHead" style="display:none;">Historique récent</h3>
+        <h3 class="section-h" id="expHistoryHead" hidden>Historique récent</h3>
         <div id="expHistoryList"></div>
       </div>
 
-      <div class="subview" id="subview-diplomatie">
+      <div class="subview" id="subview-diplomatie" role="tabpanel">
         <h2 class="eyebrow">Relations interstellaires</h2>
         <h1 class="head">Diplomatie</h1>
         <div class="subhead" id="diploSub">Factions rencontrées au fil des expéditions</div>
@@ -227,36 +238,36 @@
     </section>
 
     <!-- STOCKS (hub avec sous-onglets : Inventaire / Bibliothèque / Recherche) -->
-    <section class="view" id="view-stocks">
-      <nav class="subtabs">
-        <button data-subtab-stocks="inventory" class="active">Inventaire</button>
-        <button data-subtab-stocks="library">Bibliothèque<span class="tab-badge" id="libBadge"></span></button>
-        <button data-subtab-stocks="research">Recherche<span class="tab-badge" id="researchBadge"></span></button>
-        <button data-subtab-stocks="workshop">Atelier<span class="tab-badge" id="workshopBadge"></span></button>
+    <section class="view" id="view-stocks" role="tabpanel" aria-labelledby="tab-stocks">
+      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
+        <button data-subtab-stocks="inventory" class="active" role="tab" aria-controls="subview-inventory" aria-selected="true">Inventaire</button>
+        <button data-subtab-stocks="library" role="tab" aria-controls="subview-library" aria-selected="false" tabindex="-1">Bibliothèque<span class="tab-badge" id="libBadge"></span></button>
+        <button data-subtab-stocks="research" role="tab" aria-controls="subview-research" aria-selected="false" tabindex="-1">Recherche<span class="tab-badge" id="researchBadge"></span></button>
+        <button data-subtab-stocks="workshop" role="tab" aria-controls="subview-workshop" aria-selected="false" tabindex="-1">Atelier<span class="tab-badge" id="workshopBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-inventory">
+      <div class="subview active" id="subview-inventory" role="tabpanel">
         <h2 class="eyebrow">Stocks de la colonie</h2>
         <h1 class="head">Inventaire</h1>
         <div class="subhead" id="invSub">Items, artefacts et équipements</div>
         <div id="invContent"></div>
       </div>
 
-      <div class="subview" id="subview-library">
+      <div class="subview" id="subview-library" role="tabpanel">
         <h2 class="eyebrow">Schémas découverts</h2>
         <h1 class="head">Bibliothèque</h1>
         <div class="subhead" id="libSub">Plans techniques exploitables</div>
         <div id="libContent"></div>
       </div>
 
-      <div class="subview" id="subview-research">
+      <div class="subview" id="subview-research" role="tabpanel">
         <h2 class="eyebrow">Programme de recherche</h2>
         <h1 class="head">Recherche</h1>
         <div class="subhead" id="researchSub">Tech tree et progression long terme</div>
         <div id="researchContent"></div>
       </div>
 
-      <div class="subview" id="subview-workshop">
+      <div class="subview" id="subview-workshop" role="tabpanel">
         <h2 class="eyebrow">Production d'équipement</h2>
         <h1 class="head">Atelier</h1>
         <div class="subhead" id="workshopSub">Fabrique consommables, outils et armement</div>
@@ -266,7 +277,7 @@
     </section>
 
     <!-- CHRONIQUES (arcs narratifs) -->
-    <section class="view" id="view-arcs">
+    <section class="view" id="view-arcs" role="tabpanel" aria-labelledby="tab-arcs">
       <h2 class="eyebrow">Chroniques de la colonie</h2>
       <h1 class="head">Arcs narratifs</h1>
       <div class="subhead" id="arcsSub">Les fils rouges qui se tissent au fil du temps</div>
@@ -274,7 +285,7 @@
     </section>
 
     <!-- JOURNAL -->
-    <section class="view" id="view-journal">
+    <section class="view" id="view-journal" role="tabpanel" aria-labelledby="tab-journal">
       <h2 class="eyebrow">Journal de bord</h2>
       <h1 class="head" id="journalTitle">Carnet de fondation</h1>
       <div class="subhead">Tenu par le commandement local</div>
@@ -291,98 +302,21 @@
   </footer>
 </div>
 
-<input type="file" id="fileInput" accept="application/json" style="display:none">
-<div id="toast"></div>
+<input type="file" id="fileInput" accept="application/json" style="display:none" aria-label="Fichier de sauvegarde à importer">
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <div class="modal-bg" id="modalBg">
-  <div class="modal" id="modal"></div>
+  <div class="modal" id="modal" role="dialog" aria-modal="true" tabindex="-1"></div>
 </div>
 
 <!-- Overlay plein écran pour les scènes d'expédition -->
-<div class="scene-overlay" id="sceneOverlay">
-  <div class="scene-inner" id="sceneInner"></div>
+<div class="scene-overlay" id="sceneOverlay" role="dialog" aria-modal="true" aria-label="Scène d'expédition">
+  <div class="scene-inner" id="sceneInner" tabindex="-1"></div>
 </div>
 
 <script type="module" src="./src/app.js"></script>
 
-<!-- Service Worker pour la PWA (mode offline + installation) -->
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js')
-        .then((reg) => {
-          console.log('[PWA] Service Worker enregistré, scope :', reg.scope);
-          reg.addEventListener('updatefound', () => {
-            const newWorker = reg.installing;
-            if (!newWorker) return;
-            newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                console.log('[PWA] Nouvelle version disponible. Rechargez pour mettre à jour.');
-              }
-            });
-          });
-        })
-        .catch((err) => console.warn('[PWA] Échec d\'enregistrement du SW :', err));
-    });
-
-    // 0.26 — Quand l'utilisateur clique une notif système, le SW poste un message
-    // pour qu'on navigue vers l'onglet cible
-    navigator.serviceWorker.addEventListener('message', (event) => {
-      if (event.data?.type === 'NOTIF_NAVIGATE' && event.data.target) {
-        const target = event.data.target;
-        // Petit délai pour que l'UI soit prête
-        setTimeout(() => {
-          const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target}"]`);
-          if (tabBtn) tabBtn.click();
-        }, 300);
-      }
-      // Nouvelle version SW installée → rechargement automatique
-      if (event.data?.type === 'SW_UPDATED') {
-        setTimeout(() => window.location.reload(), 800);
-      }
-    });
-  }
-
-  // 0.26 — Si l'app est ouverte avec ?tab=xxx (depuis SW openWindow), bascule sur cet onglet
-  document.addEventListener('DOMContentLoaded', () => {
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    if (tabParam) {
-      setTimeout(() => {
-        const tabBtn = document.querySelector(`nav.tabs button[data-tab="${tabParam}"]`);
-        if (tabBtn) tabBtn.click();
-        // Nettoie l'URL pour ne pas garder le paramètre
-        window.history.replaceState({}, '', window.location.pathname);
-      }, 500);
-    }
-  });
-
-  // Capture l'événement d'installabilité (Android/Chrome principalement)
-  let deferredPrompt = null;
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
-    const btn = document.getElementById('installBtn');
-    if (btn) btn.hidden = false;
-  });
-  document.addEventListener('DOMContentLoaded', () => {
-    const btn = document.getElementById('installBtn');
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        if (!deferredPrompt) return;
-        deferredPrompt.prompt();
-        const result = await deferredPrompt.userChoice;
-        console.log('[PWA] Résultat installation :', result.outcome);
-        deferredPrompt = null;
-        btn.hidden = true;
-      });
-    }
-  });
-  window.addEventListener('appinstalled', () => {
-    console.log('[PWA] DRIFT a été installé.');
-    const btn = document.getElementById('installBtn');
-    if (btn) btn.hidden = true;
-  });
-</script>
+<!-- PWA : service worker, bandeau de mise à jour, notifications, installation -->
+<script type="module" src="./src/pwa.js"></script>
 </body>
 </html>

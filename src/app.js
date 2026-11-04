@@ -2,10 +2,10 @@
 // Extrait de drift.html lors de la phase de modularisation
 
 import { MODULES, MODULE_JOBS, VESSELS, ITEMS, ITEM_TYPES, ITEM_ORIGINS, ITEM_NAME_TO_ID, BLUEPRINTS, TECH_TREE, TECH_BRANCHES, FABRICATIONS, SCENES, TREATMENTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, ENEMY_TYPES } from './catalog.js';
-import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BASE_FRACTION, JOB_BIOMASSE_MULT, SKILL_LIST, SKILL_LABELS, STAT_LABELS, YEAR_IN_GAME_MIN, REL_LOVE, REL_FRIEND, REL_RIVAL, REL_RANCUNE } from './constants.js';
+import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, JOB_BASE_FRACTION, JOB_BIOMASSE_MULT, SKILL_LIST, SKILL_LABELS, STAT_LABELS, YEAR_IN_GAME_MIN, REL_LOVE, REL_FRIEND, REL_RIVAL, REL_RANCUNE } from './constants.js';
 import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import { CHRONICLES, CHRONICLE_SCENES } from './chronicles.js';
-import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$ } from './util.js';
+import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$, esc, uid } from './util.js';
 import { S, setS, freshState, computeRates, capOf, buildTime, crewCap, canBuild, startBuild, finishBuild, GRAVITES, VIES, BODY_TYPES, SYS_PREFIXES, GREEK, CONSTELL, genSystemName, POETIC_NAMES, genBodyName, genBody, genSystem, genGalaxy, describeBody, bodyThreatLevel, bodyRewardLevel, FIRST_NAMES, LAST_NAMES, ORIGINS, rollPick, rollWeighted, gaussInt, genName, genStats, genSkills, genTraits, genCandidate, crewUsage, aliveCrew, tickCount, tickOnce, tick, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind, trainingTargetLevel, findInstructor, formationBonuses, save, load, exportSave, importSave, resetGame } from './state.js';
 import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers } from './ui.js';
 import { notif } from './notifications.js';
@@ -43,6 +43,10 @@ import { notif } from './notifications.js';
    - capCrew     : capacité d'équipage débloquée (par niveau)
    - flag        : effet débloqué (laboratoire, atelier, etc.)
 */
+
+// Identifiants uniques des recherches, fabrications, formations et traitements
+// (import séparé et renommé pour ne pas entrer en conflit avec la ligne d'import
+// principale de util.js).
 
 // ============================================================
 //   POSTES & RÔLES — la vie de la base
@@ -115,31 +119,49 @@ export function memberAt(modKey, slotIdx) {
   return S.crew.find(m => m.id === id) || null;
 }
 
+// Motifs de refus d'affectation selon le statut du colon
+const UNAVAILABLE_REASONS = {
+  mort: 'Décédé',
+  expedition: 'En expédition',
+  formation: 'En formation',
+  infirmerie: 'À l\'infirmerie',
+  diplomatie: 'En mission diplomatique'
+};
+
 // Affecte un membre à un poste (gère désaffectation préalable)
 export function assignMember(memberId, modKey, slotIdx) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok: false, reason: 'Colon introuvable' };
-  if (member.statut === 'mort') return { ok: false, reason: 'Décédé' };
-  if (member.statut === 'expedition') return { ok: false, reason: 'En expédition' };
-  if (member.statut === 'formation') return { ok: false, reason: 'En formation' };
-  if (member.statut === 'infirmerie') return { ok: false, reason: 'À l\'infirmerie' };
+  // Seul un colon présent et disponible (libre ou déjà en poste) peut être affecté
+  if (member.statut !== 'libre' && member.statut !== 'travail') {
+    return { ok: false, reason: UNAVAILABLE_REASONS[member.statut] || `Indisponible (${member.statut})` };
+  }
 
   const jobs = jobsForModule(modKey);
   const job = jobs[slotIdx];
   if (!job) return { ok: false, reason: 'Poste inexistant' };
+
+  const prev = memberAssignment(memberId);
+  // Déjà à ce poste : rien à changer (l'ancienneté n'est pas remise à zéro
+  // et l'historique de carrière ne reçoit pas d'entrée en double)
+  if (prev && prev.modKey === modKey && prev.slotIdx === slotIdx) {
+    member.statut = 'travail';
+    return { ok: true };
+  }
   if (!isEligibleForJob(member, job)) return { ok: false, reason: 'Prérequis non remplis' };
 
-  // Désaffecte le membre de son poste précédent (s'il en avait un)
-  const prev = memberAssignment(memberId);
-  if (prev) {
-    // Archive career history before leaving previous post
-    if (member.posteInfo) {
-      if (!member.posteHistorique) member.posteHistorique = [];
-      member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
-      delete member.posteInfo;
-    }
-    delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
+  // Reprise du poste décrit par posteInfo (ex. après une remise à plat de
+  // toutes les affectations) : l'ancienneté continue.
+  const keepTenure = member.posteInfo?.modKey === modKey && member.posteInfo?.slotIdx === slotIdx
+    && typeof member.posteInfo.depuis === 'number';
+  // Archive le poste précédent dans l'historique de carrière
+  if (member.posteInfo && !keepTenure) {
+    if (!member.posteHistorique) member.posteHistorique = [];
+    member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
+    delete member.posteInfo;
   }
+  // Désaffecte le membre de son poste précédent (s'il en avait un)
+  if (prev) delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
 
   // Si un autre colon occupait ce poste, le désaffecter
   const occupant = memberAt(modKey, slotIdx);
@@ -149,19 +171,25 @@ export function assignMember(memberId, modKey, slotIdx) {
       occupant.posteHistorique.push({ ...occupant.posteInfo, jusqua: S.meta?.gameMin || 0 });
       delete occupant.posteInfo;
     }
-    occupant.statut = 'libre';
+    delete S.assignments[jobKey(modKey, slotIdx)];
+    // Seul un occupant présent au poste redevient libre. Un occupant absent
+    // (expédition, soins, formation, mission) garde son statut : il perd
+    // seulement la réservation et sera « libre » à son retour (returnToBase).
+    if (occupant.statut === 'travail') occupant.statut = 'libre';
   }
 
   // Affecte et enregistre le poste actuel
   S.assignments[jobKey(modKey, slotIdx)] = memberId;
   member.statut = 'travail';
-  member.posteInfo = {
-    modKey,
-    slotIdx,
-    titre: job.label,
-    role: job.role,
-    depuis: S.meta?.gameMin || 0
-  };
+  if (!keepTenure) {
+    member.posteInfo = {
+      modKey,
+      slotIdx,
+      titre: job.label,
+      role: job.role,
+      depuis: S.meta?.gameMin || 0
+    };
+  }
   return { ok: true };
 }
 
@@ -197,8 +225,9 @@ export function unassignSlot(modKey, slotIdx) {
 
 // Bonus de production lié à l'ancienneté dans le poste actuel.
 // Un colon qui reste longtemps sur son poste devient plus efficace.
+// posteInfo peut manquer (colon affecté avant 0.32) : pas de bonus, pas d'erreur.
 export function ancienneteBonus(member) {
-  if (!member?.posteInfo) return { mult: 1.0, label: null, annees: 0 };
+  if (!member?.posteInfo || typeof member.posteInfo.depuis !== 'number') return { mult: 1.0, label: null, annees: 0 };
   const dureeMin = (S.meta?.gameMin || 0) - (member.posteInfo.depuis || 0);
   const annees = dureeMin / YEAR_IN_GAME_MIN;
   if (annees < 1)  return { mult: 1.0,  label: null,          annees };
@@ -258,6 +287,7 @@ export function autoAssignMember(memberId) {
 
 // Lance l'auto-affectation pour tous les colons libres (utilisé au démarrage et à la construction)
 export function autoAssignAllFreeMembers() {
+  ensureCrewIntegrity();
   if (!S.autoAssign) return;
   // Trie les colons libres par "force" décroissante (somme skills) pour donner
   // les meilleurs postes aux meilleurs colons
@@ -266,6 +296,67 @@ export function autoAssignAllFreeMembers() {
     .map(m => ({ m, score: SKILL_LIST.reduce((s, k) => s + (m.skills[k] || 0), 0) }))
     .sort((a, b) => b.score - a.score);
   for (const { m } of free) autoAssignMember(m.id);
+}
+
+// ---- Réparation des sauvegardes ----
+// Remet en cohérence l'équipage d'une sauvegarde abîmée par d'anciens bugs
+// (0.32 et avant). Idempotente : sans effet sur un état sain.
+// Appelée automatiquement une fois par objet d'état (ensureCrewIntegrity, depuis
+// le tick et l'auto-affectation) ; peut aussi être appelée juste après load().
+export function repairCrewState() {
+  if (!S || !Array.isArray(S.crew)) return;
+  const byId = new Map(S.crew.map(m => [m.id, m]));
+  const alive = id => { const m = byId.get(id); return !!m && m.statut !== 'mort'; };
+  // Affectations vers un colon disparu ou mort
+  if (S.assignments) {
+    for (const k of Object.keys(S.assignments)) {
+      if (!alive(S.assignments[k])) delete S.assignments[k];
+    }
+  }
+  // Statut de présence : un colon embarqué dans une expédition ou une mission
+  // diplomatique en cours doit en porter le statut (anciens bugs : remplacement
+  // d'un occupant absent, diagnostic qui « libérait » le médecin…).
+  const inExpedition = new Set();
+  for (const exp of S.expeditions || []) for (const id of exp.crewIds || []) inExpedition.add(id);
+  const inMission = new Set((S.diplomaticMissions || []).map(d => d.memberId));
+  const inTraining = new Set((S.training || []).map(t => t.memberId));
+  for (const m of S.crew) {
+    if (m.statut === 'mort') continue;
+    const present = m.statut === 'libre' || m.statut === 'travail';
+    if (inExpedition.has(m.id)) { if (present) m.statut = 'expedition'; continue; }
+    if (inMission.has(m.id)) { if (present) m.statut = 'diplomatie'; continue; }
+    const hasPost = !!memberAssignment(m.id);
+    // Absence qui n'existe plus (expédition/mission/formation disparue) : retour à la base
+    const stuck = m.statut === 'expedition' || m.statut === 'diplomatie'
+      || (m.statut === 'formation' && !inTraining.has(m.id));
+    if (stuck || present) m.statut = hasPost ? 'travail' : 'libre';
+  }
+  // Traitements : statut visé identifié par sa clé, index recalé, orphelins et doublons retirés
+  if (Array.isArray(S.treatments)) {
+    S.treatments = S.treatments.filter(t => alive(t.memberId));
+    for (const m of S.crew) syncTreatmentIndexes(m);
+    const seen = new Set();
+    S.treatments = S.treatments.filter(t => {
+      const k = t.memberId + '|' + t.statutKey;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+}
+
+const _checkedStates = new WeakSet();
+// Lance repairCrewState une seule fois par objet d'état (chargement, import, reset)
+export function ensureCrewIntegrity() {
+  if (!S || typeof S !== 'object' || _checkedStates.has(S)) return;
+  _checkedStates.add(S);
+  try { repairCrewState(); } catch (e) { console.error('[repairCrewState]', e); }
+}
+
+// Plancher de rendement d'un poste vacant (mode automatisé) : JOB_BASE_FRACTION,
+// relevé par les techs (baseFractionDelta : Automatisation, Relais unifié), borné à 1.
+export function automationFloor() {
+  return Math.min(1, JOB_BASE_FRACTION + (techEffectsAccumulated().baseFractionDelta || 0));
 }
 
 // Calcule le coefficient d'efficacité d'un bâtiment selon ses postes pourvus
@@ -318,15 +409,16 @@ export function moduleEfficiency(modKey) {
   }
 
   const fillFraction = filled / jobs.length;
-  // Production : mode automatisé à JOB_BASE_FRACTION, ou
+  // Production : mode automatisé au plancher (JOB_BASE_FRACTION + techs), ou
   //   (prodFilled / prodCount) × 1.0 si tous les postes prod sont pourvus, +qualité/ancienneté
+  const floor = automationFloor();
   let prodMult;
   if (prodCount === 0) {
     // pas de poste prod → fillFraction comme proxy
-    prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * fillFraction;
+    prodMult = floor + (1 - floor) * fillFraction;
   } else {
     const prodRatio = prodFilled / prodCount;
-    prodMult = JOB_BASE_FRACTION + (1 - JOB_BASE_FRACTION) * prodRatio;
+    prodMult = floor + (1 - floor) * prodRatio;
     prodMult += qualityFilled * 0.20;   // chaque qualité = +20%
     prodMult += cmdFilled * 0.05;       // commandement bonus modeste
     prodMult += tenureBonus;            // ancienneté des producteurs
@@ -342,17 +434,25 @@ export function moduleEfficiency(modKey) {
   return { fillFraction, prodMult, qualityBonus, upkeepMult, securityBonus, supportBonus, jobsTotal: jobs.length, jobsFilled: filled };
 }
 
-// Bonus global de la colonie : somme des cmd partout
+// Bonus global de la colonie : somme des cmd partout.
+// Comme staffOf, ne compte que les postes ouverts au niveau actuel du module
+// (cf. jobsForModule) : un officier resté sur un poste supprimé (module
+// endommagé/rétrogradé) ne compte plus.
 export function globalCommandBonus() {
   let n = 0;
   for (const k in S.assignments) {
     const [modKey, idxStr] = k.split(':');
-    const job = MODULE_JOBS[modKey]?.[parseInt(idxStr, 10)];
+    const idx = parseInt(idxStr, 10);
+    if (!(idx < (S.modules[modKey]?.level || 0))) continue;
+    const job = MODULE_JOBS[modKey]?.[idx];
     if (!job || job.role !== 'commandement') continue;
     const m = S.crew.find(c => c.id === S.assignments[k]);
     if (m && m.statut === 'travail') n++;
   }
-  return n;
+  // Le Centre de commandement ne produit rien : son multiplicateur de tech
+  // (moduleProdMult.commandement, Relais unifié) renforce le poids de tous les
+  // postes de commandement de la colonie.
+  return n * (techEffectsAccumulated().moduleProdMult.commandement || 1);
 }
 
 // Récupère tous les colons affectés à un bâtiment (en travail effectif).
@@ -477,9 +577,12 @@ export function addBlueprintToInventory(bpId, source) {
 // origins: 'humain' | 'alien_a' | 'alien_b' | 'fusion'
 // rng: PRNG seedé
 function rollBlueprint(originPool, rng = Math.random) {
+  const pool = [].concat(originPool || []);
+  // Les schémas légendaires et les récompenses d'arc ne tombent jamais au hasard
+  const arcRewards = new Set(Object.values(ARCS).filter(a => a.reward?.kind === 'blueprint').map(a => a.reward.value));
   const candidates = Object.keys(BLUEPRINTS).filter(id => {
     const bp = BLUEPRINTS[id];
-    return originPool.includes(bp.origin);
+    return pool.includes(bp.origin) && !bp.legendary && !arcRewards.has(id);
   });
   if (candidates.length === 0) return null;
   // Pondération par rareté inverse : commun = poids 4, peu commun = 3, rare = 2, très rare = 1
@@ -592,7 +695,7 @@ export function startResearch(techId) {
   }
   if (!S.research) S.research = [];
   S.research.push({
-    id: 'r_' + Date.now().toString(36),
+    id: uid('r'),
     techId,
     startedAt: S.meta.gameMin,
     totalMin: r.cost.time * BUILD_TIME_MULT,
@@ -600,6 +703,13 @@ export function startResearch(techId) {
   });
   log('neutral', `Recherche engagée : <em>${r.tech.nom}</em>. Durée : ${fmtMin(r.cost.time * BUILD_TIME_MULT)}.`);
   render();
+}
+
+// Rembourse `amount` d'une ressource dans la limite de la capacité réelle
+// (capOf : techs et modules compris). Ne réduit jamais un stock existant.
+function refundRes(k, amount) {
+  const cur = S.res[k] || 0;
+  S.res[k] = Math.max(cur, Math.min(capOf(k), cur + amount));
 }
 
 export function cancelResearch(researchId) {
@@ -610,7 +720,7 @@ export function cancelResearch(researchId) {
   const tech = TECH_TREE[r.techId];
   // Rembourse 50% des datacubes
   if (tech) {
-    S.res.datacubes = Math.min(CAP.datacubes || Infinity, S.res.datacubes + Math.floor(tech.cost.datacubes * 0.5));
+    refundRes('datacubes', Math.floor(tech.cost.datacubes * 0.5));
     if (tech.cost.datacubes_alien) {
       S.alienDatacubes = (S.alienDatacubes || 0) + Math.floor(tech.cost.datacubes_alien * 0.5);
     }
@@ -659,8 +769,8 @@ export function laboratoryBonuses() {
 export function tickResearch() {
   if (!S.research || S.research.length === 0) return;
   const lb = laboratoryBonuses();
-  // Mode automatisé sans Chercheur : 30% de la vitesse normale
-  const autoMult = lb.activeProd ? 1.0 : JOB_BASE_FRACTION;
+  // Mode automatisé sans Chercheur : plancher d'automatisation (30% + techs)
+  const autoMult = lb.activeProd ? 1.0 : automationFloor();
   
   // 0.25 : bonus de vitesse depuis modules avec researchSpeedBonus (mémoire cristalline)
   let modBonus = 1.0;
@@ -687,8 +797,24 @@ export function tickResearch() {
 // Toutes les fonctions du jeu qui veulent connaître un bonus appellent
 // techEffectsAccumulated() ou des helpers spécifiques.
 
-// Renvoie un objet agrégé de tous les effets actifs des techs complétées
+// Renvoie un objet agrégé de tous les effets actifs des techs complétées.
+// Appelée plusieurs fois par tick (capOf, computeRates, contagion…) : le
+// résultat est mis en cache et recalculé seulement quand l'ensemble des techs
+// terminées change (nouvelle tech) ou que l'objet d'état est remplacé
+// (chargement, import, reset). L'objet renvoyé est partagé : ne pas le modifier.
+let _techFx = null, _techFxState = null, _techFxDone = null, _techFxCount = -1;
 export function techEffectsAccumulated() {
+  const done = S?.techCompleted;
+  const n = done ? Object.keys(done).length : 0;
+  if (_techFx && _techFxState === S && _techFxDone === done && _techFxCount === n) return _techFx;
+  _techFx = computeTechEffects();
+  _techFxState = S;
+  _techFxDone = done;
+  _techFxCount = n;
+  return _techFx;
+}
+
+function computeTechEffects() {
   const acc = {
     resourceMult:        { metal:1, cristal:1, energie:1, biomasse:1, datacubes:1 },
     moduleProdMult:      {},   // par modKey
@@ -848,7 +974,7 @@ export function startFabrication(fabId) {
   for (const k in fab.cost) S.res[k] -= fab.cost[k];
   if (!S.fabrication) S.fabrication = [];
   S.fabrication.push({
-    id: 'f_' + Date.now().toString(36),
+    id: uid('f'),
     fabId,
     startedAt: S.meta.gameMin,
     totalMin: fab.time * BUILD_TIME_MULT,
@@ -866,9 +992,7 @@ export function cancelFabrication(fId) {
   const fab = FABRICATIONS[f.fabId];
   // Rembourse 50% des ressources
   if (fab) {
-    for (const k in fab.cost) {
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + Math.floor(fab.cost[k] * 0.5));
-    }
+    for (const k in fab.cost) refundRes(k, Math.floor(fab.cost[k] * 0.5));
   }
   S.fabrication.splice(idx, 1);
   log('warn', `Fabrication interrompue : <em>${fab?.nom || '?'}</em>. 50% des ressources récupérées.`);
@@ -899,8 +1023,8 @@ function finishFabrication(fId) {
 export function tickFabrication() {
   if (!S.fabrication || S.fabrication.length === 0) return;
   const bonuses = workshopBonuses();
-  // Mode automatisé sans Artisan : 30% de la vitesse
-  const autoMult = bonuses.hasArtisan ? 1.0 : JOB_BASE_FRACTION;
+  // Mode automatisé sans Artisan : plancher d'automatisation (30% + techs)
+  const autoMult = bonuses.hasArtisan ? 1.0 : automationFloor();
   const finished = [];
   for (const f of S.fabrication) {
     f.doneMin += MIN_PER_TICK * autoMult / bonuses.speedMult;
@@ -981,7 +1105,10 @@ export function inventoryCount() {
 // Vérifie si une planète remplit les conditions d'une chronique
 function bodyMatchesChronicleReqs(body, requires) {
   if (!requires) return true;
-  if (requires.ruines && body.ruines !== requires.ruines) return false;
+  if (requires.ruines) {
+    const allowed = Array.isArray(requires.ruines) ? requires.ruines : [requires.ruines];
+    if (!allowed.includes(body.ruines)) return false;
+  }
   if (requires.biome) {
     const allowed = Array.isArray(requires.biome) ? requires.biome : [requires.biome];
     if (!allowed.includes(body.biome)) return false;
@@ -1007,14 +1134,24 @@ function tryAssignChronicle(body) {
   if (body.chronicleChecked) return; // déjà vérifiée, pas la peine de rejouer la roulette
   body.chronicleChecked = true;
   
+  // Une chronique est une saga unique : on exclut celles déjà attribuées à un autre corps
+  const taken = new Set();
+  for (const sys of S.galaxy?.systems || []) {
+    for (const b of sys.bodies || []) if (b !== body && b.chronicle?.id) taken.add(b.chronicle.id);
+  }
   const candidates = [];
   for (const id in CHRONICLES) {
     const c = CHRONICLES[id];
-    if (bodyMatchesChronicleReqs(body, c.requires)) {
+    if (!taken.has(c.id) && bodyMatchesChronicleReqs(body, c.requires)) {
       candidates.push(c);
     }
   }
   if (candidates.length === 0) return;
+  // Ordre aléatoire : sinon la première chronique compatible est toujours favorisée
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
   
   // Tirage avec la spawnChance de chaque chronique
   for (const c of candidates) {
@@ -1058,26 +1195,20 @@ export function chronicleEpisodeIntro(body) {
   if (ep.introByFlag) {
     for (const flagKey in ep.introByFlag) {
       const v = flags[flagKey];
-      if (v != null && ep.introByFlag[flagKey][v] != null) {
-        return ep.introByFlag[flagKey][v];
+      const table = ep.introByFlag[flagKey];
+      if (v != null && table[v] != null) {
+        return table[v];
+      }
+      // Flag numérique au-delà des paliers prévus (ex. tone_compris 5) : palier le plus proche en dessous
+      if (typeof v === 'number') {
+        const steps = Object.keys(table).map(Number).filter(n => Number.isFinite(n) && n <= v);
+        if (steps.length) return table[Math.max(...steps)];
       }
     }
   }
   return ep.defaultIntro || ep.intro || '';
 }
 
-// Vérifie qu'un req de scène est satisfait pour la chronique
-function checkChronicleReq(req, body, exp) {
-  if (!req) return true;
-  if (req.flag) {
-    const flags = body.chronicle?.flags || {};
-    const v = flags[req.flag.key];
-    if (req.flag.equals !== undefined && v !== req.flag.equals) return false;
-    if (req.flag.min !== undefined && (v == null || v < req.flag.min)) return false;
-    if (req.flag.max !== undefined && (v == null || v > req.flag.max)) return false;
-  }
-  return true;
-}
 
 // Applique setFlags : valeur directe OU "+1"/"-1" pour incrément
 function applyFlagChanges(body, changes) {
@@ -1100,17 +1231,14 @@ function findChronicleScene(id) {
   return CHRONICLE_SCENES.find(s => s.id === id) || null;
 }
 
-// Récupère le texte d'une scène de chronique (peut être fonction)
-export function resolveChronicleText(scene, body) {
-  if (typeof scene.text === 'function') {
-    return scene.text(body.chronicle?.flags || {});
-  }
-  return scene.text || '';
-}
 
-// Marque l'épisode courant comme terminé et passe au suivant
-function endChronicleEpisode(body) {
-  if (!body.chronicle) return;
+// Marque l'épisode courant comme terminé et passe au suivant.
+// exp (optionnel) : l'expédition qui a joué l'épisode — évite de sauter un épisode
+// si une autre expédition a déjà conclu le même entre-temps.
+function endChronicleEpisode(body, exp) {
+  if (!body.chronicle || body.chronicle.completed) return;
+  const playedIdx = exp?.chronicleRef?.episodeIdx;
+  if (typeof playedIdx === 'number' && playedIdx !== body.chronicle.episodeIdx) return;
   body.chronicle.episodeIdx++;
   body.chronicle.currentSceneId = null;
   const c = CHRONICLES[body.chronicle.id];
@@ -1131,8 +1259,9 @@ function endChronicleEpisode(body) {
 
 // Marque la chronique comme terminée avec une fin spécifique
 function endChronicleWith(body, endingId) {
-  if (!body.chronicle) return;
+  if (!body.chronicle || body.chronicle.completed) return;
   body.chronicle.completed = true;
+  body.chronicle.currentSceneId = null;
   body.chronicle.ending = endingId;
   const c = CHRONICLES[body.chronicle.id];
   if (c) {
@@ -1143,39 +1272,54 @@ function endChronicleWith(body, endingId) {
   }
 }
 
-// Construit la séquence de scènes pour l'épisode courant d'une chronique.
-// La séquence démarre par une scène-intro synthétique, puis pose la première
-// scène de l'épisode. Les scènes suivantes seront résolues dynamiquement par
-// le moteur d'expédition via les outcome.next.
-function buildChronicleEpisodeScenes(body, episode) {
-  const introText = chronicleEpisodeIntro(body);
-  // Scène-intro synthétique (générée à la volée)
-  const introScene = {
-    id: '__chron_intro__',
+// Id de la scène-intro synthétique d'un épisode de chronique. Elle n'existe ni
+// dans SCENES ni dans CHRONICLE_SCENES : l'expédition ne stocke que cet id et
+// currentScene() la reconstruit à partir du corps céleste (y compris pour les
+// sauvegardes faites avant ce correctif).
+const CHRON_INTRO_ID = '__chron_intro__';
+
+// Construit la scène-intro de l'épisode courant d'une chronique (ou null)
+function chronicleIntroScene(body) {
+  const episode = currentChronicleEpisode(body);
+  if (!episode) return null;
+  return {
+    id: CHRON_INTRO_ID,
     tags: ['__chronicle_intro__'],
-    text: introText,
+    text: chronicleEpisodeIntro(body) || episode.title || '',
     choices: [
-      { label: "Avancer", outcome: { log: '', next: episode.firstScene } }
+      { label: "Avancer", outcome: { next: episode.firstScene } }
     ]
   };
-  // Marque la chronique pour qu'on sache la première scène à charger
-  body.chronicle.currentSceneId = '__chron_intro__';
-  // La séquence ne contient que l'intro — la suite est résolue dynamiquement
+}
+
+// Vrai si l'expédition joue (ou va jouer) un épisode de chronique
+function isChronicleExpedition(exp) {
+  return !!exp && (!!exp.chronicleSceneId || exp.scenes?.[0] === CHRON_INTRO_ID);
+}
+
+// Construit la séquence de scènes pour l'épisode courant d'une chronique.
+// La séquence ne contient que la scène-intro synthétique : la première scène
+// de l'épisode puis les suivantes sont résolues dynamiquement par le moteur
+// d'expédition via les outcome.next (exp.chronicleSceneId).
+function buildChronicleEpisodeScenes(body) {
+  const introScene = chronicleIntroScene(body);
+  if (!introScene) return null;
+  body.chronicle.currentSceneId = CHRON_INTRO_ID;
   return [introScene];
 }
 
 
 // ---- Sélection des scènes pour une expédition ----
 // Détermine les tags actifs d'une planète et tire 5-10 scènes cohérentes
-function selectExpeditionScenes(body, rng) {
+function selectExpeditionScenes(body, rng, opts = {}) {
   // 0.24 — D'abord, on tente d'attribuer une chronique si pas déjà fait
-  tryAssignChronicle(body);
+  if (!opts.skipChronicle) tryAssignChronicle(body);
   
   // Si la planète a une chronique active avec un épisode à jouer,
   // on remplace la sélection normale par la séquence de l'épisode.
-  const chronEp = currentChronicleEpisode(body);
-  if (chronEp) {
-    return buildChronicleEpisodeScenes(body, chronEp);
+  const chronScenes = opts.skipChronicle ? null : buildChronicleEpisodeScenes(body);
+  if (chronScenes) {
+    return chronScenes;
   }
   
   const tags = [];
@@ -1210,8 +1354,9 @@ function selectExpeditionScenes(body, rng) {
   // Découpe : intro + corps (3-7) + outro
   const intros = SCENES.filter(s => s.tags.includes('intro') &&
     s.tags.every(t => t === 'intro' || tags.includes(t) || t === 'signal' && body.signal !== 'aucun'));
+  // (le tag 'ruines' est présent dans tags dès que le corps a des ruines)
   const outros = SCENES.filter(s => s.tags.includes('outro') &&
-    s.tags.every(t => t === 'outro' || tags.includes(t) || t === 'ruines'));
+    s.tags.every(t => t === 'outro' || tags.includes(t)));
 
   const bodyScenes = SCENES.filter(s => {
     if (s.tags.includes('intro') || s.tags.includes('outro')) return false;
@@ -1269,8 +1414,8 @@ function weightedPick(arr, rng) {
 }
 
 // Substitue les variables dans le texte d'une scène
-export function fillTemplate(text, ctx) {
-  return text
+export function fillTemplate(text, ctx = {}) {
+  return String(text ?? '')
     .replace(/\{vaisseau\}/g, ctx.vesselName || 'le vaisseau')
     .replace(/\{planete\}/g, ctx.bodyName || 'la planète')
     .replace(/\{biomeFrag\}/g, BIOMES[ctx.body?.biome]?.frag || '')
@@ -1385,7 +1530,7 @@ export const STATUTS = {
 
 
 // Catalogue des séquelles permanentes (traits négatifs ou ambigus)
-const SEQUELS = {
+export const SEQUELS = {
   boiteux:        { nom:'Boiteux',          desc:"Démarche entravée, -2 Dextérité." },
   cicatrice:      { nom:'Marqué',           desc:"Cicatrice visible, -1 Charisme." },
   cicatrice_xeno: { nom:'Cicatrice xeno',   desc:"-1 Charisme, +1 résistance pathogène alien." },
@@ -1512,7 +1657,7 @@ export function startTraining(memberId, skill) {
   for (const k in r.cost) S.res[k] -= r.cost[k];
   // Ouvre la session
   const session = {
-    id: 't_' + Date.now().toString(36),
+    id: uid('t'),
     memberId,
     skill,
     targetLvl: r.target,
@@ -1574,10 +1719,7 @@ export function cancelTraining(sessionId) {
   const s = S.training[idx];
   const member = S.crew.find(m => m.id === s.memberId);
   // Rembourse 50% des ressources
-  for (const k in s.cost) {
-    const refund = Math.floor(s.cost[k] / 2);
-    S.res[k] = Math.min(capOf(k), S.res[k] + refund);
-  }
+  for (const k in s.cost) refundRes(k, Math.floor(s.cost[k] / 2));
   S.training.splice(idx, 1);
   if (member) {
     returnToBase(member);
@@ -1599,6 +1741,42 @@ export function infirmaryBeds() {
 export function bedsInUse() {
   // un patient en infirmerie occupe un lit dès qu'il y est admis
   return S.crew.filter(m => m.statut === 'infirmerie').length;
+}
+
+// ---- Référencement des statuts traités ----
+// Un traitement vise un statut par sa clé (`statutKey`), unique par colon
+// puisque inflictStatus dédoublonne. `statusIdx` (index dans member.statuts)
+// est conservé pour l'UI, mais il est recalé après chaque retrait de statut :
+// une auto-guérison ou une éclosion décale les index suivants.
+
+// Retrouve un statut par son index (API historique de l'UI) ou par sa clé.
+// Renvoie { status, idx } ou null.
+function findMemberStatus(member, ref) {
+  if (!member || !Array.isArray(member.statuts)) return null;
+  const idx = typeof ref === 'string'
+    ? member.statuts.findIndex(s => s.key === ref)
+    : (Number.isInteger(ref) ? ref : -1);
+  const status = idx >= 0 ? member.statuts[idx] : null;
+  return status ? { status, idx } : null;
+}
+
+// Traitement en cours sur le statut `statutKey` d'un colon (ou null)
+export function treatmentOf(memberId, statutKey) {
+  return (S.treatments || []).find(t => t.memberId === memberId && t.statutKey === statutKey) || null;
+}
+
+// Recale statusIdx des traitements d'un colon sur l'état actuel de member.statuts.
+// À appeler après tout retrait de statut. Un traitement dont le statut a disparu est retiré.
+export function syncTreatmentIndexes(member) {
+  if (!member || !Array.isArray(S.treatments) || !Array.isArray(member.statuts)) return;
+  for (let i = S.treatments.length - 1; i >= 0; i--) {
+    const t = S.treatments[i];
+    if (t.memberId !== member.id) continue;
+    if (!t.statutKey) t.statutKey = member.statuts[t.statusIdx]?.key;  // sauvegarde antérieure
+    const idx = t.statutKey ? member.statuts.findIndex(s => s.key === t.statutKey) : -1;
+    if (idx < 0) S.treatments.splice(i, 1);
+    else t.statusIdx = idx;
+  }
 }
 
 // Trouve le meilleur médecin disponible.
@@ -1640,24 +1818,41 @@ export function infirmaryBonuses() {
   return { speedMult, diagBonus, traitMedecinNe };
 }
 
+// Statuts « contaminants » bloqués en expédition par tech_membrane_adaptive
+const EXPEDITION_CONTAMINANTS = ['pathogene_alien', 'infection', 'parasite'];
+
 // Inflige un statut à un membre. Si caché, pose "Anomalie suspecte" jusqu'au diagnostic.
-export function inflictStatus(member, statutKey, source = '') {
+// opts.internal : évolution d'un mal déjà présent (ex. éclosion d'un parasite),
+// et non une exposition : ni l'instinct du Survivant ni les membranes ne l'évitent.
+export function inflictStatus(member, statutKey, source = '', opts = {}) {
   if (!member || member.statut === 'mort') return;
   const def = STATUTS[statutKey];
   if (!def) return;
+  if (!Array.isArray(member.statuts)) member.statuts = [];
   // Évite les doublons exacts
   if (member.statuts.some(s => s.key === statutKey)) return;
+  // Membranes adaptives (expeditionToxicImmune) : l'équipe d'expédition est
+  // immunisée contre les contaminations biologiques du terrain
+  if (!opts.internal && EXPEDITION_CONTAMINANTS.includes(statutKey)
+      && (member.statut === 'expedition' || /^exp[ée]dition/i.test(source))
+      && techEffectsAccumulated().expeditionToxicImmune) {
+    log('neutral', `La membrane adaptive de <em>${member.name}</em> bloque la contamination.`);
+    return;
+  }
   // Survivant résiste 50% du temps
-  if (member.traits.includes('survivant') && Math.random() < 0.5) {
+  if (!opts.internal && (member.traits || []).includes('survivant') && Math.random() < 0.5) {
     log('neutral', `<em>${member.name}</em> évite ${def.nom.toLowerCase()} grâce à son instinct.`);
     return;
   }
+  // Un statut à révélation différée (revealAfter, ex. mutation) reste une
+  // « anomalie » jusqu'à son apparition (progressMemberStatuts) ou un diagnostic
+  const visible = !def.hidden && !def.revealAfter;
   const status = {
     key: statutKey,
     since: S.meta.gameMin,
-    revealed: !def.hidden,        // visible direct si pas hidden
+    revealed: visible,
     revealAt: def.revealAfter ? S.meta.gameMin + def.revealAfter : null,
-    diagnosed: !def.hidden,
+    diagnosed: visible,
     statMod: def.statMod || {}
   };
   // Cas mutation : déterminer le mod (50/50 positif / négatif)
@@ -1672,7 +1867,7 @@ export function inflictStatus(member, statutKey, source = '') {
   }
   member.statuts.push(status);
   member.sante = Math.max(0, member.sante - def.severity * 5);
-  const noun = def.hidden ? "un état suspect" : `<em>${def.nom}</em>`;
+  const noun = visible ? `<em>${def.nom}</em>` : "un état suspect";
   log('warn', `<em>${member.name}</em> présente ${noun}${source ? ' — ' + source : ''}.`);
 }
 
@@ -1680,7 +1875,12 @@ export function inflictStatus(member, statutKey, source = '') {
 export function admitToInfirmary(memberId) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return;
-  if (member.statut === 'mort') return;
+  if (member.statut === 'mort' || member.statut === 'infirmerie') return;
+  // Seul un colon présent à la base peut être admis (pas en expédition ni en mission)
+  if (!['libre', 'travail', 'formation'].includes(member.statut)) {
+    toast(`${member.name} n'est pas à la base.`);
+    return;
+  }
   if (infirmaryBeds() <= bedsInUse()) {
     toast("Infirmerie pleine — choisir un triage.");
     return;
@@ -1698,14 +1898,13 @@ export function admitToInfirmary(memberId) {
 
 export function dischargeMember(memberId) {
   const member = S.crew.find(m => m.id === memberId);
-  if (!member) return;
+  // Ne concerne qu'un patient admis : ne « rapatrie » pas un colon absent
+  if (!member || member.statut !== 'infirmerie') return;
   // Annule traitements en cours
   S.treatments = S.treatments.filter(t => {
     if (t.memberId === memberId) {
       // rembourse 30%
-      for (const k in t.cost) {
-        S.res[k] = Math.min(capOf(k), S.res[k] + Math.floor(t.cost[k] * 0.3));
-      }
+      for (const k in t.cost) refundRes(k, Math.floor(t.cost[k] * 0.3));
       return false;
     }
     return true;
@@ -1715,60 +1914,76 @@ export function dischargeMember(memberId) {
   render();
 }
 
-// Lance un diagnostic actif sur un statut caché
-export function startDiagnostic(memberId, statusIdx) {
-  const member = S.crew.find(m => m.id === memberId);
-  if (!member) return;
-  if (member.statut !== 'infirmerie') {
-    toast("Le patient doit être admis avant.");
-    return;
-  }
-  const status = member.statuts[statusIdx];
-  if (!status || status.diagnosed) return;
-  const def = STATUTS[status.key];
-  // Conditions
-  if (def.detect.needLab && !S.flags.recherche) {
-    toast("Laboratoire requis pour ce diagnostic.");
-    return;
-  }
-  const doctor = bestAvailableDoctor();
-  if (!doctor) {
-    toast("Aucun médecin disponible.");
-    return;
-  }
-  // Coût simple : 2 datacubes pour usage labo, sinon 0
-  const cost = def.detect.needLab ? { datacubes: 2 } : {};
-  for (const k in cost) {
-    if (S.res[k] < cost[k]) { toast(`Ressources insuffisantes (${RES_LABELS[k]})`); return; }
-  }
-  for (const k in cost) S.res[k] -= cost[k];
-  doctor.statut = 'expedition';   // bloqué temporaire (réutilise le statut, géré dans render)
-  doctor.statut = 'libre';        // simplification : diagnostic instantané narratif
+// Délai minimal entre deux examens d'un même statut après un échec (minutes de jeu)
+export const DIAG_RETRY_MIN = 60;
 
-  const success = rollDiagnostic(memberId, status.key, doctor);
+// Vérifie qu'un diagnostic est lançable. statusRef : index (UI) ou clé du statut.
+// Renvoie { ok, reason, cost, doctor, waitMin? } — utilisable par l'UI pour le bouton.
+export function canDiagnose(memberId, statusRef) {
+  const member = S.crew.find(m => m.id === memberId);
+  if (!member) return { ok:false, reason:"Patient introuvable" };
+  if (member.statut !== 'infirmerie') return { ok:false, reason:"Le patient doit être admis avant." };
+  const found = findMemberStatus(member, statusRef);
+  if (!found) return { ok:false, reason:"Statut introuvable" };
+  const { status, idx: statusIdx } = found;
+  if (status.diagnosed) return { ok:false, reason:"Déjà diagnostiqué" };
+  const def = STATUTS[status.key];
+  if (!def) return { ok:false, reason:"Statut inconnu" };
+  const det = (def.detect && typeof def.detect === 'object') ? def.detect : {};
+  if (det.needLab && !S.flags.recherche) return { ok:false, reason:"Laboratoire requis pour ce diagnostic." };
+  const doctor = bestAvailableDoctor();
+  if (!doctor) return { ok:false, reason:"Aucun médecin disponible." };
+  // Un examen non concluant ne peut être refait qu'après un délai
+  const waitMin = typeof status.lastDiagAt === 'number' ? status.lastDiagAt + DIAG_RETRY_MIN - S.meta.gameMin : 0;
+  if (waitMin > 0) return { ok:false, reason:`Nouvel examen possible dans ${fmtMin(waitMin)}`, waitMin };
+  // Coût simple : 2 datacubes pour usage labo, sinon 0
+  const cost = det.needLab ? { datacubes: 2 } : {};
+  for (const k in cost) {
+    if ((S.res[k] || 0) < cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+  }
+  return { ok:true, member, status, statusIdx, def, doctor, cost };
+}
+
+// Lance un diagnostic actif sur un statut caché (statusRef : index ou clé)
+export function startDiagnostic(memberId, statusRef) {
+  const r = canDiagnose(memberId, statusRef);
+  if (!r.ok) {
+    if (r.reason !== "Déjà diagnostiqué") toast(r.reason);
+    return;
+  }
+  const { member, status, def, doctor, cost } = r;
+  for (const k in cost) S.res[k] -= cost[k];
+  // Diagnostic instantané : le médecin garde son statut (et son poste)
+  const success = rollDiagnostic(member.id, status.key, doctor);
   if (success) {
     status.diagnosed = true;
     status.revealed = true;
+    delete status.lastDiagAt;
     log('success', `Diagnostic posé par <em>${doctor.name}</em> : <em>${member.name}</em> souffre de <em>${def.nom}</em>.`);
   } else {
-    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. À retenter.`);
+    // Échec : nouvel examen possible seulement après DIAG_RETRY_MIN
+    status.lastDiagAt = S.meta.gameMin;
+    log('warn', `Diagnostic non concluant pour <em>${member.name}</em>. Nouvel examen possible dans ${fmtMin(DIAG_RETRY_MIN)}.`);
   }
   render();
 }
 
-// Vérifie qu'un traitement est lançable
-export function canTreat(memberId, statusIdx) {
+// Vérifie qu'un traitement est lançable.
+// statusRef : index dans member.statuts (UI) ou clé du statut.
+export function canTreat(memberId, statusRef) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok:false, reason:"Patient introuvable" };
   if (member.statut !== 'infirmerie') return { ok:false, reason:"Patient non admis" };
-  const status = member.statuts[statusIdx];
-  if (!status) return { ok:false, reason:"Statut introuvable" };
+  const found = findMemberStatus(member, statusRef);
+  if (!found) return { ok:false, reason:"Statut introuvable" };
+  const { status, idx: statusIdx } = found;
   if (!status.diagnosed) return { ok:false, reason:"Diagnostic requis avant traitement" };
-  // Déjà en cours ?
-  if (S.treatments.some(t => t.memberId === memberId && t.statusIdx === statusIdx)) {
+  // Déjà en cours ? (par clé : l'index d'un statut peut changer)
+  if (treatmentOf(memberId, status.key)) {
     return { ok:false, reason:"Traitement déjà en cours" };
   }
   const def = STATUTS[status.key];
+  if (!def) return { ok:false, reason:"Statut inconnu" };
   const infLvl = S.modules.infirmerie?.level || 0;
   if (infLvl < def.medLvlReq) {
     return { ok:false, reason:`Infirmerie niv ${def.medLvlReq} requise (actuelle : ${infLvl})` };
@@ -1776,38 +1991,41 @@ export function canTreat(memberId, statusIdx) {
   const tdef = TREATMENTS[status.key]?.[0];
   if (!tdef) return { ok:false, reason:"Aucun traitement disponible" };
   const doctor = bestAvailableDoctor();
-  if ((doctor?.skills.medecine || 0) < tdef.requiresMedSkill) {
+  // Même un soin bénin (requiresMedSkill 0) demande quelqu'un pour le prodiguer
+  if (!doctor) return { ok:false, reason:"Aucun médecin disponible" };
+  if ((doctor.skills.medecine || 0) < tdef.requiresMedSkill) {
     return { ok:false, reason:`Médecin avec Médecine ≥ ${tdef.requiresMedSkill} requis` };
   }
   for (const k in tdef.cost) {
     if (S.res[k] < tdef.cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
   }
-  return { ok:true, treatment:tdef, doctor, def };
+  return { ok:true, treatment:tdef, doctor, def, status, statusIdx };
 }
 
-export function startTreatment(memberId, statusIdx) {
-  const r = canTreat(memberId, statusIdx);
+// statusRef : index dans member.statuts (UI) ou clé du statut
+export function startTreatment(memberId, statusRef) {
+  const r = canTreat(memberId, statusRef);
   if (!r.ok) { toast(r.reason); return; }
   const member = S.crew.find(m => m.id === memberId);
-  // Débite ressources
-  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   // Modifie durée selon skill du médecin et trait Médecin né
   let duration = r.treatment.durationMin;
   const medSkill = r.doctor.skills.medecine || 0;
   duration *= Math.max(0.5, 1 - (medSkill - r.treatment.requiresMedSkill) * 0.1);
-  if (r.doctor.traits.includes('medic_ne')) duration *= 0.75;
+  if ((r.doctor.traits || []).includes('medic_ne')) duration *= 0.75;
   // Bonus du staff de l'infirmerie (Spécialiste, Infirmier, etc.)
   const bonuses = infirmaryBonuses();
   duration *= bonuses.speedMult;
-  if (bonuses.traitMedecinNe && !r.doctor.traits.includes('medic_ne')) duration *= 0.85;
+  if (bonuses.traitMedecinNe && !(r.doctor.traits || []).includes('medic_ne')) duration *= 0.85;
   // Bonus de tech (pharmacopée)
   duration *= techEffectsAccumulated().treatmentSpeedMult;
   duration = Math.round(duration);
+  // Débite les ressources une fois tous les calculs faits (rien n'est perdu en cas d'erreur)
+  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   S.treatments.push({
-    id: 'tr_' + Date.now().toString(36),
+    id: uid('tr'),
     memberId,
-    statusIdx,
-    statutKey: member.statuts[statusIdx].key,
+    statusIdx: r.statusIdx,      // pour l'UI ; recalé par syncTreatmentIndexes
+    statutKey: r.status.key,     // référence fiable du statut traité
     doctorId: r.doctor.id,
     totalMin: duration,
     doneMin: 0,
@@ -1819,10 +2037,13 @@ export function startTreatment(memberId, statusIdx) {
 
 export function finishTreatment(treatment) {
   const member = S.crew.find(m => m.id === treatment.memberId);
-  if (!member) return;
-  const status = member.statuts[treatment.statusIdx];
-  if (!status) return;
+  if (!member || member.statut === 'mort') return;
+  // Le statut traité est retrouvé par sa clé (son index a pu changer depuis le début du soin)
+  const found = findMemberStatus(member, treatment.statutKey || treatment.statusIdx);
+  if (!found) return;
+  const { status, idx: statusIdx } = found;
   const def = STATUTS[status.key];
+  if (!def) return;
   // Tirage de séquelle
   let sequelMsg = '';
   if (def.onCured && def.onCured.sequelChance > 0 && Math.random() < def.onCured.sequelChance * techEffectsAccumulated().sequelChanceMult) {
@@ -1837,14 +2058,9 @@ export function finishTreatment(treatment) {
   }
   // Cas spécial mutation : "soigner" = annuler la mutation, mais peut laisser une séquelle
   // Retire le statut
-  member.statuts.splice(treatment.statusIdx, 1);
-  // Retire les autres traitements pointant vers cet index ou réajuste
-  // (par sécurité, on ré-indexe les traitements restants)
-  for (const t of S.treatments) {
-    if (t.memberId === member.id && t.statusIdx > treatment.statusIdx) {
-      t.statusIdx--;
-    }
-  }
+  member.statuts.splice(statusIdx, 1);
+  // Recale les index des autres traitements de ce colon (et retire celui-ci)
+  syncTreatmentIndexes(member);
   // Récupération de santé partielle
   member.sante = Math.min(100, member.sante + def.severity * 8);
   log('success', `<em>${member.name}</em> est rétabli(e) de ${def.nom.toLowerCase()}.${sequelMsg}`);
@@ -1860,15 +2076,20 @@ export function finishTreatment(treatment) {
 // Mort d'un membre
 function memberDies(member, cause = 'cause inconnue') {
   if (member.statut === 'mort') return;
-  // Libère le poste s'il en avait un
+  // Libère le poste s'il en avait un (archive la carrière), puis toute
+  // affectation résiduelle qui pointerait encore vers lui
   unassignMember(member.id);
+  for (const k of Object.keys(S.assignments || {})) {
+    if (S.assignments[k] === member.id) delete S.assignments[k];
+  }
   member.statut = 'mort';
   member.diedAt = S.meta.gameMin;
   // Retire les traitements en cours
-  S.treatments = S.treatments.filter(t => t.memberId !== member.id);
-  // Retire les sessions de formation
-  const tIdx = S.training.findIndex(t => t.memberId === member.id);
-  if (tIdx >= 0) S.training.splice(tIdx, 1);
+  S.treatments = (S.treatments || []).filter(t => t.memberId !== member.id);
+  // Retire ses sessions de formation (en place : la boucle de tick garde la référence)
+  for (let i = (S.training || []).length - 1; i >= 0; i--) {
+    if (S.training[i].memberId === member.id) S.training.splice(i, 1);
+  }
   // Impact moral collectif
   for (const m of S.crew) {
     if (m.id !== member.id && m.statut !== 'mort') {
@@ -1882,6 +2103,28 @@ function memberDies(member, cause = 'cause inconnue') {
   triggerGriefOnFriends(member);
 }
 
+// Où se trouve physiquement un colon (pour la contagion) :
+// 'base', 'exp:<id>' pour l'équipage d'une même expédition, null s'il est isolé
+// (mission diplomatique) ou mort.
+// Un médecin qui assure un traitement en cours ne peut pas quitter la base :
+// le soin ne continue pas sans lui.
+export function isTreatingDoctor(memberId) {
+  return (S.treatments || []).some(t => t.doctorId === memberId);
+}
+
+function memberLocation(member) {
+  switch (member.statut) {
+    case 'libre': case 'travail': case 'infirmerie': case 'formation':
+      return 'base';
+    case 'expedition': {
+      const exp = (S.expeditions || []).find(e => (e.crewIds || []).includes(member.id));
+      return exp ? 'exp:' + exp.id : null;
+    }
+    default:
+      return null;
+  }
+}
+
 // Fait évoluer les statuts d'un membre (appelé chaque tick)
 export function progressMemberStatuts(member) {
   if (member.statut === 'mort') return;
@@ -1893,21 +2136,22 @@ export function progressMemberStatuts(member) {
     if (!s.revealed && s.revealAt && S.meta.gameMin >= s.revealAt) {
       s.revealed = true;
       s.diagnosed = true;
-      log('warn', `<em>${member.name}</em> : <em>${STATUTS[s.key].nom}</em> apparente.`);
+      log('warn', `<em>${member.name}</em> : <em>${STATUTS[s.key]?.nom || s.key}</em> apparente.`);
     }
   }
   // Auto-guérison & complications
   for (let i = member.statuts.length - 1; i >= 0; i--) {
     const s = member.statuts[i];
     const def = STATUTS[s.key];
-    if (!def.untreated) continue;
+    if (!def?.untreated) continue;
     const elapsed = S.meta.gameMin - s.since;
     // En traitement actif → on ne déclenche pas la complication
-    const inTreatment = S.treatments.some(t => t.memberId === member.id && t.statusIdx === i);
-    if (inTreatment) continue;
+    // (recherche par clé : l'index d'un statut change quand un autre est retiré)
+    if (treatmentOf(member.id, s.key)) continue;
 
     if (def.untreated.selfCure && elapsed >= def.untreated.afterMin) {
       member.statuts.splice(i, 1);
+      syncTreatmentIndexes(member);
       log('neutral', `<em>${member.name}</em> guérit naturellement (${def.nom.toLowerCase()}).`);
       if (member.statut === 'infirmerie' && member.statuts.length === 0) {
         returnToBase(member);
@@ -1928,15 +2172,16 @@ export function progressMemberStatuts(member) {
       if (become === 'eclosion') {
         // Convertit en pathogene_alien
         member.statuts.splice(i, 1);
-        inflictStatus(member, 'pathogene_alien', "éclosion parasitaire");
+        inflictStatus(member, 'pathogene_alien', "éclosion parasitaire", { internal: true });
+        syncTreatmentIndexes(member);
       }
     }
   }
   // Contagion : si statut contagieux non traité, propage à un autre membre proche
   for (const s of member.statuts) {
     const def = STATUTS[s.key];
-    if (!def.contagion) continue;
-    const inTreatment = S.treatments.some(t => t.memberId === member.id && t.statutKey === s.key);
+    if (!def?.contagion) continue;
+    const inTreatment = !!treatmentOf(member.id, s.key);
     // Diviseur : si en quarantaine (en infirmerie + statut contagieux), contagion ÷ 4
     let rate = def.contagion.perDay;
     if (member.statut === 'infirmerie') rate /= 4;
@@ -1946,12 +2191,14 @@ export function progressMemberStatuts(member) {
     // Convertir taux/jour en taux/min
     const ratePerMin = rate / (24 * 60);
     if (Math.random() < ratePerMin * MIN_PER_TICK) {
-      // Tire une victime parmi les autres membres sains
-      const pool = S.crew.filter(m =>
+      // Tire une victime parmi les autres membres sains présents au même endroit
+      const here = memberLocation(member);
+      const pool = here ? S.crew.filter(m =>
         m.id !== member.id &&
         m.statut !== 'mort' &&
-        !m.statuts.some(ss => ss.key === s.key)
-      );
+        !(m.statuts || []).some(ss => ss.key === s.key) &&
+        memberLocation(m) === here
+      ) : [];
       if (pool.length > 0) {
         const victim = pool[Math.floor(Math.random() * pool.length)];
         inflictStatus(victim, s.key, `contagion depuis ${member.name}`);
@@ -1970,7 +2217,10 @@ export function progressMemberStatuts(member) {
 // Format d'un incident :
 //   id, modKey, severity (1-3), narrative
 //   tagsRequired? : tags du bâtiment requis (pour incidents conditionnels)
-//   choices: [{ label, req?, consume?, outcome }]
+//   titre : libellé lisible (notifications, file des décisions)
+//   choices: [{ label, req?, consume?, pay?, outcome }]
+//   pay: true → la perte (loss) est un paiement volontaire : le choix n'est
+//                proposé que si le stock suffit (sinon perte subie, plafonnée au stock)
 //
 // Outcome de choix :
 //   loss: { metal: N, ... }      ressources perdues
@@ -1981,9 +2231,15 @@ export function progressMemberStatuts(member) {
 //   itemLoss: 'random'           perd un item de l'inventaire
 //   log: string                   ligne narrative
 
-const INCIDENTS = {
+// Imports propres à la zone incidents / événements / sauvegarde / démarrage.
+// Alias pour ne pas entrer en collision avec les imports du haut du fichier.
+import { MAX_PENDING_DECISIONS } from './constants.js';
+import { loadSave, exportRawSave, lockSaves, unlockSaves, setSimPaused, isSimPaused, isCatchingUp, runCatchUp, markSessionStart, reportTickError } from './state.js';
+
+export const INCIDENTS = {
   // ===== MINE DE SURFACE =====
   mine_eboulement: {
+    titre: "Éboulement dans la mine",
     modKey: 'mine_surface',
     severity: 2,
     text: "Une galerie de la mine s'effondre partiellement. {worker} était à proximité.",
@@ -2030,6 +2286,7 @@ const INCIDENTS = {
     ]
   },
   mine_filon_riche: {
+    titre: "Filon inattendu",
     modKey: 'mine_surface',
     severity: 1,
     positive: true,
@@ -2042,6 +2299,7 @@ const INCIDENTS = {
     ]
   },
   mine_predateur: {
+    titre: "Créature dans la mine",
     modKey: 'mine_surface',
     severity: 3,
     requireMinLevel: 3,
@@ -2085,6 +2343,7 @@ const INCIDENTS = {
 
   // ===== HYDROPONIE =====
   hydro_contamination: {
+    titre: "Contamination hydroponique",
     modKey: 'hydroponie',
     severity: 2,
     text: "Une cuve d'hydroponie présente des signes de contamination. Couleur, odeur, mucus en surface.",
@@ -2125,6 +2384,7 @@ const INCIDENTS = {
     ]
   },
   hydro_recolte_abondante: {
+    titre: "Récolte abondante",
     modKey: 'hydroponie',
     severity: 1,
     positive: true,
@@ -2138,18 +2398,22 @@ const INCIDENTS = {
 
   // ===== GÉNÉRATEUR SOLAIRE =====
   solaire_panne: {
+    titre: "Voilure à la dérive",
     modKey: 'generateur_solaire',
     severity: 1,
     text: "Une voilure se met à dériver. Production en chute libre.",
     choices: [
       { label: "Réparation d'urgence", req: { skill: { key: 'ingenierie', min: 1 } },
         outcome: { loss: { energie: 20 }, log: "Réparation rapide. Production relancée." } },
-      { label: "Remplacer la voilure", outcome: { loss: { metal: 15, cristal: 10, energie: 10 }, log: "Voilure neuve installée. Plus durable." } },
+      { label: "Remplacer la voilure", pay: true, outcome: { loss: { metal: 15, cristal: 10, energie: 10 }, log: "Voilure neuve installée. Plus durable." } },
       { label: "Patcher avec un kit", consume: { item: 'kit_reparation' },
-        outcome: { gain: { energie: 5 }, log: "Le kit fait des merveilles. Aucun temps perdu." } }
+        outcome: { gain: { energie: 5 }, log: "Le kit fait des merveilles. Aucun temps perdu." } },
+      // 0.33 : choix de repli, toujours disponible (les autres demandent compétence, objet ou stock)
+      { label: "Attendre la prochaine maintenance", outcome: { disableModule: 180, log: "La voilure reste repliée en attendant la maintenance." } }
     ]
   },
   solaire_surcharge: {
+    titre: "Surcharge solaire",
     modKey: 'generateur_solaire',
     severity: 2,
     requireMinLevel: 3,
@@ -2185,6 +2449,7 @@ const INCIDENTS = {
 
   // ===== HANGAR =====
   hangar_sabotage: {
+    titre: "Sabotage au hangar",
     modKey: 'hangar',
     severity: 3,
     requireMinLevel: 2,
@@ -2201,6 +2466,7 @@ const INCIDENTS = {
       },
       {
         label: "Réparer en urgence",
+        pay: true,
         outcome: {
           loss: { metal: 50, cristal: 20 },
           log: "Réparations effectuées. Origine du sabotage non identifiée."
@@ -2224,6 +2490,7 @@ const INCIDENTS = {
     ]
   },
   hangar_decouverte: {
+    titre: "Trouvaille au hangar",
     modKey: 'hangar',
     severity: 1,
     positive: true,
@@ -2237,6 +2504,7 @@ const INCIDENTS = {
 
   // ===== LABORATOIRE =====
   labo_fuite_donnees: {
+    titre: "Données corrompues",
     modKey: 'laboratoire',
     severity: 2,
     text: "Une partie des données de recherche s'est corrompue. Cause inconnue.",
@@ -2248,6 +2516,7 @@ const INCIDENTS = {
     ]
   },
   labo_etude_inattendue: {
+    titre: "Corrélation inattendue",
     modKey: 'laboratoire',
     severity: 1,
     positive: true,
@@ -2261,6 +2530,7 @@ const INCIDENTS = {
 
   // ===== ATELIER =====
   atelier_accident: {
+    titre: "Accident à l'atelier",
     modKey: 'atelier',
     severity: 2,
     text: "Un accident de fabrication. {worker} était sur le poste.",
@@ -2272,6 +2542,7 @@ const INCIDENTS = {
     ]
   },
   atelier_innovation: {
+    titre: "Innovation de procédé",
     modKey: 'atelier',
     severity: 1,
     positive: true,
@@ -2285,6 +2556,7 @@ const INCIDENTS = {
 
   // ===== INFIRMERIE =====
   infirmerie_patient_fuit: {
+    titre: "Patient en fuite",
     modKey: 'infirmerie',
     severity: 2,
     text: "Un patient a quitté l'infirmerie sans autorisation.",
@@ -2295,6 +2567,7 @@ const INCIDENTS = {
     ]
   },
   infirmerie_remede: {
+    titre: "Nouvelle formule de soin",
     modKey: 'infirmerie',
     severity: 1,
     positive: true,
@@ -2306,11 +2579,12 @@ const INCIDENTS = {
 
   // ===== HABITAT =====
   habitat_panne_climatisation: {
+    titre: "Climatisation en panne",
     modKey: 'habitat',
     severity: 2,
     text: "La climatisation d'une partie de l'habitat tombe en panne. Les colons se plaignent.",
     choices: [
-      { label: "Réparer immédiatement", req: { skill: { key: 'ingenierie', min: 1 } },
+      { label: "Réparer immédiatement", req: { skill: { key: 'ingenierie', min: 1 } }, pay: true,
         outcome: { loss: { metal: 10, energie: 15 }, log: "Climatisation rétablie. L'équipage apprécie." } },
       { label: "Distribuer des rations supplémentaires", consume: { item: 'ration_concentree' },
         outcome: { moralAll: +1, log: "Geste apprécié. L'équipe tient le coup." } },
@@ -2318,12 +2592,13 @@ const INCIDENTS = {
     ]
   },
   habitat_anniversaire: {
+    titre: "Anniversaire",
     modKey: 'habitat',
     severity: 1,
     positive: true,
     text: "C'est l'anniversaire d'un colon. L'équipage propose une petite célébration.",
     choices: [
-      { label: "Organiser une fête", outcome: { loss: { biomasse: 20 }, moralAll: +3, log: "Soirée mémorable. Le moral grimpe." } },
+      { label: "Organiser une fête", pay: true, outcome: { loss: { biomasse: 20 }, moralAll: +3, log: "Soirée mémorable. Le moral grimpe." } },
       { label: "Geste discret", outcome: { moralAll: +1, log: "Cadeau modeste mais sincère." } },
       { label: "Trop occupés cette fois", outcome: { moralAll: -1, log: "Personne ne dit rien. Mais quelque chose s'éteint un peu." } }
     ]
@@ -2391,7 +2666,11 @@ export function maxHealthOf(member) {
 // - Élève/Instructeur en formation : +0.05/tick
 // La désaffectation et les ruptures n'érodent pas naturellement (pour l'instant)
 export function tickRelations() {
+  ensureCrewIntegrity();   // répare une fois les sauvegardes chargées (cf. repairCrewState)
   if (!S.crew || S.crew.length < 2) return;
+  // Les morts ne tissent plus de liens
+  const living = new Set();
+  for (const m of S.crew) if (m.statut !== 'mort') living.add(m.id);
   // Même bâtiment
   for (const modKey in MODULE_JOBS) {
     const staff = staffOf(modKey);
@@ -2404,22 +2683,23 @@ export function tickRelations() {
   }
   // Même expédition
   for (const exp of S.expeditions || []) {
-    if (exp.crewIds.length < 2) continue;
-    for (let i = 0; i < exp.crewIds.length; i++) {
-      for (let j = i+1; j < exp.crewIds.length; j++) {
-        adjustAffinity(exp.crewIds[i], exp.crewIds[j], 0.06 * MIN_PER_TICK);
+    const ids = (exp.crewIds || []).filter(id => living.has(id));
+    if (ids.length < 2) continue;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i+1; j < ids.length; j++) {
+        adjustAffinity(ids[i], ids[j], 0.06 * MIN_PER_TICK);
       }
     }
   }
-  // Soin : patient ↔ médecin staff
+  // Soin : patient ↔ médecin qui le soigne (celui du traitement, sans
+  // recalculer bestAvailableDoctor() pour chaque traitement à chaque tick)
   for (const t of S.treatments || []) {
-    const doc = bestAvailableDoctor();
-    if (doc && doc.id !== t.memberId) {
-      adjustAffinity(doc.id, t.memberId, 0.10 * MIN_PER_TICK);
-    }
+    if (!living.has(t.memberId) || !living.has(t.doctorId) || t.doctorId === t.memberId) continue;
+    adjustAffinity(t.doctorId, t.memberId, 0.10 * MIN_PER_TICK);
   }
   // Formation : élève ↔ instructeur
   for (const tr of S.training || []) {
+    if (!living.has(tr.memberId) || !living.has(tr.instructorId)) continue;
     if (tr.instructorId && tr.instructorId !== tr.memberId) {
       adjustAffinity(tr.instructorId, tr.memberId, 0.05 * MIN_PER_TICK);
     }
@@ -2438,7 +2718,7 @@ export function tickRelationMoraleEffects() {
         if (Math.abs(aff) < REL_FRIEND) continue;
         const m1 = S.crew.find(c => c.id === exp.crewIds[i]);
         const m2 = S.crew.find(c => c.id === exp.crewIds[j]);
-        if (!m1 || !m2) continue;
+        if (!m1 || !m2 || m1.statut === 'mort' || m2.statut === 'mort') continue;
         // Effet par tick : très petit, mais cumulatif
         const moralDelta = aff > 0 ? 0.005 : -0.008;
         const factor = MIN_PER_TICK;
@@ -2463,11 +2743,8 @@ export function tickAging() {
       const yearlyDeathProb = (age - 70) * 0.01 + 0.01;  // 1% à 70, 2% à 71...
       const tickProb = yearlyDeathProb * MIN_PER_TICK / YEAR_IN_GAME_MIN;
       if (Math.random() < tickProb) {
-        // Mort de cause naturelle
-        memberDies(m, "vieillesse");
-        log('warn', `<em>${m.name}</em> s'est éteint(e) paisiblement, à ${age} ans.`);
-        // Trauma sur les amis proches
-        triggerGriefOnFriends(m);
+        // Mort de cause naturelle (memberDies journalise et déclenche le deuil des proches)
+        memberDies(m, `Mort naturelle, paisible, à ${age} ans.`);
       }
     }
   }
@@ -2502,7 +2779,8 @@ export function significantRelations(memberId) {
   if (!S.relations) return { friends: [], rivals: [] };
   const out = [];
   for (const m of (S.crew || [])) {
-    if (m.id === memberId) continue;
+    // Les défunts ne « réagissent » plus aux événements et ne sont plus listés
+    if (m.id === memberId || m.statut === 'mort') continue;
     const aff = affinityBetween(memberId, m.id);
     if (Math.abs(aff) >= REL_FRIEND) {
       out.push({ memberId: m.id, member: m, affinity: aff });
@@ -2517,6 +2795,102 @@ export function significantRelations(memberId) {
 // ============================================================
 //   INCIDENTS LOCALISÉS (0.17) — suite
 // ============================================================
+// 0.28 : multiplicateur d'impact des choix d'incident ET d'événement (×3)
+const OUTCOME_MULT = 3;
+
+// Libellés lisibles (notifications, file des décisions, résumé de rattrapage)
+function incidentTitle(incidentId) {
+  return INCIDENTS[incidentId]?.titre || 'Incident';
+}
+function colonyEventTitle(eventId) {
+  const ev = COLONY_EVENTS[eventId];
+  return ev?.titre || ev?.theme || 'Événement';
+}
+
+// Montants réels (multiplicateur compris) d'un bloc loss/gain, en texte
+function amountsText(block) {
+  return Object.entries(block || {})
+    .map(([k, v]) => `${Math.round(v * OUTCOME_MULT)} ${RES_LABELS[k] || k}`)
+    .join(' · ');
+}
+
+// Remplace {loss.metal}, {gain.datacubes}… d'un libellé par les montants réels
+function fillAmounts(label, outcome) {
+  return String(label || '').replace(/\{(loss|gain)\.(\w+)\}/g, (_, kind, res) => {
+    const v = outcome?.[kind]?.[res];
+    return typeof v === 'number' ? String(Math.round(v * OUTCOME_MULT)) : '?';
+  });
+}
+
+// Choix « payant » (achat, échange, don — pay:true) : le stock doit couvrir
+// le coût AVANT de choisir. Les pertes subies (dégâts) restent plafonnées au stock.
+function choiceAffordable(choice) {
+  if (!choice?.pay || !choice.outcome?.loss) return true;
+  for (const k in choice.outcome.loss) {
+    if ((S.res[k] || 0) < choice.outcome.loss[k] * OUTCOME_MULT) return false;
+  }
+  return true;
+}
+
+// Équipe mobilisable pour un incident : staff du bâtiment + colons libres
+function incidentTeam(inc) {
+  return staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
+}
+function skillReqMet(req, team) {
+  if (!req?.skill) return true;
+  return team.some(m => (m.skills?.[req.skill.key] || 0) >= req.skill.min);
+}
+
+// Applique un gain plafonné à la capacité (sans jamais réduire un stock
+// déjà au-dessus). Renvoie la quantité réellement gagnée.
+function addResourceCapped(k, amt) {
+  const before = S.res[k] || 0;
+  S.res[k] = Math.max(before, Math.min(capOf(k), before + amt));
+  return S.res[k] - before;
+}
+// Applique une perte plafonnée au stock. Renvoie la quantité réellement perdue.
+function removeResourceCapped(k, amt) {
+  const before = S.res[k] || 0;
+  S.res[k] = Math.max(0, before - amt);
+  return before - S.res[k];
+}
+
+// Score d'un résultat pour le choix automatique : on évite d'abord les dégâts
+// durables (niveau perdu, blessure, incident en chaîne), puis ce qui coûte.
+function outcomeScore(o) {
+  let s = 0;
+  for (const k in o.loss || {}) s -= o.loss[k] * OUTCOME_MULT * 0.1;
+  for (const k in o.gain || {}) s += o.gain[k] * OUTCOME_MULT * 0.1;
+  if (o.moralAll) s += o.moralAll * 5;
+  if (o.status) s -= 30;
+  if (o.damageModule) s -= 100;
+  if (o.chainIncident) s -= 50;
+  if (o.debuff) s -= 20;
+  if (o.disableModule) s -= o.disableModule / 60;
+  if (o.generateRivalry) s -= 15;
+  if (o.delayResearch) s -= o.delayResearch * OUTCOME_MULT / 30;
+  if (o.spawnVisitor) s += 10;
+  if (o.randomBlueprint) s += 10;
+  if (o.adjustAffinity) s += (o.adjustAffinity.delta || 0) * 0.2;
+  return s;
+}
+
+// Choix automatique « sûr » (rattrapage hors ligne, file de décisions pleine) :
+// ni prérequis, ni objet consommé, ni coût impayable ; un choix non risqué
+// est préféré, au meilleur score.
+function pickAutoChoice(choices) {
+  const eligible = (choices || []).filter(c => !c.req && !c.consume && choiceAffordable(c));
+  const safe = eligible.filter(c => !c.risky);
+  const pool = safe.length ? safe : eligible;
+  let best = null;
+  let bestScore = -Infinity;
+  for (const c of pool) {
+    const sc = c.risky ? 0 : outcomeScore(c.outcome || {});
+    if (sc > bestScore) { best = c; bestScore = sc; }
+  }
+  return best;
+}
+
 // Liste les bâtiments construits qui peuvent générer un incident
 function eligibleIncidentBuildings() {
   const out = [];
@@ -2545,19 +2919,12 @@ function incidentProbability(modKey) {
   return hourlyRate * (MIN_PER_TICK / 60);
 }
 
-// Tirage par tick : pour chaque bâtiment, tente un incident
+// Tirage par tick : pour chaque bâtiment, tente un incident.
+// silent (rattrapage) : l'incident est résolu automatiquement.
 export function tickIncidents(silent = false) {
-  // 0.28 : déclencher d'abord les incidents en chaîne en attente (déclenchés par d'autres choix)
-  if (Array.isArray(S.queuedIncidents) && S.queuedIncidents.length > 0) {
-    const queued = S.queuedIncidents.shift();
-    triggerIncident(queued, silent);
-    return;
-  }
-
-  // Si on est en mode silent (rattrapage offline), on saute les incidents qui demandent une décision
+  // Cooldown global : pas d'incident trop rapproché
   if (S.meta.gameMin < S.nextIncidentMin) return;
 
-  // Cooldown global : pas d'incident trop rapproché
   const elig = eligibleIncidentBuildings();
   if (elig.length === 0) return;
 
@@ -2574,53 +2941,90 @@ export function tickIncidents(silent = false) {
   }
 }
 
-// Déclenche un incident (en silent : applique automatiquement le choix par défaut)
+// Colon « victime » : préfère le staff du bâtiment, sinon un libre, sinon n'importe quel vivant
+function pickIncidentVictim(inc) {
+  const staff = staffOf(inc.modKey).map(s => s.member);
+  if (staff.length) return rPick(staff);
+  const free = aliveCrew().filter(m => m.statut === 'libre');
+  if (free.length) return rPick(free);
+  // Dernier repli : n'importe quel colon présent à la base (jamais un absent)
+  const atBase = aliveCrew().filter(m => memberLocation(m) === 'base');
+  return atBase.length ? rPick(atBase) : null;
+}
+
+// Déclenche un incident : en direct, il rejoint la file des décisions du
+// joueur ; en silencieux (rattrapage), il est résolu automatiquement.
 export function triggerIncident(incidentId, silent = false) {
   const inc = INCIDENTS[incidentId];
   if (!inc) return;
-  const def = MODULES[inc.modKey];
-  if (!def) return;
-
-  // Trouve un colon "victime" — préfère le staff du bâtiment, sinon un libre, sinon n'importe qui vivant
-  const staff = staffOf(inc.modKey).map(s => s.member);
-  let victim = staff[Math.floor(Math.random() * staff.length)];
-  if (!victim) {
-    const free = aliveCrew().filter(m => m.statut === 'libre');
-    victim = free[Math.floor(Math.random() * free.length)];
-  }
-  if (!victim) {
-    victim = aliveCrew()[Math.floor(Math.random() * aliveCrew().length)];
-  }
+  if (!MODULES[inc.modKey]) return;
+  const victim = pickIncidentVictim(inc);
   if (!victim) return;
 
-  // Si silent : applique le choix avec moins de pertes (le moins coûteux)
   if (silent) {
-    // Choix le moins risqué : prend le premier non-risky avec moins de perte
-    const safeChoice = inc.choices.find(c => !c.risky) || inc.choices[0];
-    applyIncidentChoice(inc, safeChoice, victim);
+    autoResolveIncident(incidentId, victim);
     return;
   }
-
-  // Affiche la modale d'incident
-  showIncidentModal(incidentId, victim);
+  enqueueDecision({ kind: 'incident', refId: incidentId, victimId: victim.id });
   // 0.26 : notification dédiée (critique, pour qu'on la voie même si on est ailleurs)
-  notif.incident(inc.titre || incidentId);
+  notif.incident(incidentTitle(incidentId));
 }
 
-// Applique l'outcome d'un choix d'incident
-export function applyIncidentChoice(inc, choice, victim) {
-  // Vérifications de prérequis (skill, item)
-  if (choice.req) {
-    if (choice.req.skill) {
-      const team = staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-      const found = team.find(m => (m.skills[choice.req.skill.key] || 0) >= choice.req.skill.min);
-      if (!found) { toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`); return false; }
-    }
+function autoResolveIncident(incidentId, victim) {
+  const inc = INCIDENTS[incidentId];
+  if (!inc) return;
+  const choice = pickAutoChoice(inc.choices);
+  if (!choice) return;
+  if (applyIncidentChoice(inc, choice, victim, { auto: true }) !== false) {
+    recordAutoResolution('incident', incidentTitle(incidentId), fillAmounts(choice.label, choice.outcome));
+  }
+}
+
+// Dégâts sur un module : perd un niveau (minimum 1). Les postes au-delà du
+// nouveau niveau disparaissent : leurs occupants sont libérés (et réaffectés
+// si possible). Un chantier en cours sur ce module reconstruit le niveau perdu
+// au lieu de sauter un niveau. Renvoie la ligne de journal.
+function damageModule(modKey) {
+  const mod = S.modules[modKey];
+  if (!mod) return null;
+  const nom = MODULES[modKey]?.nom || modKey;
+  if (mod.level <= 1) return `<em>${nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`;
+  mod.level--;
+  const freed = [];
+  for (const key of Object.keys(S.assignments || {})) {
+    const [k, idxStr] = key.split(':');
+    const idx = parseInt(idxStr, 10);
+    if (k !== modKey || !(idx >= mod.level)) continue;
+    freed.push(S.assignments[key]);
+    unassignSlot(modKey, idx);
+  }
+  for (const id of freed) autoAssignMember(id);
+  if (S.build?.id === modKey && S.build.targetLevel > mod.level + 1) S.build.targetLevel = mod.level + 1;
+  return `<em>${nom}</em> est endommagé : niveau ramené à ${mod.level}.`;
+}
+
+// Applique l'outcome d'un choix d'incident. Renvoie false si le choix est
+// impossible (prérequis, objet, stock). opts.auto : décision automatique —
+// pas de toast, et une seule ligne de journal résume tout.
+export function applyIncidentChoice(inc, choice, victim, opts = {}) {
+  const auto = !!opts.auto;
+  const notes = [];
+  const say = (kind, txt) => { if (auto) notes.push(txt); else log(kind, txt); };
+  const team = incidentTeam(inc);
+
+  // Vérifications de prérequis (skill, stock, item)
+  if (choice.req?.skill && !skillReqMet(choice.req, team)) {
+    if (!auto) toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`);
+    return false;
+  }
+  if (!choiceAffordable(choice)) {
+    if (!auto) toast(`Stock insuffisant : ${amountsText(choice.outcome.loss)}`);
+    return false;
   }
   if (choice.consume?.item) {
     const itemId = choice.consume.item;
     if ((S.inventory?.[itemId] || 0) <= 0) {
-      toast(`Stock insuffisant : ${ITEMS[itemId]?.nom || itemId}`);
+      if (!auto) toast(`Stock insuffisant : ${ITEMS[itemId]?.nom || itemId}`);
       return false;
     }
     S.inventory[itemId]--;
@@ -2630,8 +3034,7 @@ export function applyIncidentChoice(inc, choice, victim) {
   // Détermine outcome (gestion risky)
   let outcome = choice.outcome;
   if (choice.risky) {
-    const team = staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-    const bestStat = team.length > 0 ? Math.max(...team.map(m => m.stats[choice.risky.stat] || 5)) : 5;
+    const bestStat = team.length > 0 ? Math.max(...team.map(m => m.stats?.[choice.risky.stat] || 5)) : 5;
     const roll = 1 + Math.floor(Math.random() * 10);
     const total = roll + Math.floor((bestStat - 5) / 2);
     const success = total >= choice.risky.dc;
@@ -2639,19 +3042,15 @@ export function applyIncidentChoice(inc, choice, victim) {
   }
   if (!outcome) return true;
 
-  // 0.28 : multiplicateur d'impact pour rendre les choix mémorables (×3)
-  const OUTCOME_MULT = 3;
+  const workerHTML = victim ? `<em>${esc(victim.name)}</em>` : 'un colon';
+  if (outcome.log) say(inc.positive ? 'success' : 'warn', outcome.log.replace(/\{worker\}/g, workerHTML));
 
-  // Applique
+  // Applique (pertes plafonnées au stock ; gains plafonnés à la capacité)
   if (outcome.loss) {
-    for (const k in outcome.loss) {
-      S.res[k] = Math.max(0, (S.res[k] || 0) - outcome.loss[k] * OUTCOME_MULT);
-    }
+    for (const k in outcome.loss) removeResourceCapped(k, outcome.loss[k] * OUTCOME_MULT);
   }
   if (outcome.gain) {
-    for (const k in outcome.gain) {
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + outcome.gain[k] * OUTCOME_MULT);
-    }
+    for (const k in outcome.gain) addResourceCapped(k, outcome.gain[k] * OUTCOME_MULT);
   }
   if (outcome.status) {
     let target = victim;
@@ -2675,13 +3074,8 @@ export function applyIncidentChoice(inc, choice, victim) {
   // 0.28 : NOUVEAUX EFFETS DURABLES
   // — damageModule : module perd un niveau (effet sévère, permanent jusqu'à reconstruction)
   if (outcome.damageModule && inc.modKey) {
-    const mod = S.modules[inc.modKey];
-    if (mod && mod.level > 1) {
-      mod.level--;
-      log('warn', `<em>${MODULES[inc.modKey].nom}</em> est endommagé : niveau ramené à ${mod.level}.`);
-    } else if (mod && mod.level === 1) {
-      log('warn', `<em>${MODULES[inc.modKey].nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`);
-    }
+    const msg = damageModule(inc.modKey);
+    if (msg) say('warn', msg);
   }
   // — disableModule : module hors service pendant N minutes-jeu
   if (outcome.disableModule && inc.modKey) {
@@ -2689,7 +3083,7 @@ export function applyIncidentChoice(inc, choice, victim) {
     const mod = S.modules[inc.modKey];
     if (mod) {
       mod.disabledUntil = (S.meta.gameMin || 0) + duration;
-      log('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${Math.round(duration/60)}h jeu.`);
+      say('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${Math.round(duration/60)}h jeu.`);
     }
   }
   // — debuff : pénalité globale temporaire (ex: { type: 'prodMult', value: 0.8, duration: 1440 })
@@ -2697,11 +3091,11 @@ export function applyIncidentChoice(inc, choice, victim) {
     if (!S.activeBuffs) S.activeBuffs = [];
     S.activeBuffs.push({
       ...outcome.debuff,
-      sourceLabel: inc.text || 'Incident',
+      sourceLabel: inc.titre || 'Incident',
       startedAt: S.meta.gameMin,
       expiresAt: (S.meta.gameMin || 0) + (outcome.debuff.duration || 720)
     });
-    log('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
+    say('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
   }
   // — generateRivalry : crée une rivalité durable entre la victime et un autre colon
   if (outcome.generateRivalry && victim) {
@@ -2711,10 +3105,10 @@ export function applyIncidentChoice(inc, choice, victim) {
       const key = [victim.id, other.id].sort().join('|');
       if (!S.relations) S.relations = {};
       S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-      log('warn', `<em>${victim.name}</em> et <em>${other.name}</em> se brouillent durablement.`);
+      say('warn', `<em>${esc(victim.name)}</em> et <em>${esc(other.name)}</em> se brouillent durablement.`);
     }
   }
-  // — chainIncident : déclenche un autre incident plus tard
+  // — chainIncident : déclenche un autre incident plus tard (cf. tickOnce)
   if (outcome.chainIncident) {
     if (!S.pendingChainIncidents) S.pendingChainIncidents = [];
     S.pendingChainIncidents.push({
@@ -2732,34 +3126,188 @@ export function applyIncidentChoice(inc, choice, victim) {
     });
   }
 
-  if (outcome.log) {
-    const cleanLog = outcome.log.replace(/\{worker\}/g, victim ? `<em>${victim.name}</em>` : 'un colon');
-    log(inc.positive ? 'success' : 'warn', cleanLog);
+  if (auto) {
+    log(inc.positive ? 'success' : 'warn',
+      `<b>${esc(inc.titre || 'Incident')}</b> — décision automatique : « ${esc(fillAmounts(choice.label, choice.outcome))} ». ${notes.join(' ')}`.trim());
   }
   return true;
 }
 
-// Modale d'incident interactive (UI)
-let _activeIncident = null;
-function showIncidentModal(incidentId, victim) {
-  const inc = INCIDENTS[incidentId];
-  if (!inc) return;
-  _activeIncident = { incidentId, victimId: victim?.id };
-  const bg = $('#modalBg');
-  const m = $('#modal');
-  m.classList.add('incident-modal');
-  m.innerHTML = renderIncidentContent();
-  bg.classList.add('show');
-  hookIncidentModal();
+// ============================================================
+//   FILE DES DÉCISIONS (0.33) — incidents et événements en attente
+// ============================================================
+// Une seule fenêtre de décision à la fois. Les incidents et événements « en
+// direct » rejoignent S.pendingDecisions (persistée : recharger la page ne les
+// fait pas disparaître). pumpDecisions(), appelée à chaque tick, affiche la
+// plus ancienne dès qu'aucune autre fenêtre (modale, scène) n'est ouverte ;
+// la suivante attend que la courante soit résolue. Au-delà de
+// MAX_PENDING_DECISIONS, les plus anciennes sont résolues automatiquement.
+// S.pendingIncident / S.pendingColonyEvent (lus par le bandeau d'alertes)
+// reflètent la file.
+
+let _shownDecisionId = null;     // décision actuellement affichée dans #modal
+const _autoResolved = [];         // résolutions automatiques récentes (résumé de rattrapage)
+let _autoSeq = 0;
+
+function recordAutoResolution(kind, titre, choiceLabel) {
+  _autoResolved.push({ seq: ++_autoSeq, kind, titre, choiceLabel });
+  if (_autoResolved.length > 500) _autoResolved.splice(0, _autoResolved.length - 500);
+}
+function autoResolvedSince(seq) {
+  return _autoResolved.filter(r => r.seq > seq);
 }
 
-function renderIncidentContent() {
-  const inc = INCIDENTS[_activeIncident.incidentId];
-  const victim = S.crew.find(c => c.id === _activeIncident.victimId);
+function syncPendingFlags() {
+  const q = Array.isArray(S.pendingDecisions) ? S.pendingDecisions : [];
+  S.pendingIncident = q.find(d => d.kind === 'incident')?.refId || null;
+  S.pendingColonyEvent = q.find(d => d.kind === 'event')?.refId || null;
+}
+
+function enqueueDecision(dec) {
+  if (!Array.isArray(S.pendingDecisions)) S.pendingDecisions = [];
+  S.pendingDecisions.push({ id: uid('dec'), createdAt: S.meta.gameMin, ...dec });
+  while (S.pendingDecisions.length > MAX_PENDING_DECISIONS) {
+    // La plus ancienne qui n'est pas à l'écran est résolue automatiquement
+    const idx = S.pendingDecisions[0].id === _shownDecisionId ? 1 : 0;
+    const [old] = S.pendingDecisions.splice(idx, 1);
+    autoResolveDecision(old);
+  }
+  syncPendingFlags();
+  save();
+}
+
+function removeDecision(id) {
+  const i = (S.pendingDecisions || []).findIndex(d => d.id === id);
+  if (i >= 0) S.pendingDecisions.splice(i, 1);
+  if (_shownDecisionId === id) _shownDecisionId = null;
+  syncPendingFlags();
+}
+
+function autoResolveDecision(dec) {
+  if (dec.kind === 'incident') {
+    if (INCIDENTS[dec.refId]) autoResolveIncident(dec.refId, resolveIncidentVictim(dec));
+  } else if (dec.kind === 'event') {
+    const actors = resolveEventActors(dec);
+    if (actors) autoResolveColonyEvent(dec.refId, actors);
+  }
+}
+
+// Victime d'un incident en attente, revalidée : morte ou partie de la base
+// entre-temps (expédition, mission) → un autre colon présent
+function resolveIncidentVictim(dec) {
+  const v = S.crew.find(m => m.id === dec.victimId);
+  if (v && v.statut !== 'mort' && memberLocation(v) === 'base') return v;
+  const inc = INCIDENTS[dec.refId];
+  const nv = inc ? pickIncidentVictim(inc) : null;
+  if (nv) dec.victimId = nv.id;
+  return nv;
+}
+
+// Acteurs d'un événement en attente, revalidés : un acteur vivant à la
+// création et mort depuis (ou disparu) rend l'événement caduc → nouveaux
+// acteurs si l'événement est toujours d'actualité, sinon null.
+function resolveEventActors(dec) {
+  const ev = COLONY_EVENTS[dec.refId];
+  if (!ev) return null;
+  const ids = dec.actorIds || {};
+  const wasDead = dec.actorsDead || {};
+  const get = role => (ids[role] ? S.crew.find(m => m.id === ids[role]) || null : null);
+  const valid = role => {
+    if (!ids[role]) return true;
+    const m = get(role);
+    // Un acteur mort à la création reste valable (deuil…) ; sinon il doit
+    // être vivant et présent à la base au moment de la décision.
+    return !!m && (wasDead[role] || (m.statut !== 'mort' && memberLocation(m) === 'base'));
+  };
+  if (valid('primary') && valid('secondary')) return { primary: get('primary'), secondary: get('secondary') };
+  try {
+    if (ev.condition()) {
+      const a = ev.pickActors();
+      if (a) {
+        Object.assign(dec, decisionActors(a));
+        return a;
+      }
+    }
+  } catch (e) { /* événement plus d'actualité */ }
+  return null;
+}
+
+function decisionActors(actors) {
+  return {
+    actorIds: { primary: actors?.primary?.id || null, secondary: actors?.secondary?.id || null },
+    actorsDead: { primary: actors?.primary?.statut === 'mort', secondary: actors?.secondary?.statut === 'mort' }
+  };
+}
+
+// Une fenêtre est-elle déjà ouverte (modale, scène d'expédition) ?
+function decisionUiBusy() {
+  return !!($('#modalBg')?.classList.contains('show') || $('#sceneOverlay')?.classList.contains('show'));
+}
+
+function openDecisionModal(html, hook) {
+  const m = $('#modal');
+  m.className = 'modal incident-modal';
+  m.innerHTML = html;
+  $('#modalBg').classList.add('show');
+  hook();
+}
+
+function closeDecisionModal() {
+  $('#modalBg').classList.remove('show');
+  $('#modal').className = 'modal';
+}
+
+// Affiche la plus ancienne décision en attente si rien d'autre n'est ouvert.
+// Appelée à chaque tick (et au démarrage).
+export function pumpDecisions() {
+  if (!S?.meta || isSimPaused() || isCatchingUp()) return;
+  const q = S.pendingDecisions;
+  if (!Array.isArray(q) || q.length === 0) return;
+  if (decisionUiBusy()) return;
+  let changed = false;
+  while (q.length > 0) {
+    if (showDecision(q[0])) break;
+    q.shift();   // décision caduque ou résolue automatiquement
+    changed = true;
+  }
+  if (changed) {
+    syncPendingFlags();
+    save();
+    try { render(); } catch (e) { reportTickError('render', e); }
+  }
+}
+
+function showDecision(dec) {
+  if (dec.kind === 'incident') {
+    const inc = INCIDENTS[dec.refId];
+    if (!inc) return false;
+    const victim = resolveIncidentVictim(dec);
+    if (!victim) {
+      // Plus personne pour y faire face : résolu automatiquement
+      autoResolveIncident(dec.refId, null);
+      return false;
+    }
+    _shownDecisionId = dec.id;
+    openDecisionModal(renderIncidentContent(inc, victim), () => hookIncidentModal(dec.id));
+    return true;
+  }
+  if (dec.kind === 'event') {
+    if (!COLONY_EVENTS[dec.refId]) return false;
+    const actors = resolveEventActors(dec);
+    if (!actors) return false;   // événement caduc
+    _shownDecisionId = dec.id;
+    openDecisionModal(renderColonyEventContent(dec.refId, actors), () => hookColonyEventModal(dec.id));
+    return true;
+  }
+  return false;
+}
+
+function renderIncidentContent(inc, victim) {
   const def = MODULES[inc.modKey];
-  const text = inc.text.replace(/\{worker\}/g, victim ? victim.name : 'un colon');
+  const text = inc.text.replace(/\{worker\}/g, victim ? esc(victim.name) : 'un colon');
   const severityLabel = ['', 'Mineur', 'Sérieux', 'Critique'][inc.severity || 1];
   const severityClass = ['', 'ok', 'warn', 'rust'][inc.severity || 1];
+  const team = incidentTeam(inc);
 
   // Liste des choix avec évaluation
   const choicesHTML = inc.choices.map((ch, i) => {
@@ -2768,8 +3316,7 @@ function renderIncidentContent() {
 
     // Vérif req skill
     if (ch.req?.skill) {
-      const team = staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-      const has = team.some(m => (m.skills[ch.req.skill.key] || 0) >= ch.req.skill.min);
+      const has = skillReqMet(ch.req, team);
       extras.push(`<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`);
       if (!has) available = false;
     }
@@ -2780,12 +3327,18 @@ function renderIncidentContent() {
       extras.push(`<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`);
       if (!has) available = false;
     }
+    // Vérif coût (choix payant)
+    if (ch.pay && ch.outcome?.loss) {
+      const ok = choiceAffordable(ch);
+      extras.push(`<span class="cost ${ok ? '' : 'ko'}">COÛT : ${amountsText(ch.outcome.loss)}${ok ? '' : ' — stock insuffisant'}</span>`);
+      if (!ok) available = false;
+    }
     if (ch.risky) {
       extras.push(`<span class="risk">RISQUÉ · jet de ${STAT_LABELS[ch.risky.stat]} (DC ${ch.risky.dc})</span>`);
     }
 
     return `<button class="incident-choice" data-incident-choice="${i}" ${available ? '' : 'disabled'}>
-      ${ch.label}
+      ${fillAmounts(ch.label, ch.outcome)}
       ${extras.join('')}
     </button>`;
   }).join('');
@@ -2794,35 +3347,35 @@ function renderIncidentContent() {
     <div class="incident-eyebrow ${inc.positive ? 'positive' : ''}">
       ${inc.positive ? 'Événement' : 'Incident'} · <span class="${severityClass}">${severityLabel}</span> · ${def.nom}
     </div>
-    <h3 class="incident-title">${inc.positive ? 'Bonne nouvelle' : 'Quelque chose s\'est passé'}</h3>
+    <h3 class="incident-title">${inc.titre || (inc.positive ? 'Bonne nouvelle' : 'Quelque chose s\'est passé')}</h3>
     <p class="incident-body">${text}</p>
     <div class="incident-choices">${choicesHTML}</div>
   `;
 }
 
-function hookIncidentModal() {
+function hookIncidentModal(decId) {
   const m = $('#modal');
   m.querySelectorAll('button[data-incident-choice]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.incidentChoice, 10);
-      const inc = INCIDENTS[_activeIncident.incidentId];
-      const victim = S.crew.find(c => c.id === _activeIncident.victimId);
-      const choice = inc.choices[idx];
+      const dec = (S.pendingDecisions || []).find(d => d.id === decId);
+      if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
+      const inc = INCIDENTS[dec.refId];
+      const victim = resolveIncidentVictim(dec);
+      const choice = inc.choices[parseInt(btn.dataset.incidentChoice, 10)];
       const ok = applyIncidentChoice(inc, choice, victim);
-      if (ok !== false) {
-        $('#modalBg').classList.remove('show');
-        m.classList.remove('incident-modal');
-        _activeIncident = null;
-        render();
-      }
+      if (ok === false) return;
+      removeDecision(decId);
+      closeDecisionModal();
+      save();
+      render();
     });
   });
 }
 
 // Compatibilité : ancien rollColonyIncident remplacé par tickIncidents
-export function rollColonyIncident() {
-  tickIncidents(false);
+export function rollColonyIncident(silent = false) {
+  tickIncidents(silent);
 }
 
 // ============================================================
@@ -2837,11 +3390,14 @@ export function rollColonyIncident() {
 //   condition: () => bool    — peut-il se déclencher maintenant ?
 //   pickActors: () => { primary, secondary? } — qui est concerné
 //   text: "..." (peut référencer {primary} et {secondary})
-//   choices: [...] comme les incidents
+//   titre : libellé lisible (notifications, effets temporaires)
+//   choices: [...] comme les incidents (pay, req, consume) ; un libellé peut
+//            citer les montants réels via {loss.metal}, {gain.datacubes}…
 
-const COLONY_EVENTS = {
+export const COLONY_EVENTS = {
   // ===== ÉVÉNEMENTS SOCIAUX =====
   event_anniversaire: {
+    titre: "Anniversaire",
     theme: 'Anniversaire',
     positive: true,
     condition: () => aliveCrew().some(m => {
@@ -2857,13 +3413,14 @@ const COLONY_EVENTS = {
     },
     text: "C'est l'anniversaire de {primary}. {age} ans. L'équipage attend de voir si on marque le coup.",
     choices: [
-      { label: "Organiser une vraie fête", outcome: { loss: { biomasse: 25 }, moralAll: +4, log: "Soirée mémorable. {primary} sourit toute la nuit.", markBirthday: true } },
+      { label: "Organiser une vraie fête", pay: true, outcome: { loss: { biomasse: 25 }, moralAll: +4, log: "Soirée mémorable. {primary} sourit toute la nuit.", markBirthday: true } },
       { label: "Geste discret entre amis", outcome: { moralAll: +1, log: "Cadeau modeste, sincère. {primary} apprécie.", markBirthday: true } },
       { label: "Ne pas s'en occuper", outcome: { moralAll: -2, log: "Personne n'a rien dit. {primary} a remarqué.", markBirthday: true } }
     ]
   },
 
   event_hommage: {
+    titre: "Hommage aux disparus",
     theme: 'Hommage',
     positive: false,
     condition: () => {
@@ -2883,6 +3440,7 @@ const COLONY_EVENTS = {
   },
 
   event_conflit_rivaux: {
+    titre: "Dispute entre rivaux",
     theme: 'Conflit',
     positive: false,
     condition: () => {
@@ -2919,6 +3477,7 @@ const COLONY_EVENTS = {
   },
 
   event_romance: {
+    titre: "Romance naissante",
     theme: 'Romance',
     positive: true,
     condition: () => {
@@ -2952,6 +3511,7 @@ const COLONY_EVENTS = {
 
   // ===== INITIATIVES INDIVIDUELLES =====
   event_initiative_jardin: {
+    titre: "Nouvelle technique de culture",
     theme: 'Initiative',
     positive: true,
     condition: () => S.modules.hydroponie?.level >= 2 && aliveCrew().some(m => (m.skills.survie || 0) >= 2),
@@ -2961,12 +3521,13 @@ const COLONY_EVENTS = {
     },
     text: "{primary} propose une nouvelle technique de culture. Elle nécessite un peu de temps.",
     choices: [
-      { label: "Lui donner les moyens", outcome: { loss: { biomasse: 15 }, gain: { biomasse: 50, datacubes: 4 }, log: "{primary} double le rendement de la cuve d'essai." } },
+      { label: "Lui donner les moyens", pay: true, outcome: { loss: { biomasse: 15 }, gain: { biomasse: 50, datacubes: 4 }, log: "{primary} double le rendement de la cuve d'essai." } },
       { label: "Plus tard", outcome: { moralAll: -1, log: "{primary} comprend. Mais l'élan est passé." } }
     ]
   },
 
   event_initiative_atelier: {
+    titre: "Idée pour l'atelier",
     theme: 'Initiative',
     positive: true,
     condition: () => S.modules.atelier?.level >= 2 && aliveCrew().some(m => (m.skills.ingenierie || 0) >= 3),
@@ -2976,7 +3537,7 @@ const COLONY_EVENTS = {
     },
     text: "{primary} a une idée pour optimiser l'atelier. Elle pense pouvoir doubler la précision de fabrication.",
     choices: [
-      { label: "L'autoriser à expérimenter", outcome: { loss: { metal: 20, cristal: 10 }, gain: { datacubes: 12 }, log: "{primary} valide son hypothèse. Données techniques précieuses." } },
+      { label: "L'autoriser à expérimenter", pay: true, outcome: { loss: { metal: 20, cristal: 10 }, gain: { datacubes: 12 }, log: "{primary} valide son hypothèse. Données techniques précieuses." } },
       { label: "Demander un mémo détaillé d'abord", req: { skill: { key: 'science', min: 2 } },
         outcome: { gain: { datacubes: 8 }, log: "{primary} produit un dossier rigoureux. La méthode est intégrée sans coût." } },
       { label: "Refuser, trop coûteux", outcome: { moralAll: -1, log: "{primary} se replie sur ses tâches. Un peu déçu." } }
@@ -2985,13 +3546,14 @@ const COLONY_EVENTS = {
 
   // ===== PLAINTES & DEMANDES COLLECTIVES =====
   event_plainte_repas: {
+    titre: "Plainte sur les rations",
     theme: 'Plainte',
     positive: false,
     condition: () => aliveCrew().length >= 4 && (S.res.biomasse || 0) < (capOf('biomasse') * 0.3),
     pickActors: () => ({ primary: aliveCrew()[Math.floor(Math.random() * aliveCrew().length)] }),
     text: "L'équipage se plaint des rations. Plusieurs colons mangent à peine. {primary} parle au nom des autres.",
     choices: [
-      { label: "Augmenter les portions à court terme", outcome: { loss: { biomasse: 30 }, moralAll: +3, log: "L'équipage est apaisé. Les estomacs sont pleins ce soir." } },
+      { label: "Augmenter les portions à court terme", pay: true, outcome: { loss: { biomasse: 30 }, moralAll: +3, log: "L'équipage est apaisé. Les estomacs sont pleins ce soir." } },
       { label: "Distribuer une ration concentrée", consume: { item: 'ration_concentree' },
         outcome: { moralAll: +2, log: "La ration est partagée. Geste apprécié." } },
       { label: "Promettre une amélioration future", outcome: { moralAll: -2, log: "{primary} hoche la tête, peu convaincu." } },
@@ -3000,6 +3562,7 @@ const COLONY_EVENTS = {
   },
 
   event_plainte_logement: {
+    titre: "Plainte sur le logement",
     theme: 'Plainte',
     positive: false,
     condition: () => aliveCrew().length >= 3 && crewUsage().used >= crewUsage().total - 1 && (S.modules.habitat?.level || 0) < 4,
@@ -3015,6 +3578,7 @@ const COLONY_EVENTS = {
 
   // ===== VISITEURS / RECRUTEMENTS RARES =====
   event_visiteur_isole: {
+    titre: "Visiteur isolé",
     theme: 'Visiteur',
     positive: true,
     condition: () => crewUsage().used < crewUsage().total && (S.meta.gameMin - (S.lastVisitorMin || -99999)) > 14 * 24 * 60,
@@ -3029,20 +3593,24 @@ const COLONY_EVENTS = {
   },
 
   event_marchand: {
+    titre: "Marchand de passage",
     theme: 'Visiteur',
     positive: true,
-    condition: () => (S.meta.gameMin - (S.lastMerchantMin || -99999)) > 21 * 24 * 60 && (S.res.metal || 0) > 100,
+    // 0.33 : le marchand ne vient que si au moins un échange est payable (montants ×OUTCOME_MULT)
+    condition: () => (S.meta.gameMin - (S.lastMerchantMin || -99999)) > 21 * 24 * 60
+      && ((S.res.metal || 0) >= 80 * OUTCOME_MULT || (S.res.cristal || 0) >= 50 * OUTCOME_MULT),
     pickActors: () => ({ primary: null }),
     text: "Un vaisseau marchand se pose pour quelques heures. Le pilote propose un échange unique.",
     choices: [
-      { label: "Échanger 80 métal contre 30 datacubes", outcome: { loss: { metal: 80 }, gain: { datacubes: 30 }, log: "L'échange est conclu.", markMerchant: true } },
-      { label: "Échanger 50 cristal contre 1 schéma humain", outcome: { loss: { cristal: 50 }, randomBlueprint: 'humain', log: "Un plan technique change de mains.", markMerchant: true } },
+      { label: "Échanger {loss.metal} métal contre {gain.datacubes} datacubes", pay: true, outcome: { loss: { metal: 80 }, gain: { datacubes: 30 }, log: "L'échange est conclu.", markMerchant: true } },
+      { label: "Échanger {loss.cristal} cristal contre 1 schéma humain", pay: true, outcome: { loss: { cristal: 50 }, randomBlueprint: 'humain', log: "Un plan technique change de mains.", markMerchant: true } },
       { label: "Rien d'intéressant", outcome: { markMerchant: true, log: "Le marchand repart sans rien vendre." } }
     ]
   },
 
   // ===== DÉCOUVERTES & INSIGHTS =====
   event_insight_labo: {
+    titre: "Intuition au laboratoire",
     theme: 'Découverte',
     positive: true,
     condition: () => S.modules.laboratoire?.level >= 2 && (S.research?.length > 0 || Object.keys(S.techCompleted || {}).length >= 2),
@@ -3059,6 +3627,7 @@ const COLONY_EVENTS = {
   },
 
   event_decouverte_archive: {
+    titre: "Archive retrouvée",
     theme: 'Découverte',
     positive: true,
     condition: () => aliveCrew().some(m => (m.skills.linguistique || 0) >= 2),
@@ -3075,6 +3644,7 @@ const COLONY_EVENTS = {
 
   // ===== SONGES COLLECTIFS =====
   event_songe: {
+    titre: "Songe collectif",
     theme: 'Songe',
     positive: false,
     condition: () => aliveCrew().length >= 3 && Object.keys(S.discoveries || {}).some(id => {
@@ -3093,6 +3663,7 @@ const COLONY_EVENTS = {
 
   // ===== PROPOSITION D'EXPLORATION =====
   event_volontaire: {
+    titre: "Volontaire pour patrouiller",
     theme: 'Initiative',
     positive: true,
     condition: () => aliveCrew().some(m => m.statut === 'libre' && (m.skills.combat || 0) >= 2),
@@ -3112,7 +3683,10 @@ const COLONY_EVENTS = {
 
 // Trouve un événement éligible pondéré
 function pickColonyEvent() {
+  // Un événement déjà en attente du joueur n'est pas re-tiré
+  const pending = new Set((S.pendingDecisions || []).filter(d => d.kind === 'event').map(d => d.refId));
   const eligible = Object.entries(COLONY_EVENTS).filter(([id, ev]) => {
+    if (pending.has(id)) return false;
     try { return ev.condition(); } catch (e) { return false; }
   });
   if (eligible.length === 0) return null;
@@ -3131,59 +3705,57 @@ export function tickColonyEvents(silent = false) {
 
   const eventId = pickColonyEvent();
   if (!eventId) return;
-
-  if (silent) {
-    // Applique le premier choix (le plus simple)
-    triggerColonyEvent(eventId, true);
-  } else {
-    triggerColonyEvent(eventId, false);
-  }
+  // silent (rattrapage) : résolu automatiquement ; sinon file des décisions
+  triggerColonyEvent(eventId, silent);
 }
 
-let _activeColonyEvent = null;
 function triggerColonyEvent(eventId, silent = false) {
   const ev = COLONY_EVENTS[eventId];
   if (!ev) return;
   let actors;
   try { actors = ev.pickActors(); } catch (e) { return; }
   if (!actors) return;
+  S.lastColonyEventId = eventId;
 
   if (silent) {
-    // Choix le moins risqué : premier choix sans req
-    const safe = ev.choices.find(c => !c.req && !c.consume) || ev.choices[0];
-    applyColonyEventChoice(eventId, safe, actors);
-    S.lastColonyEventId = eventId;
+    autoResolveColonyEvent(eventId, actors);
     return;
   }
-
-  _activeColonyEvent = { eventId, actors };
-  const bg = $('#modalBg');
-  const m = $('#modal');
-  m.classList.add('incident-modal');  // Réutilise le style
-  m.innerHTML = renderColonyEventContent();
-  bg.classList.add('show');
-  hookColonyEventModal();
+  enqueueDecision({ kind: 'event', refId: eventId, ...decisionActors(actors) });
   // 0.26.1 : notification dédiée (warn — événement en attente de décision)
-  notif.colonyEvent(ev.titre || eventId);
+  notif.colonyEvent(colonyEventTitle(eventId));
 }
 
-function renderColonyEventContent() {
-  const { eventId, actors } = _activeColonyEvent;
+function autoResolveColonyEvent(eventId, actors) {
+  const ev = COLONY_EVENTS[eventId];
+  if (!ev) return;
+  const choice = pickAutoChoice(ev.choices);
+  if (!choice) return;
+  if (applyColonyEventChoice(eventId, choice, actors, { auto: true }) !== false) {
+    recordAutoResolution('event', colonyEventTitle(eventId), fillAmounts(choice.label, choice.outcome));
+  }
+}
+
+// Libellé d'un choix d'événement : montants réels et nom du protagoniste (échappé)
+function eventChoiceLabelHTML(ch, actors) {
+  return esc(fillAmounts(ch.label, ch.outcome)).replace(/\{primary\}/g, esc(actors?.primary?.name || ''));
+}
+
+function renderColonyEventContent(eventId, actors) {
   const ev = COLONY_EVENTS[eventId];
   const primaryName = actors.primary?.name || '';
   const secondaryName = actors.secondary?.name || '';
   const age = actors.primary ? currentAge(actors.primary) : '';
   const text = ev.text
-    .replace(/\{primary\}/g, primaryName ? `<em>${primaryName}</em>` : 'un colon')
-    .replace(/\{secondary\}/g, secondaryName ? `<em>${secondaryName}</em>` : '')
+    .replace(/\{primary\}/g, primaryName ? `<em>${esc(primaryName)}</em>` : 'un colon')
+    .replace(/\{secondary\}/g, secondaryName ? `<em>${esc(secondaryName)}</em>` : '')
     .replace(/\{age\}/g, age);
 
   const choicesHTML = ev.choices.map((ch, i) => {
     let extras = [];
     let available = true;
     if (ch.req?.skill) {
-      const team = aliveCrew();
-      const has = team.some(m => (m.skills[ch.req.skill.key] || 0) >= ch.req.skill.min);
+      const has = skillReqMet(ch.req, aliveCrew());
       extras.push(`<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`);
       if (!has) available = false;
     }
@@ -3193,8 +3765,13 @@ function renderColonyEventContent() {
       extras.push(`<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`);
       if (!has) available = false;
     }
+    if (ch.pay && ch.outcome?.loss) {
+      const ok = choiceAffordable(ch);
+      extras.push(`<span class="cost ${ok ? '' : 'ko'}">COÛT : ${amountsText(ch.outcome.loss)}${ok ? '' : ' — stock insuffisant'}</span>`);
+      if (!ok) available = false;
+    }
     return `<button class="incident-choice" data-event-choice="${i}" ${available ? '' : 'disabled'}>
-      ${ch.label.replace(/\{primary\}/g, primaryName)}
+      ${eventChoiceLabelHTML(ch, actors)}
       ${extras.join('')}
     </button>`;
   }).join('');
@@ -3204,26 +3781,36 @@ function renderColonyEventContent() {
     <div class="incident-eyebrow ${ev.positive ? 'positive' : ''}">
       Événement · <span style="color:${themeColor}">${ev.theme}</span>
     </div>
-    <h3 class="incident-title">${ev.positive ? 'Une bonne nouvelle' : 'Quelque chose se passe'}</h3>
+    <h3 class="incident-title">${ev.titre || (ev.positive ? 'Une bonne nouvelle' : 'Quelque chose se passe')}</h3>
     <p class="incident-body">${text}</p>
     <div class="incident-choices">${choicesHTML}</div>
   `;
 }
 
-function hookColonyEventModal() {
+function hookColonyEventModal(decId) {
   const m = $('#modal');
   m.querySelectorAll('button[data-event-choice]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.eventChoice, 10);
-      const { eventId, actors } = _activeColonyEvent;
-      const ev = COLONY_EVENTS[eventId];
-      const choice = ev.choices[idx];
-      const result = applyColonyEventChoice(eventId, choice, actors);
+      const dec = (S.pendingDecisions || []).find(d => d.id === decId);
+      if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
+      const ev = COLONY_EVENTS[dec.refId];
+      const actors = resolveEventActors(dec);
+      if (!ev || !actors) {
+        // Devenu caduc entre l'affichage et le clic
+        removeDecision(decId);
+        closeDecisionModal();
+        render();
+        return;
+      }
+      const choice = ev.choices[parseInt(btn.dataset.eventChoice, 10)];
+      const result = applyColonyEventChoice(dec.refId, choice, actors);
       if (result === false) return;   // échec (ex : stock insuffisant) — on laisse choisir
-      S.lastColonyEventId = eventId;
+      S.lastColonyEventId = dec.refId;
+      removeDecision(decId);
+      save();
       // 0.30 — Affiche l'écran de conséquences avant de fermer.
-      m.innerHTML = renderColonyConsequence(result, choice);
+      m.innerHTML = renderColonyConsequence(result, choice, actors);
       hookColonyConsequence();
       // Met à jour l'arrière-plan (ressources, etc.) tout de suite
       render();
@@ -3232,12 +3819,12 @@ function hookColonyEventModal() {
 }
 
 // 0.30 — Écran de conséquences : ce que le choix a réellement provoqué.
-function renderColonyConsequence(result, choice) {
-  const label = (choice.label || '').replace(/\{primary\}/g, _activeColonyEvent?.actors?.primary?.name || '');
+function renderColonyConsequence(result, choice, actors) {
+  const label = eventChoiceLabelHTML(choice, actors);
   const effectsHTML = (result.effects || []).map(e => {
     const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
     const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
-    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${e.text}</span></li>`;
+    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${esc(e.text)}</span></li>`;
   }).join('');
   const narrativeHTML = result.narrative
     ? `<p class="incident-body">${result.narrative}</p>`
@@ -3254,26 +3841,36 @@ function renderColonyConsequence(result, choice) {
 }
 
 function hookColonyConsequence() {
-  const m = $('#modal');
   $('#consContinue')?.addEventListener('click', () => {
-    $('#modalBg').classList.remove('show');
-    m.classList.remove('incident-modal');
-    _activeColonyEvent = null;
+    closeDecisionModal();
     render();
   });
 }
 
-export function applyColonyEventChoice(eventId, choice, actors) {
+// Applique un choix d'événement. Renvoie false si impossible (prérequis,
+// objet, stock), sinon { ok, narrative (HTML), effects (texte brut), positive }.
+// opts.auto : décision automatique — pas de toast, une seule ligne de journal.
+export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
   const ev = COLONY_EVENTS[eventId];
+  const auto = !!opts.auto;
+  const notes = [];
+  const say = (kind, txt) => { if (auto) notes.push(txt); else log(kind, txt); };
   const primary = actors.primary;
   const secondary = actors.secondary;
-  const primaryName = primary?.name || 'un colon';
-  const secondaryName = secondary?.name || '';
 
+  // Prérequis et coût vérifiés AVANT tout effet
+  if (choice.req?.skill && !skillReqMet(choice.req, aliveCrew())) {
+    if (!auto) toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`);
+    return false;
+  }
+  if (!choiceAffordable(choice)) {
+    if (!auto) toast(`Stock insuffisant : ${amountsText(choice.outcome.loss)}`);
+    return false;
+  }
   // Consume item
   if (choice.consume?.item) {
     if (!S.inventory?.[choice.consume.item]) {
-      toast(`Stock insuffisant : ${ITEMS[choice.consume.item]?.nom}`);
+      if (!auto) toast(`Stock insuffisant : ${ITEMS[choice.consume.item]?.nom}`);
       return false;
     }
     S.inventory[choice.consume.item]--;
@@ -3282,12 +3879,9 @@ export function applyColonyEventChoice(eventId, choice, actors) {
 
   const o = choice.outcome || {};
 
-  // 0.28 : multiplicateur d'impact
-  const OUTCOME_MULT = 3;
-
   // 0.30 — Conséquences concrètes recensées et renvoyées à l'UI.
   // Elles varient selon l'équipage et les ententes (réactions des proches, climat moral).
-  const effects = [];   // { kind:'good'|'bad'|'neutral', text }
+  const effects = [];   // { kind:'good'|'bad'|'neutral', text } — texte brut (échappé au rendu)
   const team = aliveCrew();
 
   // Climat moral de la colonie : module l'intensité des conséquences négatives.
@@ -3302,19 +3896,18 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     if (avgMoral < 35) { moodMult = 1.4; moodNote = "Après les jours difficiles, ce répit fait d'autant plus de bien."; }
   }
 
-  // Pertes / gains de ressources
+  // Pertes / gains de ressources — montants RÉELLEMENT appliqués
   if (o.loss) {
     for (const k in o.loss) {
-      const amt = o.loss[k] * OUTCOME_MULT;
-      S.res[k] = Math.max(0, (S.res[k] || 0) - amt);
-      effects.push({ kind: 'bad', text: `−${Math.round(amt)} ${RES_LABELS[k] || k}` });
+      const lost = removeResourceCapped(k, o.loss[k] * OUTCOME_MULT);
+      if (lost > 0) effects.push({ kind: 'bad', text: `−${Math.round(lost)} ${RES_LABELS[k] || k}` });
     }
   }
   if (o.gain) {
     for (const k in o.gain) {
       const amt = o.gain[k] * OUTCOME_MULT;
-      S.res[k] = Math.min(capOf(k), (S.res[k] || 0) + amt);
-      effects.push({ kind: 'good', text: `+${Math.round(amt)} ${RES_LABELS[k] || k}` });
+      const got = addResourceCapped(k, amt);
+      effects.push({ kind: 'good', text: `+${Math.round(got)} ${RES_LABELS[k] || k}${got < amt ? ' (stock plein)' : ''}` });
     }
   }
   // Moral collectif — 0.28 : impact durable (×3), 0.30 : modulé par le climat
@@ -3400,7 +3993,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
       }
       const member = {
         ...cand,
-        id: 'm_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
+        id: uid('m'),
         joinedAt: S.meta.gameMin,
         birthGameMin: S.meta.gameMin - (cand.age || 30) * 43200,
         statut: 'libre',
@@ -3431,11 +4024,11 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     if (!S.activeBuffs) S.activeBuffs = [];
     S.activeBuffs.push({
       ...o.debuff,
-      sourceLabel: ev.titre || ev.id || 'Événement',
+      sourceLabel: colonyEventTitle(eventId),
       startedAt: S.meta.gameMin,
       expiresAt: (S.meta.gameMin || 0) + (o.debuff.duration || 720)
     });
-    log('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
+    say('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
     effects.push({ kind: 'bad', text: `Effet en cours : ${o.debuff.label || 'modulation temporaire'}` });
   }
   // — generateRivalry entre primary et secondary
@@ -3443,7 +4036,7 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     const key = [primary.id, secondary.id].sort().join('|');
     if (!S.relations) S.relations = {};
     S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-    log('warn', `<em>${primary.name}</em> et <em>${secondary.name}</em> se brouillent durablement.`);
+    say('warn', `<em>${esc(primary.name)}</em> et <em>${esc(secondary.name)}</em> se brouillent durablement.`);
     effects.push({ kind: 'bad', text: `${primary.name} et ${secondary.name} se brouillent durablement.` });
   }
   // — historicalMark : entrée dans le journal historique de la colonie
@@ -3456,12 +4049,17 @@ export function applyColonyEventChoice(eventId, choice, actors) {
     });
   }
 
-  // Log final + narratif renvoyé à l'UI
+  // Log final + narratif renvoyé à l'UI (HTML : noms échappés)
   let narrative = '';
   if (o.log) {
     narrative = o.log
-      .replace(/\{primary\}/g, primary ? `<em>${primary.name}</em>` : 'un colon')
-      .replace(/\{secondary\}/g, secondary ? `<em>${secondary.name}</em>` : '');
+      .replace(/\{primary\}/g, primary ? `<em>${esc(primary.name)}</em>` : 'un colon')
+      .replace(/\{secondary\}/g, secondary ? `<em>${esc(secondary.name)}</em>` : '');
+  }
+  if (auto) {
+    log(ev.positive ? 'success' : 'warn',
+      `<b>${esc(colonyEventTitle(eventId))}</b> — décision automatique : « ${eventChoiceLabelHTML(choice, actors)} ». ${[narrative, ...notes].filter(Boolean).join(' ')}`.trim());
+  } else if (narrative) {
     log(ev.positive ? 'success' : 'warn', narrative);
   }
   if (effects.length === 0) {
@@ -3469,6 +4067,9 @@ export function applyColonyEventChoice(eventId, choice, actors) {
   }
   return { ok: true, narrative, effects, positive: ev.positive };
 }
+
+// Identifiants uniques (factions, missions, vaisseaux) — import local et aliasé
+// pour ne pas entrer en conflit avec l'import principal de util.js.
 
 // ============================================================
 //   ARCS NARRATIFS (0.20)
@@ -3512,6 +4113,14 @@ export function tickArcs() {
     const arc = ARCS[arcId];
     const state = getArcState(arcId);
 
+    // Suivi passif : une étape peut déclarer track(state) pour mémoriser un fait
+    // passager (ex. un colon infecté) avant que sa condition ne soit évaluée.
+    // Appelé à chaque tick, même si l'arc n'est pas encore débloqué.
+    for (const step of arc.steps) {
+      if (!step.track || isStepComplete(arcId, step.id)) continue;
+      try { step.track(state); } catch (e) {}
+    }
+
     // Déblocage
     if (!state.unlocked) {
       try {
@@ -3524,16 +4133,17 @@ export function tickArcs() {
       continue;
     }
 
-    // Progression des étapes (dans l'ordre)
+    // Progression des étapes, dans l'ordre : on s'arrête à la première étape
+    // non remplie. Plusieurs étapes consécutives peuvent se valider au même tick.
+    // Les étapes déjà validées (y compris hors ordre par une version antérieure)
+    // restent acquises et sont simplement sautées.
     for (const step of arc.steps) {
       if (isStepComplete(arcId, step.id)) continue;
-      try {
-        if (step.condition()) {
-          state.completedSteps.push(step.id);
-          log('success', `<em>${arc.nom} :</em> ${step.title}.`);
-        }
-      } catch (e) {}
-      // On n'arrête pas la boucle, plusieurs étapes peuvent se compléter en même temps si conditions remplies
+      let met = false;
+      try { met = !!step.condition(state); } catch (e) { met = false; }
+      if (!met) break;
+      state.completedSteps.push(step.id);
+      log('success', `<em>${arc.nom} :</em> ${step.title}.`);
     }
 
     // Récompense si arc complet et pas encore claim
@@ -3553,7 +4163,9 @@ function claimArcReward(arcId) {
   if (r.kind === 'blueprint') {
     addBlueprintToInventory(r.value, 'récompense de chronique');
   } else if (r.kind === 'tech') {
-    // Marque la tech comme "débloquée par chronique" (devient visible/disponible)
+    // Trace informative uniquement : le déblocage effectif de la tech légendaire
+    // est vérifié par canResearch() via prereq.requireArc (state.rewardClaimed).
+    // S.unlockedLegendaryTechs n'est lu nulle part ; conservé pour les sauvegardes.
     if (!S.unlockedLegendaryTechs) S.unlockedLegendaryTechs = {};
     S.unlockedLegendaryTechs[r.value] = true;
   } else if (r.kind === 'permanent_bonus') {
@@ -3632,7 +4244,7 @@ function genFactionName(type, rng = Math.random) {
 function createFaction(type, body) {
   const ft = FACTION_TYPES[type];
   if (!ft) return null;
-  const id = 'fac_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 9999).toString(36);
+  const id = uid('fac');
   const faction = {
     id,
     type,
@@ -3677,7 +4289,6 @@ export function adjustReputation(factionId, delta) {
   f.reputation = Math.max(-100, Math.min(100, f.reputation + delta));
   const newStatus = factionStatus(f.reputation).key;
   if (oldStatus !== newStatus) {
-    const ft = FACTION_TYPES[f.type];
     log(delta > 0 ? 'success' : 'warn',
       `<em>${f.name}</em> est désormais <b>${factionStatus(f.reputation).label}</b>.`);
     // 0.26.1 : notification dédiée
@@ -3685,20 +4296,68 @@ export function adjustReputation(factionId, delta) {
   }
 }
 
+// 0.32.1 — Les technologies diplomatiques conditionnent le commerce et l'alliance.
+// Les seuils de réputation sont inchangés ; la technologie est requise EN PLUS.
+// Compatibilité : une route déjà ouverte ou une alliance déjà nouée (lastAllianceGift
+// posé) dans une sauvegarde antérieure reste active (droits acquis).
+const TRADE_REP_MIN = 40, ALLIANCE_REP_MIN = 75;
+const TRADE_TECH = 'tech_commerce_interstellaire', ALLIANCE_TECH = 'tech_traites_formels';
+const techLabel = id => TECH_TREE[id]?.nom || id;
+
+// Peut-on ouvrir une route commerciale avec cette faction ? → { ok, why }
+export function tradeRequirement(f) {
+  if (!f) return { ok: false, why: 'Faction inconnue.' };
+  if (f.reputation < TRADE_REP_MIN) return { ok: false, why: `Réputation trop faible (${TRADE_REP_MIN}+ requis).` };
+  if (!isTechCompleted(TRADE_TECH)) return { ok: false, why: `Requiert la technologie ${techLabel(TRADE_TECH)}.` };
+  return { ok: true, why: '' };
+}
+
+// L'alliance (dons automatiques) est-elle active avec cette faction ? → { ok, why }
+export function allianceRequirement(f) {
+  if (!f) return { ok: false, why: 'Faction inconnue.' };
+  if (f.reputation < ALLIANCE_REP_MIN) return { ok: false, why: `Réputation ${ALLIANCE_REP_MIN}+ requise.` };
+  if (!isTechCompleted(ALLIANCE_TECH) && !f.lastAllianceGift) return { ok: false, why: `Requiert la technologie ${techLabel(ALLIANCE_TECH)}.` };
+  return { ok: true, why: '' };
+}
+
+// Compatibilité 0.31b : la ressource fantôme « composants » (butin de combat)
+// n'existe pas. Les sauvegardes qui en contiennent la voient convertie en métal.
+function purgeLegacyComposants() {
+  if (S.res && S.res.composants !== undefined) {
+    const n = Math.max(0, Math.floor(Number(S.res.composants) || 0));
+    delete S.res.composants;
+    if (n > 0) S.res.metal = Math.min(capOf('metal'), (S.res.metal || 0) + n);
+  }
+  for (const exp of S.expeditions || []) {
+    const loot = exp.accumulatedLoot;
+    if (!loot || loot.composants === undefined) continue;
+    const n = Math.max(0, Math.floor(Number(loot.composants) || 0));
+    delete loot.composants;
+    if (n > 0) loot.metal = (loot.metal || 0) + n;
+  }
+}
+
 // Détermine si une faction proposera une caravane à ce tick
 export function tickFactions() {
+  purgeLegacyComposants();
   if (!S.factions) return;
   for (const id in S.factions) {
     const f = S.factions[id];
     const ft = FACTION_TYPES[f.type];
-    // Commerce auto (rep ≥ 40 et activé par le joueur)
-    if (f.reputation >= 40 && f.tradeActive) {
+    // Commerce auto (rep ≥ 40 et activé par le joueur — l'activation exige la tech,
+    // cf. toggleFactionTrade ; une route ouverte avant 0.32.1 reste active)
+    if (f.reputation >= TRADE_REP_MIN && f.tradeActive) {
       const cycle = 15 * 24 * 60;
       if (!f.lastCaravan) f.lastCaravan = f.metAt;
       if (S.meta.gameMin - f.lastCaravan >= cycle) triggerCaravan(f);
     }
-    // 0.30 — Don d'alliance (rep ≥ 75, automatique)
-    if (f.reputation >= 75 && ft?.allianceGift) {
+    // 0.30 — Don d'alliance (rep ≥ 75, automatique) — 0.32.1 : requiert Traités formels
+    if (f.reputation >= ALLIANCE_REP_MIN && ft?.allianceGift && !allianceRequirement(f).ok) {
+      if (!f.allianceTechWarned) {
+        f.allianceTechWarned = true;
+        log('neutral', `<em>${f.name}</em> serait prête à sceller une alliance formelle. ${allianceRequirement(f).why}`);
+      }
+    } else if (f.reputation >= ALLIANCE_REP_MIN && ft?.allianceGift) {
       const ag = ft.allianceGift;
       if (!f.lastAllianceGift) f.lastAllianceGift = f.metAt || S.meta.gameMin;
       if (S.meta.gameMin - f.lastAllianceGift >= ag.interval) {
@@ -3739,9 +4398,10 @@ function triggerCaravan(faction) {
 export function toggleFactionTrade(factionId) {
   const f = S.factions?.[factionId];
   if (!f) return;
-  if (f.reputation < 40 && !f.tradeActive) {
-    toast("Réputation trop faible (40+ requis).");
-    return;
+  // Suspendre est toujours possible ; ouvrir exige réputation + technologie.
+  if (!f.tradeActive) {
+    const req = tradeRequirement(f);
+    if (!req.ok) { toast(req.why); return; }
   }
   f.tradeActive = !f.tradeActive;
   if (f.tradeActive) {
@@ -3775,8 +4435,20 @@ export function launchDiplomaticMission(factionId, memberId) {
     toast(`${SKILL_LABELS[reqSkill]} ${reqMin}+${altLabel} requis pour cette faction.`);
     return;
   }
-  if (m.statut !== 'libre') {
+  // Seul un colon libre ou en poste peut partir (son poste lui reste réservé,
+  // comme pour une expédition) — jamais un colon déjà en mission, en expédition,
+  // en formation, à l'infirmerie, ni mort.
+  if ((m.statut !== 'libre' && m.statut !== 'travail') ||
+      (S.diplomaticMissions || []).some(d => d.memberId === m.id)) {
     toast(`${m.name} n'est pas disponible.`);
+    return;
+  }
+  if (isTreatingDoctor(m.id)) {
+    toast(`${m.name} assure un traitement en cours.`);
+    return;
+  }
+  if ((S.diplomaticMissions || []).some(d => d.factionId === factionId)) {
+    toast(`Une mission est déjà en cours auprès de ${f.name}.`);
     return;
   }
   const ambassadeLvl = S.modules?.ambassade?.level || 0;
@@ -3797,14 +4469,20 @@ export function launchDiplomaticMission(factionId, memberId) {
   m.statut = 'diplomatie';
   if (!S.diplomaticMissions) S.diplomaticMissions = [];
   const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);
+  // 0.29 — Un Émissaire disponible (à quai) porte la délégation : bonus de réputation.
+  // Le vaisseau n'est pas immobilisé : il reste utilisable pour les expéditions.
+  const envoy = (S.fleet || []).find(v => v.type === 'emissaire' && v.available);
   S.diplomaticMissions.push({
-    id: 'dipl_' + Date.now().toString(36),
+    id: uid('dipl'),
     factionId,
     memberId,
     startedAt: S.meta.gameMin,
-    duration
+    duration,
+    vesselType: envoy ? 'emissaire' : null,
+    vesselId: envoy ? envoy.id : null
   });
-  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>. Retour dans ${fmtMin(duration)}.`);
+  const envoyNote = envoy ? ` à bord de l'Émissaire <em>${envoy.name}</em> (réputation ×${VESSELS.emissaire.diplomaticBonus || 1.5})` : '';
+  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>${envoyNote}. Retour dans ${fmtMin(duration)}.`);
   render();
 }
 
@@ -3813,18 +4491,29 @@ export function tickDiplomaticMissions() {
   if (!S.diplomaticMissions || S.diplomaticMissions.length === 0) return;
   const finished = [];
   for (const mis of S.diplomaticMissions) {
-    if (S.meta.gameMin - mis.startedAt >= mis.duration) finished.push(mis);
+    const member = S.crew.find(c => c.id === mis.memberId);
+    // Un diplomate mort ou disparu met fin à la mission sans attendre son terme
+    const lost = !member || member.statut === 'mort';
+    if (lost || S.meta.gameMin - mis.startedAt >= mis.duration) finished.push(mis);
   }
   for (const mis of finished) {
     completeDiplomaticMission(mis);
   }
 }
 
+// Succès critiques nécessaires pour gagner +1 dans la compétence de mission
+const DIPLO_CRITS_PER_SKILL = 5;
+
 function completeDiplomaticMission(mis) {
   const member = S.crew.find(c => c.id === mis.memberId);
   const faction = S.factions?.[mis.factionId];
   S.diplomaticMissions = S.diplomaticMissions.filter(m => m.id !== mis.id);
-  if (!member) return;
+  // Diplomate mort ou absent : la mission échoue, sans récompense
+  if (!member || member.statut === 'mort') {
+    const who = member ? `<em>${member.name}</em>` : 'Le diplomate';
+    log('warn', `Mission diplomatique vers <em>${faction?.name || 'une faction'}</em> perdue : ${who} n'en reviendra pas.`);
+    return;
+  }
   if (member.statut === 'diplomatie') returnToBase(member);
   if (!faction) return;
 
@@ -3832,6 +4521,19 @@ function completeDiplomaticMission(mis) {
 
   // 0.30 — Jet sur compétence primaire de la faction + linguistique en soutien
   const primarySkill = ft.missionSkill || 'linguistique';
+  // 0.32.1 — Les compétences sont entières. Une ancienne version ajoutait +0.1 par
+  // succès critique : on ramène la valeur à l'entier inférieur et on convertit
+  // la fraction en succès critiques déjà acquis (0.1 = 1 succès).
+  const rawSkill = Number(member.skills[primarySkill]) || 0;
+  if (!Number.isInteger(rawSkill)) {
+    member.skills[primarySkill] = Math.floor(rawSkill);
+    member.diploCrits = (member.diploCrits || 0) + Math.round((rawSkill - Math.floor(rawSkill)) * 10);
+    while (member.diploCrits >= DIPLO_CRITS_PER_SKILL && member.skills[primarySkill] < 5) {
+      member.diploCrits -= DIPLO_CRITS_PER_SKILL;
+      member.skills[primarySkill]++;
+    }
+  }
+  if (!Number.isInteger(member.skills.linguistique || 0)) member.skills.linguistique = Math.round(member.skills.linguistique);
   const primaryScore = member.skills[primarySkill] || 0;
   const lingScore = primarySkill !== 'linguistique' ? (member.skills.linguistique || 0) : 0;
   const charisme = member.stats?.charisme || 5;
@@ -3846,7 +4548,7 @@ function completeDiplomaticMission(mis) {
   if (ambassadeLvl >= 2) diploMult += (ambassadeLvl - 1) * 0.10;
   const tech = techEffectsAccumulated();
   if (tech.diplomaticBonus) diploMult *= tech.diplomaticBonus;
-  if (mis.vesselType === 'emissaire') diploMult *= 1.5;
+  if (mis.vesselType && VESSELS[mis.vesselType]?.diplomaticBonus) diploMult *= VESSELS[mis.vesselType].diplomaticBonus;
 
   if (total >= dc) {
     const isCrit = total >= critDc;
@@ -3876,9 +4578,15 @@ function completeDiplomaticMission(mis) {
     const critLabel = isCrit ? ' ★ Succès exceptionnel.' : '';
     log('success', `<em>${member.name}</em> revient de mission diplomatique.${critLabel} <em>${faction.name}</em> : réputation +${gain}${multLabel}.${extraLog}`);
     member.moral = Math.min(100, member.moral + (isCrit ? 10 : 5));
-    // Progression compétence : légère montée si critique
+    // Progression compétence : chaque succès critique compte ; +1 (entier) au bout
+    // de DIPLO_CRITS_PER_SKILL succès critiques.
     if (isCrit && primaryScore < 5) {
-      member.skills[primarySkill] = Math.min(5, primaryScore + 0.1);
+      member.diploCrits = (member.diploCrits || 0) + 1;
+      if (member.diploCrits >= DIPLO_CRITS_PER_SKILL) {
+        member.diploCrits -= DIPLO_CRITS_PER_SKILL;
+        member.skills[primarySkill] = Math.min(5, primaryScore + 1);
+        log('success', `<em>${member.name}</em> progresse : ${SKILL_LABELS[primarySkill] || primarySkill} ${member.skills[primarySkill]}.`);
+      }
     }
   } else {
     const malus = roll <= 2 ? -10 : (roll <= 4 ? -5 : 0);
@@ -3919,7 +4627,8 @@ function genVesselName(typeKey) {
     vedette:  ['Furet','Faucon','Aiguille','Gypaète','Effraie','Saiga','Vif'],
     navette:  ['Bouvreuil','Mousson','Cabestan','Rhéa','Albatros','Truite'],
     cargo:    ['Ourse','Mastodon','Kraken','Charrette','Bourdon','Wapiti'],
-    cuirasse: ['Sentinelle','Hégémon','Lance','Meute','Chambellan']
+    cuirasse: ['Sentinelle','Hégémon','Lance','Meute','Chambellan'],
+    emissaire: ['Héraut','Colombe','Concorde','Messager','Iris','Passerelle']
   };
   const list = prefixes[typeKey] || ['Vaisseau'];
   const num = Math.floor(Math.random() * 89) + 11; // 11–99
@@ -3980,7 +4689,7 @@ export function finishVesselBuild() {
   if (!b) return;
   const def = VESSELS[b.type];
   const vessel = {
-    id: 'v_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
+    id: uid('v'),
     type: b.type,
     name: genVesselName(b.type),
     available: true   // false quand affecté à une expé en cours
@@ -4014,11 +4723,14 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
   if (!Array.isArray(crewIds) || crewIds.length === 0) return { ok:false, why:'Aucun équipage sélectionné' };
   if (crewIds.length > def.places) return { ok:false, why:`Max ${def.places} membres pour ce vaisseau` };
 
-  // Tous les membres doivent être libres et vivants
+  // Tous les membres doivent être disponibles et vivants : libres, ou en poste
+  // (0.22 — le poste reste réservé pendant l'expédition, cf. launchExpedition ;
+  // c'est aussi ce que propose l'écran de lancement).
   for (const id of crewIds) {
     const m = S.crew.find(c => c.id === id);
     if (!m) return { ok:false, why:'Membre introuvable' };
-    if (m.statut !== 'libre') return { ok:false, why:`${m.name} : ${m.statut}` };
+    if (m.statut !== 'libre' && m.statut !== 'travail') return { ok:false, why:`${m.name} : ${m.statut}` };
+    if (isTreatingDoctor(m.id)) return { ok:false, why:`${m.name} assure un traitement en cours` };
   }
 
   // Calcul coûts (avec bonus Hangar et tech)
@@ -4081,7 +4793,7 @@ export function launchExpedition(args) {
   const scenes = selectExpeditionScenes(r.body, sceneRng);
   // Crée l'expédition
   const exp = {
-    id: 'e_' + Date.now().toString(36),
+    id: 'e_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36) + S.expeditions.length,
     vesselId: args.vesselId,
     bodyId: args.bodyId,
     systemId: r.sys.id,
@@ -4102,6 +4814,11 @@ export function launchExpedition(args) {
     sceneThreatMod: 0,
     equipment: { ...equipment }   // 0.15 — items embarqués
   };
+  // Épisode de chronique : on retient lequel, pour ne pas en sauter un si
+  // plusieurs expéditions visent le même corps
+  if (exp.scenes[0] === CHRON_INTRO_ID) {
+    exp.chronicleRef = { id: r.body.chronicle.id, episodeIdx: r.body.chronicle.episodeIdx };
+  }
   S.expeditions.push(exp);
   const equipNote = equipUnits > 0 ? ` · ${equipUnits} équipement(s) embarqué(s)` : '';
   log('neutral', `Décollage : <em>${r.vessel.name}</em> en route vers <em>${r.body.name}</em>. Voyage : ${fmtMin(r.oneWayMin)}${equipNote}.`);
@@ -4109,10 +4826,28 @@ export function launchExpedition(args) {
 }
 
 // Avance toutes les expéditions d'un tick
+let _chronRecruitsCheckedFor = null;
 export function tickExpeditions() {
+  // Répare une fois par partie chargée les colons de chronique créés par les versions ≤ 0.32
+  if (_chronRecruitsCheckedFor !== S) {
+    _chronRecruitsCheckedFor = S;
+    normalizeChronicleRecruits(S);
+  }
   if (S.expeditions.length === 0) return;
   const completed = [];
-  for (const exp of S.expeditions) {
+  for (const exp of [...S.expeditions]) {
+    if (exp.phase === 'sur_place' && !exp.combat?.active) {
+      // Sur place, l'expédition ne peut qu'attendre une décision
+      if (!exp.awaitingChoice) exp.awaitingChoice = true;
+      // Scène introuvable (données changées, sauvegarde ancienne…) : plutôt que de
+      // bloquer vaisseau et équipage pour toujours, l'équipe rentre.
+      if (!currentScene(exp)) {
+        exp.accumulatedLog.push("Plus rien à explorer ici : l'équipe regagne le vaisseau.");
+        log('warn', `<em>${vesselNameOf(exp)}</em> : mission interrompue sur <em>${bodyOfExpedition(exp)?.name || 'site inconnu'}</em>, retour à l'avant-poste.`);
+        startReturn(exp);
+        continue;
+      }
+    }
     // On ne fait pas avancer le temps quand on attend un choix joueur
     if (exp.phase === 'sur_place' && exp.awaitingChoice) continue;
 
@@ -4142,9 +4877,37 @@ function onArrival(exp) {
   body.visited = true;
   sys.explored = true;
   log('neutral', `<em>${vesselNameOf(exp)}</em> arrive sur <em>${body.name}</em>. Exploration en cours.`);
+  // Épisode de chronique prévu au départ : on vérifie qu'il est toujours jouable
+  // (une autre expédition a pu le conclure ou être en train de le jouer).
+  if (exp.scenes[0] === CHRON_INTRO_ID) {
+    const busy = S.expeditions.some(o => o !== exp && o.bodyId === exp.bodyId && o.phase === 'sur_place' && isChronicleExpedition(o));
+    if (currentChronicleEpisode(body) && !busy) {
+      exp.chronicleRef = { id: body.chronicle.id, episodeIdx: body.chronicle.episodeIdx };
+    } else {
+      exp.scenes = selectExpeditionScenes(body, rngFor(`${exp.seed}|arrivee`), { skipChronicle: true }).map(s => s.id);
+      delete exp.chronicleRef;
+    }
+  }
+  // Site déjà fouillé récemment : butin réduit pour toute la mission (hors chronique)
+  exp.lootMult = isChronicleExpedition(exp) ? 1 : bodyLootMult(body);
+  if (exp.lootMult < 1) {
+    exp.accumulatedLog.push(`Site déjà fouillé récemment : butin réduit (≈${Math.round(exp.lootMult * 100)} %), aucun gain de réputation.`);
+  }
   // Active la première scène
   exp.sceneIdx = 0;
   exp.awaitingChoice = true;
+}
+
+// ---- Épuisement des sites pillés ----
+// Un site fouillé ne rend que LOOT_DEPLETED_MULT de son butin, puis se
+// reconstitue linéairement en LOOT_RECOVERY_DAYS jours de jeu.
+const LOOT_DEPLETED_MULT = 0.25;
+const LOOT_RECOVERY_DAYS = 30;
+function bodyLootMult(body) {
+  if (!body || typeof body.lootedAt !== 'number') return 1;
+  const days = Math.max(0, (S.meta.gameMin - body.lootedAt) / 1440);
+  if (days >= LOOT_RECOVERY_DAYS) return 1;
+  return LOOT_DEPLETED_MULT + (1 - LOOT_DEPLETED_MULT) * days / LOOT_RECOVERY_DAYS;
 }
 
 // Départ après scènes : finit la mission et programme le retour
@@ -4154,7 +4917,12 @@ function startReturn(exp) {
   exp.awaitingChoice = false;
   const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
   const body = sys?.bodies.find(b => b.id === exp.bodyId);
-  if (body) body.looted = true;
+  if (body) {
+    body.looted = true;
+    // Le site est épuisé s'il a été fouillé (les épisodes de chronique ne comptent pas)
+    const tookSomething = Object.values(exp.accumulatedLoot).some(v => v > 0) || exp.accumulatedItems.length > 0;
+    if (!isChronicleExpedition(exp) && tookSomething) body.lootedAt = S.meta.gameMin;
+  }
   // Calcul résumé pour le journal
   const lootSummary = Object.entries(exp.accumulatedLoot).map(([k,v]) => `${v} ${RES_LABELS[k]}`).join(', ') || 'rien';
   const itemsSummary = exp.accumulatedItems.length > 0
@@ -4260,27 +5028,79 @@ function onReturn(exp) {
   
   // 0.24 — Recruter les PNJ ramenés des chroniques planétaires
   if (exp.pendingChronicleRecruits && exp.pendingChronicleRecruits.length > 0) {
-    for (const recruit of exp.pendingChronicleRecruits) {
-      const def = recruit.characterDef;
-      // Construit un colon spécial à partir du characterDef
-      const member = {
-        id: 'chronchar_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
-        name: def.name,
-        age: def.age,
-        origine: 'humaine',
-        sante: 80,
-        moral: 60,
-        loyaute: 55,
-        statut: 'libre',
-        statuts: [],
-        traits: ['chronique_' + recruit.characterId], // marqueur unique
-        stats: { vigueur: 4, dexterite: 4, intellect: 6, sangfroid: 6, charisme: 5 },
-        skills: { combat: 1, science: def.role === 'Biologiste' ? 3 : 1, ingenierie: def.role === 'Mécanicien' ? 3 : 1, medecine: 1, pilotage: 1, linguistique: 2, survie: 2 },
-        birthGameMin: S.meta.gameMin - (def.age * YEAR_IN_GAME_MIN),
-        chronicleOrigin: recruit.chronicleId
-      };
-      S.crew.push(member);
-      log('success', `<em>${member.name}</em> rejoint l'avant-poste.`);
+    for (const recruit of exp.pendingChronicleRecruits) recruitChronicleCharacter(recruit);
+  }
+}
+
+// ---- PNJ de chronique ramenés à l'avant-poste ----
+// Le PNJ est construit comme un candidat ordinaire (genCandidate) dont on
+// surcharge l'identité, puis accepté via acceptCandidate (même conversion
+// candidat → membre que le recrutement normal). Habitat plein : il reste
+// dans la liste des candidats jusqu'à ce qu'une place se libère.
+function chronicleOriginOf(chronicleId, def) {
+  return { id: 'chronique', label: CHRONICLES[chronicleId]?.nom || 'Chronique planétaire', notes: def?.role && def.role !== '?' ? def.role : 'Rencontré·e lors d\'une chronique' };
+}
+
+function recruitChronicleCharacter({ characterId, chronicleId, characterDef }) {
+  const def = CHRONICLES[chronicleId]?.characters?.[characterId] || characterDef;
+  if (!def) return;
+  const already = [...S.crew, ...S.candidates].some(p => p.chronicleOrigin === chronicleId && p.chronicleCharacter === characterId);
+  if (already) return;
+  const c = genCandidate();
+  c.name = def.name;
+  if (typeof def.age === 'number' && def.age > 0) c.age = def.age;
+  c.origin = chronicleOriginOf(chronicleId, def);
+  if (def.stats) Object.assign(c.stats, def.stats);
+  if (def.skills) Object.assign(c.skills, def.skills);
+  if (Array.isArray(def.traits)) c.traits = def.traits.filter(t => TRAITS[t]);
+  c.salary = Math.max(1, 1 + Math.max(...Object.values(c.skills)));
+  c.chronicleOrigin = chronicleId;
+  c.chronicleCharacter = characterId;
+  S.candidates.push(c);
+  const cap = crewUsage();
+  if (cap.used < cap.total) {
+    acceptCandidate(c.id);
+  } else {
+    log('warn', `<em>${c.name}</em> est arrivé·e à l'avant-poste, mais l'habitat est plein : sa candidature attend une place libre.`);
+  }
+}
+
+// Sauvegardes ≤ 0.32 : les PNJ de chronique étaient créés sans `origin`
+// (champ `origine: 'humaine'`), sans séquelles ni salaire, avec un faux trait
+// « chronique_xxx ». On les remet au format d'un colon normal.
+// state : l'état à réparer (S par défaut ; load() peut l'appeler sur la sauvegarde brute).
+export function normalizeChronicleRecruits(state = S) {
+  if (!state) return;
+  const crew = state.crew || [];
+  const people = [...crew, ...(state.candidates || [])];
+  for (const p of people) {
+    if (!p || typeof p !== 'object') continue;
+    if (Array.isArray(p.traits)) {
+      const isFake = t => typeof t === 'string' && t.startsWith('chronique_') && !TRAITS[t];
+      const fake = p.traits.find(isFake);
+      if (fake) {
+        if (!p.chronicleCharacter) p.chronicleCharacter = fake.slice('chronique_'.length);
+        p.traits = p.traits.filter(t => !isFake(t));
+      }
+    } else {
+      p.traits = [];
+    }
+    if (!p.origin || typeof p.origin !== 'object' || !p.origin.label) {
+      const chronId = p.chronicleOrigin;
+      const def = chronId ? CHRONICLES[chronId]?.characters?.[p.chronicleCharacter] : null;
+      // Un faux trait « chronique_x » suffit à reconnaître un personnage de chronique,
+      // même si sa chronique d'origine n'a pas été enregistrée.
+      p.origin = (chronId || p.chronicleCharacter) ? chronicleOriginOf(chronId, def) : { id: 'inconnue', label: 'Origine inconnue', notes: '' };
+      delete p.origine;
+    }
+    if (!p.stats) p.stats = { vigueur: 5, dexterite: 5, intellect: 5, sangfroid: 5, charisme: 5 };
+    if (!p.skills) p.skills = {};
+    if (typeof p.salary !== 'number') p.salary = Math.max(1, 1 + Math.max(0, ...Object.values(p.skills).filter(v => typeof v === 'number')));
+    if (crew.includes(p)) {
+      if (!Array.isArray(p.statuts)) p.statuts = [];
+      if (!Array.isArray(p.sequels)) p.sequels = [];
+      if (!Array.isArray(p.blessures)) p.blessures = [];
+      if (typeof p.joinedAt !== 'number') p.joinedAt = state.meta?.gameMin || 0;
     }
   }
 }
@@ -4296,14 +5116,14 @@ function vesselNameOf(exp) {
 
 // Récupère la scène active d'une expédition
 export function currentScene(exp) {
+  if (!exp) return null;
   // 0.24 — Support des scènes de chronique : exp.chronicleSceneId peut
   // pointer vers une scène spécifique (résolue dynamiquement par next)
-  if (exp.chronicleSceneId) {
-    const cs = CHRONICLE_SCENES.find(s => s.id === exp.chronicleSceneId);
-    if (cs) return cs;
-  }
-  if (exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
+  if (exp.chronicleSceneId) return findChronicleScene(exp.chronicleSceneId);
+  if (!Array.isArray(exp.scenes) || exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
   const sceneId = exp.scenes[exp.sceneIdx];
+  // Scène-intro synthétique d'un épisode de chronique : reconstruite à partir du corps
+  if (sceneId === CHRON_INTRO_ID) return chronicleIntroScene(bodyOfExpedition(exp));
   // Chercher d'abord dans CHRONICLE_SCENES (pour les ID qui y sont)
   const cs = CHRONICLE_SCENES.find(s => s.id === sceneId);
   if (cs) return cs;
@@ -4315,7 +5135,7 @@ export function currentScene(exp) {
 export function isChronicleScene(scene) {
   if (!scene) return false;
   if (scene.chronicleEpisode) return true;
-  if (scene.id === '__chron_intro__') return true;
+  if (scene.id === CHRON_INTRO_ID) return true;
   return false;
 }
 
@@ -4372,8 +5192,8 @@ export function evaluateChoice(exp, choice) {
     for (const k in choice.consume) {
       // L'item est traité plus bas
       if (k === 'item') continue;
-      if (S.res[k] < choice.consume[k]) {
-        return { available: false, reason: `Manque ${RES_LABELS[k]} (${choice.consume[k]})` };
+      if ((S.res[k] || 0) < choice.consume[k]) {
+        return { available: false, reason: `Manque ${RES_LABELS[k] || k} (${choice.consume[k]})` };
       }
     }
   }
@@ -4427,17 +5247,32 @@ export function playChoice(expId, choiceIdx) {
 
   // Détermine l'outcome final
   let outcome = choice.outcome;
+  // Clé de scène pour les tirages (les scènes de chronique gardent toutes sceneIdx = 0)
+  const sceneKey = exp.chronicleSceneId || `sc${exp.sceneIdx}`;
   if (choice.risky) {
-    // Jet : 1d10 + meilleur stat dans l'équipe ≥ dc
+    // Jet : 1d10 + bonus de la meilleure caractéristique de l'équipe ≥ dc
     const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
-    const bestStat = Math.max(...team.map(m => m.stats[choice.risky.stat] || 5));
-    const rng = rngFor(`${exp.seed}|sc${exp.sceneIdx}|${choiceIdx}|${S.meta.gameMin}`);
+    const key = choice.risky.stat;
+    let bonus, label;
+    if (!STAT_LABELS[key] && SKILL_LABELS[key]) {
+      // Donnée erronée (compétence à la place d'une caractéristique) : on utilise la compétence
+      bonus = Math.floor(Math.max(0, ...team.map(m => m.skills?.[key] || 0)) / 2);
+      label = SKILL_LABELS[key];
+    } else {
+      const bestStat = Math.max(...team.map(m => m.stats?.[key] || 5));
+      bonus = Math.floor((bestStat - 5) / 2);
+      label = STAT_LABELS[key] || key;
+    }
+    const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|${S.meta.gameMin}`);
     const roll = 1 + Math.floor(rng() * 10);
-    const total = roll + Math.floor((bestStat - 5) / 2);
+    const total = roll + bonus;
     const success = total >= choice.risky.dc;
     outcome = success ? choice.risky.success : choice.risky.fail;
-    exp.accumulatedLog.push(`Jet ${STAT_LABELS[choice.risky.stat]} : ${roll}+${Math.floor((bestStat-5)/2)} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
+    exp.accumulatedLog.push(`Jet ${label} : ${roll}${bonus >= 0 ? '+' : ''}${bonus} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
   }
+  // Site déjà fouillé : butin réduit (jamais pour les scènes de chronique)
+  const lootMult = isChronicleScene(scene) ? 1 : (typeof exp.lootMult === 'number' ? exp.lootMult : 1);
+  const depletionRng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|epuise`);
 
   // Applique l'outcome
   if (outcome === 'next' || !outcome) {
@@ -4453,12 +5288,14 @@ export function playChoice(expId, choiceIdx) {
     const isAlienRuins = body && (body.ruines === 'alien_a' || body.ruines === 'alien_b' || body.ruines === 'fusion');
     const alienMult = isAlienRuins ? techEffectsAccumulated().expeditionAlienLootMult : 1;
     for (const k in outcome.loot) {
-      const amount = Math.floor(outcome.loot[k] * alienMult);
+      // Les montants négatifs ne sont pas des gains (un coût s'exprime avec consume)
+      if (!(outcome.loot[k] > 0)) continue;
+      const amount = Math.floor(outcome.loot[k] * alienMult * lootMult);
       exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + amount;
     }
     // Sur ruines alien, une fraction des datacubes obtenus est aussi crédité en datacubes_alien
-    if (isAlienRuins && outcome.loot.datacubes) {
-      const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * 0.4);
+    if (isAlienRuins && outcome.loot.datacubes > 0) {
+      const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * lootMult * 0.4);
       exp.accumulatedAlienDatacubes = (exp.accumulatedAlienDatacubes || 0) + alienShare;
     }
     // Cap par cargo du vaisseau
@@ -4471,13 +5308,18 @@ export function playChoice(expId, choiceIdx) {
       exp.accumulatedLog.push("Cargaison à saturation : la suite ne pourra pas être emportée.");
     }
   }
+  // Site déjà fouillé : les objets et schémas ne se retrouvent qu'avec une chance réduite
+  const keepFinds = lootMult >= 1 || depletionRng() < lootMult;
+  if (!keepFinds && (outcome.item || outcome.blueprint)) {
+    exp.accumulatedLog.push("Quelqu'un est déjà passé par là : il ne reste rien de précieux.");
+  }
   // Item
-  if (outcome.item) {
+  if (outcome.item && keepFinds) {
     exp.accumulatedItems.push(outcome.item);
   }
   // Blueprint : tire un schéma de l'origine demandée et l'ajoute aux items + bibliothèque
-  if (outcome.blueprint) {
-    const rng = rngFor(`${exp.seed}|sc${exp.sceneIdx}|${choiceIdx}|bp`);
+  if (outcome.blueprint && keepFinds) {
+    const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|bp`);
     let originPool;
     if (outcome.blueprint === 'auto') {
       // tire selon les ruines du corps
@@ -4524,7 +5366,10 @@ export function playChoice(expId, choiceIdx) {
   // Réputation faction (0.21)
   if (outcome.reputation) {
     const faction = factionForExpedition(exp);
-    if (faction) {
+    if (faction && outcome.reputation > 0 && lootMult < 1) {
+      // Revisite d'un site récemment fouillé : pas de réputation à regagner
+      exp.accumulatedLog.push(`${faction.name} : déjà rencontrés récemment, réputation inchangée.`);
+    } else if (faction) {
       adjustReputation(faction.id, outcome.reputation);
       exp.accumulatedLog.push(`${faction.name} : réputation ${outcome.reputation > 0 ? '+' : ''}${outcome.reputation}.`);
     }
@@ -4588,7 +5433,7 @@ export function playChoice(expId, choiceIdx) {
       }
       // Terminer l'épisode (passer au suivant à la prochaine visite)
       if (outcome.endChronicleEpisode) {
-        endChronicleEpisode(body);
+        endChronicleEpisode(body, exp);
         // Fin de l'expé : on rentre
         startReturn(exp);
         render();
@@ -4614,8 +5459,11 @@ function advanceScene(exp) {
   // Si on arrive ici sans next, c'est qu'on est sur une scène intro de chronique
   // ou qu'on doit terminer (cas géré ailleurs).
   if (exp.chronicleSceneId) {
-    // L'outcome ne contenait pas de next : on considère que l'épisode est fini.
-    exp.awaitingChoice = true;
+    // L'outcome ne contenait pas de next : on considère que l'épisode est fini
+    // (rejouer la même scène bloquerait l'équipe dans une boucle).
+    const body = bodyOfExpedition(exp);
+    if (body) endChronicleEpisode(body, exp);
+    startReturn(exp);
     render();
     return;
   }
@@ -4639,8 +5487,21 @@ function advanceScene(exp) {
 //   SYSTÈME DE COMBAT AU TOUR PAR TOUR (0.31)
 // ============================================================
 
-// Calcule les stats de combat d'un membre selon ses attributs + équipement embarqué
-export function memberCombatStats(member, expEquipment) {
+// Objets de combat « consommés par une action » (explosifs de zone, soins) : ils
+// restent dans la réserve commune de l'expédition et ne sont jamais portés.
+const isActionCombatItem = c => !!(c && (c.aoe || c.heal));
+// Explosifs utilisables par l'action « grenade », par ordre de priorité.
+const COMBAT_AOE_ITEMS = ['mine_eclats', 'grenade_concussion', 'grenade_iem'];
+// Trousses utilisables par l'action « Soigner », par ordre de priorité.
+const COMBAT_HEAL_KITS = ['nanobots_reparation', 'kit_medical'];
+const COMBAT_KIT_HEAL_DEFAULT = 8;   // trousse sans champ combat.heal (Kit médical avancé)
+// Ressources de butin héritées des anciennes données → ressource réelle.
+const COMBAT_LOOT_ALIASES = { composants: 'metal' };
+
+// Calcule les stats de combat d'un membre selon ses attributs + l'équipement qu'il PORTE.
+// `gear` : { itemId: n } attribué à ce membre (cf. allocateCombatGear) — et non la
+// soute entière de l'expédition. Les techs complétées s'appliquent à tout l'équipage.
+export function memberCombatStats(member, gear) {
   const vigueur    = member.stats?.vigueur    || 5;
   const dexterite  = member.stats?.dexterite  || 5;
   const sangfroid  = member.stats?.sangfroid  || 5;
@@ -4648,20 +5509,27 @@ export function memberCombatStats(member, expEquipment) {
   const medecine   = member.skills?.medecine  || 0;
   // Trait combattant_aguerri : +2 combat effectif
   const traitBonus = (member.traits || []).includes('combattant_aguerri') ? 2 : 0;
-  const effCombat  = combatSk + traitBonus;
+  // Techs : Résonance armée (expeditionCombatBonus) = +N en compétence de combat ;
+  // Blindage / Camouflage / Armure composite (expeditionThreatBonus < 0, menace
+  // réduite) = protection : +4 % d'esquive par point, +1 armure tous les 2 points.
+  const tech       = techEffectsAccumulated();
+  const techCombat = Math.max(0, tech.expeditionCombatBonus || 0);
+  const threatCut  = Math.max(0, -(tech.expeditionThreatBonus || 0));
+  const effCombat  = combatSk + traitBonus + techCombat;
 
   // Base HP selon Vigueur + exo-armure (bonus de vigueur → PV supplémentaires)
   let maxHp  = Math.max(3, 8 + (vigueur - 5) * 3);
   const maxPa  = 2 + Math.floor(sangfroid / 4);
 
-  // Scan de l'équipement : on garde la meilleure arme et cumule défenses
+  // Scan de l'équipement porté : meilleure arme + meilleures défenses
   let bestWeapon = null;    // { combat def } de la meilleure arme
   let armorBonus = 0, dodgeBonus = 0, armorPen = 0, shieldHp = 0;
 
-  for (const [itemId, count] of Object.entries(expEquipment || {})) {
+  for (const [itemId, count] of Object.entries(gear || {})) {
     if (count <= 0) continue;
     const c = ITEMS[itemId]?.combat;
-    if (!c) continue;
+    // Explosifs et soins ne sont pas des armes portées
+    if (!c || isActionCombatItem(c)) continue;
     // Meilleure arme = plus gros dégâts de base
     if ((c.damage || 0) > (bestWeapon?.damage || 0)) bestWeapon = c;
     if (c.armor) armorBonus = Math.max(armorBonus, c.armor);
@@ -4671,6 +5539,8 @@ export function memberCombatStats(member, expEquipment) {
     if (c.type === 'exo') maxHp += Math.max(0, (vigueur - 5)) * 2;
   }
   maxHp = Math.max(3, maxHp);
+  armorBonus += Math.floor(threatCut / 2);
+  dodgeBonus += threatCut * 4;
 
   // Dégâts de base : arme + skill combat
   const weaponDmg  = bestWeapon?.damage  || 0;
@@ -4699,13 +5569,15 @@ export function memberCombatStats(member, expEquipment) {
   }
 
   accuracy = Math.min(95, Math.max(20, accuracy));
+  dmgMin = Math.max(1, dmgMin);
+  dmgMax = Math.max(dmgMin, dmgMax);
 
   return {
     maxHp, maxPa,
     damage: [dmgMin, dmgMax],
     accuracy,
     armor: armorBonus,
-    dodge: dodgeBonus,
+    dodge: Math.min(60, dodgeBonus),
     armorPen,
     shieldHp,
     medecine,
@@ -4713,12 +5585,62 @@ export function memberCombatStats(member, expEquipment) {
   };
 }
 
+// Répartit l'équipement de combat embarqué entre les membres : chaque unité d'objet
+// est portée par UN seul membre, qui garde au plus une arme et une protection.
+// - Armes : la plus puissante d'abord, au meilleur porteur (compétence de combat
+//   + caractéristique liée au type d'arme) ; à égalité, au premier de l'équipe.
+// - Protections : l'exo-armure au plus vigoureux, les autres aux plus fragiles.
+// Explosifs (aoe) et soins (heal) restent en réserve commune : ils sont consommés
+// par les actions « grenade » et « Soigner ».
+function allocateCombatGear(team, equipment) {
+  const gear = Object.fromEntries(team.map(m => [m.id, {}]));
+  const weapons = [], protections = [];
+  for (const [itemId, count] of Object.entries(equipment || {})) {
+    const c = ITEMS[itemId]?.combat;
+    if (!c || isActionCombatItem(c) || !(count > 0)) continue;
+    for (let i = 0; i < count; i++) {
+      if ((c.damage || 0) > 0) weapons.push(itemId);
+      else if (c.armor || c.shieldHp || c.dodge || c.type === 'exo') protections.push(itemId);
+    }
+  }
+  const cdef = id => ITEMS[id].combat;
+  const protScore = c => (c.armor || 0) * 3 + (c.shieldHp || 0) + (c.dodge || 0) / 4;
+  weapons.sort((a, b) => (cdef(b).damage || 0) - (cdef(a).damage || 0) || (cdef(b).accuracy || 0) - (cdef(a).accuracy || 0));
+  protections.sort((a, b) => protScore(cdef(b)) - protScore(cdef(a)));
+
+  const statFor = { melee: 'vigueur', ranged: 'dexterite', precision: 'sangfroid' };
+  const skill = m => (m.skills?.combat || 0) + ((m.traits || []).includes('combattant_aguerri') ? 2 : 0);
+  const stat = (m, k) => m.stats?.[k] || 5;
+  const pickBest = (cands, score) => cands.reduce((a, b) => (score(b) > score(a) ? b : a));
+  const armed = new Set(), protectedIds = new Set();
+
+  for (const id of weapons) {
+    const cands = team.filter(m => !armed.has(m.id));
+    if (!cands.length) break;
+    const k = statFor[cdef(id).type] || 'dexterite';
+    const best = pickBest(cands, m => skill(m) * 2 + stat(m, k));
+    gear[best.id][id] = (gear[best.id][id] || 0) + 1;
+    armed.add(best.id);
+  }
+  for (const id of protections) {
+    const cands = team.filter(m => !protectedIds.has(m.id));
+    if (!cands.length) break;
+    const best = cdef(id).type === 'exo'
+      ? pickBest(cands, m => stat(m, 'vigueur'))
+      : pickBest(cands, m => -stat(m, 'vigueur'));
+    gear[best.id][id] = (gear[best.id][id] || 0) + 1;
+    protectedIds.add(best.id);
+  }
+  return gear;
+}
+
 // Initialise l'état de combat sur une expédition
 function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
   const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
+  const gear = allocateCombatGear(team, exp.equipment);
 
   const allies = team.map(m => {
-    const cs = memberCombatStats(m, exp.equipment);
+    const cs = memberCombatStats(m, gear[m.id]);
     return {
       id: m.id,
       name: m.name,
@@ -4730,6 +5652,7 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
       damage: cs.damage, accuracy: cs.accuracy,
       weaponType: cs.weaponType,
       medecine: cs.medecine,
+      gear: Object.keys(gear[m.id]),
       effects: []
     };
   });
@@ -4739,6 +5662,7 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
     if (!def) return null;
     return {
       idx, type: typeId, nom: def.nom,
+      category: def.category || null,
       hp: def.hp, maxHp: def.hp,
       armor: def.armor || 0,
       damage: def.damage || [1, 3],
@@ -4748,19 +5672,41 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
     };
   }).filter(Boolean);
 
+  // Aucun ennemi valide (données corrompues) : pas de combat, on poursuit la mission
+  if (enemies.length === 0 || allies.length === 0) {
+    exp.combat = null;
+    advanceScene(exp);
+    return;
+  }
+
+  const gearLines = allies.filter(a => a.gear.length)
+    .map(a => `${a.name} : ${a.gear.map(id => ITEMS[id]?.nom || id).join(', ')}`);
   exp.combat = {
     active: true,
     round: 1,
     phase: 'player',
+    seq: 0,            // compteur d'actions : entre dans la graine de chaque jet
     allies,
     enemies,
-    log: [`⚔ Contact ennemi — ${enemies.map(e => e.nom).join(', ')}`],
+    log: [`⚔ Contact ennemi — ${enemies.map(e => e.nom).join(', ')}`]
+      .concat(gearLines.length ? [`Équipement — ${gearLines.join(' · ')}`] : []),
     lootOnWin: lootOnWin || {},
     onDefeat: onDefeat || 'retreat',
     outcome: null,
     selectedAllyId: allies[0]?.id || null
   };
 }
+
+// RNG d'un jet de combat. Le compteur cbt.seq (absent des sauvegardes antérieures,
+// d'où le `|| 0`) rend chaque jet unique, même pour deux actions identiques
+// effectuées dans la même minute de jeu.
+function combatRng(exp, ...parts) {
+  const cbt = exp.combat;
+  cbt.seq = (cbt.seq || 0) + 1;
+  return rngFor(`${exp.seed}|cbt${cbt.round}|${cbt.seq}|${parts.join('|')}|${S.meta.gameMin}`);
+}
+
+const isStunned = enemy => (enemy.effects || []).some(e => e.type === 'stunned' && e.turnsLeft > 0);
 
 // Action d'un allié (appelée par l'UI)
 export function combatAllyAction(expId, allyId, action, targetIdx) {
@@ -4771,7 +5717,7 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   const ally = cbt.allies.find(a => a.id === allyId);
   if (!ally || ally.hp <= 0) return;
 
-  const rng = rngFor(`${exp.seed}|cbt${cbt.round}|${allyId}|${action}|${targetIdx}|${S.meta.gameMin}`);
+  const rng = combatRng(exp, allyId, action, targetIdx);
 
   if (action === 'attack' || action === 'precise') {
     const paCost = action === 'precise' ? 2 : 1;
@@ -4807,50 +5753,82 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   }
   else if (action === 'heal') {
     if (ally.pa < 2) return;
-    const wounded = cbt.allies.filter(a => a.hp > 0 && a.hp < a.maxHp).sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
-    const healTarget = wounded[0] || ally;
+    // Il faut une compétence en médecine ou une trousse embarquée
+    const kit = COMBAT_HEAL_KITS.find(id => (exp.equipment?.[id] || 0) > 0);
+    if (!kit && !(ally.medecine > 0)) {
+      toast('Soigner requiert la compétence Médecine ou une trousse de soins embarquée.');
+      return;
+    }
+    const wounded = cbt.allies
+      .filter(a => a.hp > 0 && (a.hp < a.maxHp || (a.shieldHp || 0) < (a.maxShieldHp || 0)))
+      .sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
+    const healTarget = wounded[0];
+    if (!healTarget) { toast("Personne n'a besoin de soins."); return; }
     ally.pa -= 2;
-    const healAmt = 3 + ally.medecine * 2;
+    // Soin = savoir-faire du soigneur (3 + Médecine×2) + effet de la trousse utilisée
+    const kitHeal = kit ? (ITEMS[kit]?.combat?.heal ?? COMBAT_KIT_HEAL_DEFAULT) : 0;
+    if (kit) _consumeCombatItem(exp, kit);
+    const healAmt = (ally.medecine > 0 ? 3 + ally.medecine * 2 : 0) + kitHeal;
+    const hpBefore = healTarget.hp;
     healTarget.hp = Math.min(healTarget.maxHp, healTarget.hp + healAmt);
     // Restaure aussi le bouclier si partiellement entamé
+    let shieldNote = '';
     if (healTarget.maxShieldHp > 0 && healTarget.shieldHp < healTarget.maxShieldHp) {
+      const sBefore = healTarget.shieldHp;
       healTarget.shieldHp = Math.min(healTarget.maxShieldHp, healTarget.shieldHp + Math.floor(healAmt / 2));
+      if (healTarget.shieldHp > sBefore) shieldNote = `, bouclier +${healTarget.shieldHp - sBefore}`;
     }
-    const usedKit = _consumeCombatItem(exp, 'nanobots_reparation') || _consumeCombatItem(exp, 'kit_medical');
-    cbt.log.push(`${ally.name} soigne ${healTarget.name} : +${healAmt} PV${usedKit ? ' (kit utilisé)' : ''}.`);
+    cbt.log.push(`${ally.name} soigne ${healTarget.name} : +${healTarget.hp - hpBefore} PV${shieldNote}${kit ? ` (${ITEMS[kit]?.nom || kit} utilisé)` : ''}.`);
   }
   else if (action === 'grenade') {
     if (ally.pa < 1) return;
     // Priorité : mine_eclats, sinon grenade_concussion, sinon grenade_iem
-    const aoeItem = ['mine_eclats', 'grenade_concussion', 'grenade_iem'].find(id => (exp.equipment?.[id] || 0) > 0);
+    const aoeItem = COMBAT_AOE_ITEMS.find(id => (exp.equipment?.[id] || 0) > 0);
     if (!aoeItem) { toast('Aucun explosif AoE disponible !'); return; }
     const grDef = ITEMS[aoeItem]?.combat || {};
     _consumeCombatItem(exp, aoeItem);
     ally.pa -= 1;
     const baseDmg = 4 + (grDef.damage || 0) + Math.floor(rng() * 4);
-    const living = cbt.enemies.filter(e => e.hp > 0);
-    for (const e of living) {
+    const hits = [];
+    for (const e of cbt.enemies.filter(e => e.hp > 0)) {
       let dmg = baseDmg;
-      // Grenade IEM : bonus vs machines
-      if (aoeItem === 'grenade_iem' && e.category === 'machine') dmg += grDef.machineBonus || 8;
-      e.hp = Math.max(0, e.hp - Math.max(1, dmg - e.armor));
-      // Grenade concussion : étourdit (perd 1 PA au prochain tour)
-      if (aoeItem === 'grenade_concussion' && (grDef.stun || 0) > 0 && e.hp > 0) {
-        e.effects = e.effects || [];
-        e.effects.push({ type: 'stunned', turnsLeft: 1 });
+      // Grenade IEM : bonus vs machines (category absente des combats sauvegardés en 0.31b)
+      const category = e.category || ENEMY_TYPES[e.type]?.category;
+      if (grDef.machineBonus && category === 'machine') dmg += grDef.machineBonus;
+      const dealt = Math.max(1, dmg - (e.armor || 0));
+      e.hp = Math.max(0, e.hp - dealt);
+      // Grenade concussion : l'ennemi saute sa prochaine attaque (stun = nb d'attaques)
+      let stunNote = '';
+      if ((grDef.stun || 0) > 0 && e.hp > 0) {
+        e.effects = (e.effects || []).filter(x => x.type !== 'stunned');
+        e.effects.push({ type: 'stunned', turnsLeft: grDef.stun });
+        stunNote = ', étourdi';
       }
+      hits.push(`${e.nom} ${dealt}${e.hp <= 0 ? ' — neutralisé' : stunNote}`);
     }
     const itemNom = ITEMS[aoeItem]?.nom || aoeItem;
-    cbt.log.push(`${ally.name} lance ${itemNom} : ${baseDmg} dégâts à tous les ennemis !`);
+    cbt.log.push(`${ally.name} lance ${itemNom} : ${hits.join(' · ')} (dégâts après armure).`);
   }
   else if (action === 'end_turn') {
     ally.pa = 0;
     cbt.log.push(`${ally.name} passe son tour.`);
   }
   else if (action === 'retreat') {
-    cbt.log.push("Retraite ! L'équipe bat en retraite.");
+    // F3 — Décrocher a un prix : chaque ennemi encore actif (non étourdi)
+    // porte une attaque d'opportunité avant que l'équipe ne rompe le contact.
+    const chasers = cbt.enemies.filter(e => e.hp > 0 && !isStunned(e));
+    if (chasers.length > 0) {
+      cbt.log.push(`Retraite sous le feu : ${chasers.length} attaque${chasers.length > 1 ? 's' : ''} d'opportunité !`);
+      for (const enemy of chasers) _enemyAttack(cbt, enemy, rng);
+    }
     cbt.phase = 'ended';
-    cbt.outcome = 'retreat';
+    if (cbt.allies.every(a => a.hp <= 0)) {
+      cbt.outcome = 'defeat';
+      cbt.log.push("💀 Défaite — l'équipe est fauchée pendant la retraite.");
+    } else {
+      cbt.outcome = 'retreat';
+      cbt.log.push("Retraite ! L'équipe rompt le contact.");
+    }
     resolveCombatEnd(exp);
     render();
     return;
@@ -4883,49 +5861,59 @@ function _consumeCombatItem(exp, itemId) {
   return true;
 }
 
+// Une attaque d'un ennemi : cible l'allié vivant le plus entamé (ratio PV le plus bas).
+function _enemyAttack(cbt, enemy, rng) {
+  const aliveAllies = cbt.allies.filter(a => a.hp > 0);
+  if (aliveAllies.length === 0) return;
+  const target = aliveAllies.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b);
+  const coverArmor = (target.effects || []).find(e => e.type === 'cover')?.armor || 0;
+  const effectiveArmor = (target.armor || 0) + coverArmor;
+  const dodgeChance = target.dodge || 0;
+  const roll = Math.floor(rng() * 100);
+  const hit = roll >= dodgeChance && roll < enemy.accuracy;
+
+  if (hit) {
+    const [dmin, dmax] = enemy.damage;
+    const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1));
+    const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
+    // Les dégâts frappent le bouclier d'abord, puis les PV
+    if ((target.shieldHp || 0) > 0) {
+      const shieldAbsorb = Math.min(target.shieldHp, effectiveDmg);
+      target.shieldHp -= shieldAbsorb;
+      const overflow = effectiveDmg - shieldAbsorb;
+      if (overflow > 0) target.hp = Math.max(0, target.hp - overflow);
+      cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
+    } else {
+      target.hp = Math.max(0, target.hp - effectiveDmg);
+      cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${target.hp <= 0 ? ' — à terre !' : '.'}`);
+    }
+  } else {
+    cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 && roll < dodgeChance ? 'esquivé !' : 'raté !'}`);
+  }
+}
+
 function _processEnemyPhase(exp) {
   const cbt = exp.combat;
   cbt.phase = 'enemy';
   cbt.log.push(`— Phase ennemie (Round ${cbt.round}) —`);
 
-  const rng = rngFor(`${exp.seed}|enemy${cbt.round}|${S.meta.gameMin}`);
-  const living = () => cbt.allies.filter(a => a.hp > 0);
+  const rng = combatRng(exp, 'enemy');
 
   for (const enemy of cbt.enemies.filter(e => e.hp > 0)) {
-    // Ennemi étourdi → passe son tour
-    const stunned = enemy.effects?.some(e => e.type === 'stunned');
-    if (stunned) {
+    // Ennemi étourdi → passe son attaque
+    if (isStunned(enemy)) {
       cbt.log.push(`${enemy.nom} est étourdi — passe son attaque.`);
       continue;
     }
-    const aliveAllies = living();
-    if (aliveAllies.length === 0) break;
-    // Cible l'allié avec le ratio HP/maxHP le plus bas
-    const target = aliveAllies.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b);
-    const coverArmor = target.effects.find(e => e.type === 'cover')?.armor || 0;
-    const effectiveArmor = target.armor + coverArmor;
-    const dodgeChance = target.dodge || 0;
-    const roll = Math.floor(rng() * 100);
-    const hit = roll >= dodgeChance && roll < enemy.accuracy;
+    if (!cbt.allies.some(a => a.hp > 0)) break;
+    _enemyAttack(cbt, enemy, rng);
+  }
 
-    if (hit) {
-      const [dmin, dmax] = enemy.damage;
-      const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1));
-      const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
-      // Les dégâts frappent le bouclier d'abord, puis les PV
-      if ((target.shieldHp || 0) > 0) {
-        const shieldAbsorb = Math.min(target.shieldHp, effectiveDmg);
-        target.shieldHp -= shieldAbsorb;
-        const overflow = effectiveDmg - shieldAbsorb;
-        if (overflow > 0) target.hp = Math.max(0, target.hp - overflow);
-        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
-      } else {
-        target.hp = Math.max(0, target.hp - effectiveDmg);
-        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${target.hp <= 0 ? ' — à terre !' : '.'}`);
-      }
-    } else {
-      cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 ? 'esquivé !' : 'raté !'}`);
-    }
+  // Décompte des effets ennemis (étourdissement…) : un stun de N fait sauter
+  // N phases ennemies, puis l'effet est purgé.
+  for (const e of cbt.enemies) {
+    if (!e.effects?.length) continue;
+    e.effects = e.effects.map(x => ({ ...x, turnsLeft: (x.turnsLeft || 0) - 1 })).filter(x => x.turnsLeft > 0);
   }
 
   // Défaite ?
@@ -4948,22 +5936,47 @@ function _processEnemyPhase(exp) {
   cbt.log.push(`— Round ${cbt.round} · Tour des alliés —`);
 }
 
+// Ajoute un butin de combat { ressource: n } à `into`, en ignorant les ressources
+// inconnues (les alias hérités, ex. « composants », sont convertis).
+function _addCombatLoot(into, loot) {
+  for (const [k, v] of Object.entries(loot || {})) {
+    const res = COMBAT_LOOT_ALIASES[k] || k;
+    if (!RESOURCES.includes(res) || !(v > 0)) continue;
+    into[res] = (into[res] || 0) + v;
+  }
+}
+
 function resolveCombatEnd(exp) {
   const cbt = exp.combat;
   cbt.active = false;
 
   if (cbt.outcome === 'victory') {
-    // Loot de victoire
-    for (const [k, v] of Object.entries(cbt.lootOnWin)) {
-      exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + v;
+    // Butin : récompense de la scène + dépouilles des ennemis vaincus
+    const gained = {};
+    _addCombatLoot(gained, cbt.lootOnWin);
+    for (const enemy of cbt.enemies) _addCombatLoot(gained, enemy.loot);
+    // Site déjà fouillé : butin réduit (exp.lootMult, posé au lancement de l'expédition)
+    const lootMult = exp.lootMult ?? 1;
+    if (lootMult !== 1) for (const k in gained) gained[k] = Math.floor(gained[k] * lootMult);
+    // Plafonné par la place restante dans la soute (même règle que le butin des scènes)
+    const vessel = S.fleet.find(v => v.id === exp.vesselId);
+    const cargoCap = vessel ? (VESSELS[vessel.type]?.cargo ?? 999) : 999;
+    const carried = Object.values(exp.accumulatedLoot).reduce((s, v) => s + v, 0);
+    const room = Math.max(0, cargoCap - carried);
+    const gainedTotal = Object.values(gained).reduce((s, v) => s + v, 0);
+    const ratio = gainedTotal > room ? room / gainedTotal : 1;
+    const taken = {};
+    for (const [k, v] of Object.entries(gained)) {
+      const n = Math.floor(v * ratio);
+      if (n <= 0) continue;
+      taken[k] = n;
+      exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + n;
     }
-    // Loot ressources + items des ennemis vaincus
-    const rng = rngFor(`${exp.seed}|loot${cbt.round}|${S.meta.gameMin}`);
+    const left = gainedTotal - Object.values(taken).reduce((s, v) => s + v, 0);
+    if (left > 0) exp.accumulatedLog.push(`Soute pleine : ${left} unité(s) de butin abandonnée(s) sur place.`);
+    // Loot d'items (chance-based)
+    const rng = combatRng(exp, 'loot');
     for (const enemy of cbt.enemies) {
-      for (const [k, v] of Object.entries(enemy.loot || {})) {
-        exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + v;
-      }
-      // Loot d'items (chance-based)
       const def = ENEMY_TYPES[enemy.type];
       for (const drop of (def?.itemLoot || [])) {
         if (rng() < drop.chance) {
@@ -4976,7 +5989,7 @@ function resolveCombatEnd(exp) {
       const m = S.crew.find(c => c.id === id);
       if (m) m.moral = Math.min(100, m.moral + 5);
     }
-    const lootDesc = Object.entries(cbt.lootOnWin).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
+    const lootDesc = Object.entries(taken).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
     exp.accumulatedLog.push(`Combat gagné${lootDesc ? ' : ' + lootDesc : ' — zone sécurisée'}.`);
     advanceScene(exp);
   } else {
@@ -5008,122 +6021,13 @@ export function abandonExpedition(expId) {
     return;
   }
   exp.accumulatedLog.push("Retraite décidée par le commandement.");
+  if (isChronicleExpedition(exp) && currentChronicleEpisode(bodyOfExpedition(exp))) {
+    log('neutral', `Chronique interrompue : l'épisode reprendra à la prochaine expédition sur <em>${bodyOfExpedition(exp).name}</em>.`);
+  }
   startReturn(exp);
   render();
 }
 
-// Résolution procédurale d'une expédition : phase 2b simule sans scènes.
-// Génère récompenses (ressources + items éventuels), blessures, casualties.
-// La phase 2c remplacera ça par des scènes interactives.
-function resolveExpedition(exp, body, sys) {
-  const rng = rngFor(`${S.meta.seed}|exp${exp.id}`);
-  const def = VESSELS[S.fleet.find(v => v.id === exp.vesselId)?.type] || VESSELS.vedette;
-  const threat = bodyThreatLevel(body);
-  const reward = bodyRewardLevel(body);
-
-  // --- Récompenses de base ---
-  const rewards = {};
-  // Ressources brutes selon biome
-  if (body.biome === 'asteroide' || body.type === 'asteroide_g') {
-    rewards.metal = Math.round((40 + rng() * 60) * (1 + reward * 0.3));
-    rewards.cristal = Math.round((20 + rng() * 30) * (1 + reward * 0.3));
-  } else if (body.biome === 'volcanique' || body.biome === 'irradie') {
-    rewards.metal = Math.round((20 + rng() * 50) * (1 + reward * 0.2));
-    rewards.cristal = Math.round((30 + rng() * 60) * (1 + reward * 0.3));
-  } else if (body.biome === 'glace' || body.biome === 'toundra') {
-    rewards.cristal = Math.round((30 + rng() * 50) * (1 + reward * 0.2));
-    rewards.biomasse = Math.round((10 + rng() * 30));
-  } else {
-    rewards.metal = Math.round(20 + rng() * 40);
-    rewards.cristal = Math.round(15 + rng() * 30);
-  }
-  if (['microbienne','flore_agressive','faune'].includes(body.vie)) {
-    rewards.biomasse = (rewards.biomasse || 0) + Math.round(20 + rng() * 50);
-  }
-  // Datacubes selon ruines / signaux
-  let dc = 0;
-  if (body.ruines !== 'aucune') dc += Math.round(5 + rng() * 15);
-  if (['alien_a','alien_b','fusion'].includes(body.ruines)) dc += Math.round(10 + rng() * 20);
-  if (body.signal !== 'aucun') dc += Math.round(2 + rng() * 8);
-  if (['echo_temporel','bruit_blanc','crypte'].includes(body.signal)) dc += Math.round(5 + rng() * 15);
-  if (dc > 0) rewards.datacubes = dc;
-
-  // Cap par cargo
-  const cargoCap = def.cargo;
-  let totalLoot = Object.values(rewards).reduce((s,v) => s+v, 0);
-  if (totalLoot > cargoCap) {
-    const ratio = cargoCap / totalLoot;
-    for (const k in rewards) rewards[k] = Math.floor(rewards[k] * ratio);
-  }
-
-  // --- Casualties / statuts ---
-  const statuses = [];
-  const casualties = [];
-  // Calcul d'un score de "résistance" de l'équipe contre la menace
-  const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(Boolean);
-  const teamCombat = team.reduce((s,m) => s + (m.skills.combat || 0), 0);
-  const teamSurvie = team.reduce((s,m) => s + (m.skills.survie || 0), 0);
-  const teamMed    = team.reduce((s,m) => s + (m.skills.medecine || 0), 0);
-  const teamScore  = teamCombat + teamSurvie + teamMed * 0.5 + team.length * 1.5;
-
-  // Probabilité d'incident proportionnelle à threat / teamScore
-  const incidentProb = Math.min(0.95, (threat * 0.18) / Math.max(1, teamScore / 5));
-
-  for (const member of team) {
-    if (rng() < incidentProb) {
-      // Choix du type d'incident selon danger principal
-      let pool;
-      if (body.danger === 'predateurs')      pool = ['blessure_legere','blessure_legere','blessure_grave'];
-      else if (body.danger === 'pathogene')  pool = ['infection','infection','pathogene_alien'];
-      else if (body.danger === 'tempetes')   pool = ['blessure_legere','blessure_grave'];
-      else if (body.danger === 'faille')     pool = ['blessure_grave','trauma_psy'];
-      else if (body.danger === 'ia_hostile') pool = ['blessure_grave','blessure_grave','trauma_psy'];
-      else if (body.danger === 'anomalie')   pool = ['trauma_psy','pathogene_alien','mutation'];
-      else                                   pool = ['blessure_legere'];
-      const k = pool[Math.floor(rng() * pool.length)];
-      // Combattant aguerri / Survivant : 50% de réduction de gravité
-      const lucky = member.traits.includes('combattant_aguerri') || member.traits.includes('survivant');
-      const finalKey = (lucky && k === 'blessure_grave') ? 'blessure_legere' : k;
-      // Mort directe rare : seulement si threat 5 et incident très mauvais
-      if (threat >= 4 && rng() < 0.06 && !lucky) {
-        casualties.push(member.id);
-        memberDies(member, `Disparu(e) en mission sur ${body.name}.`);
-      } else {
-        statuses.push({ memberId: member.id, statutKey: finalKey });
-      }
-    }
-  }
-
-  // --- Items ---
-  const items = [];
-  if (body.ruines !== 'aucune' && rng() < 0.25 + reward * 0.05) {
-    const itemNames = ['fragment_cristallin','disque_memoire','outil_etrange','plaque_gravee','lentille_noire','bobine_filaments','anneau_scelle'];
-    items.push(itemNames[Math.floor(rng() * itemNames.length)]);
-  }
-
-  // --- Outcome global ---
-  const survivorCount = team.length - casualties.length;
-  let outcomeKind = 'success';
-  if (casualties.length > 0) outcomeKind = 'warn';
-  else if (statuses.length === 0 && Object.keys(rewards).length > 0) outcomeKind = 'success';
-
-  // Résumé narratif
-  const lootSummary = Object.entries(rewards).map(([k,v]) => `${v} ${RES_LABELS[k]}`).join(', ');
-  const summary = casualties.length > 0
-    ? `Pertes : ${casualties.length}. Récupéré : ${lootSummary || 'rien'}.`
-    : statuses.length > 0
-      ? `${statuses.length} blessé(s). Récupéré : ${lootSummary || 'rien'}.`
-      : `Aucun incident. Récupéré : ${lootSummary || 'rien'}.`;
-
-  const returnSummary = items.length > 0
-    ? `Cargaison : ${lootSummary || 'rien'}${items.length > 0 ? ` + items : ${items.join(', ')}` : ''}.`
-    : `Cargaison : ${lootSummary || 'rien'}.`;
-
-  return {
-    rewards, items, statuses, casualties,
-    outcomeKind, summary, returnSummary
-  };
-}
 
 // ============================================================
 // 8. UI — rendu DOM
@@ -5135,6 +6039,7 @@ function setupHandlers() {
   try { setupNotifHandlers(); } catch (e) { console.warn('[BOOT] setupNotifHandlers:', e); }
 
   $('#btnRename').addEventListener('click', () => {
+    if (!S?.meta) return;
     showModal({
       title: 'Renommer la colonie',
       body: "Comment cet avant-poste sera-t-il connu ?",
@@ -5159,13 +6064,10 @@ function setupHandlers() {
     if (f) importSave(f);
     e.target.value = '';
   });
-  $('#btnReset').addEventListener('click', resetGame);
+  $('#btnReset').addEventListener('click', () => { if (S?.meta) resetGame(); });
 
   // Bouton "Lancer une formation" (onglet Équipage > Formation)
-  $('#btnNewTraining').addEventListener('click', showTrainingModal);
-
-  // Pause auto si onglet caché : on accélère pas, mais on évite la dérive
-  // (en phase 0 on garde simple, le timer tourne quoi qu'il arrive)
+  $('#btnNewTraining').addEventListener('click', () => { if (S?.meta) showTrainingModal(); });
 }
 
 // Snapshot de l'état "important" avant rattrapage offline,
@@ -5236,230 +6138,120 @@ function diffSnapshot(before, after) {
   return lines;
 }
 
-// Rattrapage du temps écoulé hors-ligne
-// Renvoie { simulatedMin, realElapsedHours, capped, summary } pour affichage
-function catchUpOffline() {
-  const lastReal = S.meta.lastTickRealMs || S.meta.lastSave || Date.now();
-  const now = Date.now();
-  const elapsedMs = Math.max(0, now - lastReal);
-
-  // En dessous de 10 secondes, rien à faire (la page vient d'être ouverte/refresh)
-  if (elapsedMs < 10000) {
-    S.meta.lastTickRealMs = now;
-    return null;
+// Résumé des décisions prises automatiquement pendant le rattrapage
+function autoResolvedLines(entries) {
+  const lines = [];
+  for (const kind of ['incident', 'event']) {
+    const list = entries.filter(e => e.kind === kind);
+    if (!list.length) continue;
+    const counts = {};
+    for (const e of list) counts[e.titre] = (counts[e.titre] || 0) + 1;
+    const detail = Object.entries(counts).slice(0, 4).map(([t, n]) => n > 1 ? `${t} ×${n}` : t).join(', ');
+    const more = Object.keys(counts).length > 4 ? '…' : '';
+    lines.push(`${kind === 'incident' ? 'Incidents gérés automatiquement' : 'Événements gérés automatiquement'} : ${list.length} (${detail}${more})`);
   }
-
-  const elapsedMin = elapsedMs / 60000;          // minutes réelles
-  const elapsedHours = elapsedMin / 60;
-  // Dans le jeu, 1 seconde réelle = 1 minute jeu, donc N min réelles → N×60 min jeu.
-  // Mais pour limiter l'inflation, on cap à OFFLINE_MAX_HOURS heures réelles.
-  const capped = elapsedHours > OFFLINE_MAX_HOURS;
-  const cappedHours = Math.min(elapsedHours, OFFLINE_MAX_HOURS);
-  // Conversion : 1s réelle → 1 min jeu, donc cappedHours réelles → cappedHours*3600 min jeu
-  const ticksToSim = Math.floor(cappedHours * 3600 / MIN_PER_TICK);
-
-  if (ticksToSim < 1) {
-    S.meta.lastTickRealMs = now;
-    return null;
-  }
-
-  const before = snapshotForCatchup();
-
-  // Simule en silencieux. On laisse tourner mais sans render.
-  for (let i = 0; i < ticksToSim; i++) {
-    tickOnce({ silent: true });
-  }
-  S.meta.lastTickRealMs = now;
-
-  const after = snapshotForCatchup();
-  const summary = diffSnapshot(before, after);
-
-  // Une seule entrée de journal pour résumer la période
-  const realLabel = elapsedHours < 1
-    ? `${Math.round(elapsedMin)} min`
-    : elapsedHours < 24
-      ? `${elapsedHours.toFixed(1)} h`
-      : `${(elapsedHours / 24).toFixed(1)} jours`;
-  const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS}h)` : '';
-  log('neutral', `Reprise du contact après ${realLabel}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`);
-
-  return {
-    realElapsedHours: elapsedHours,
-    simulatedHours: cappedHours,
-    capped,
-    summary
-  };
+  return lines;
 }
 
-function boot() {
-  // Chaque étape critique est protégée par try/catch.
-  // L'objectif : que setInterval(tick) se lance TOUJOURS, même si une étape
-  // antérieure échoue. Sans ça, l'horloge se bloque définitivement.
-  
-  let isFresh = false;
-  let catchupReport = null;
-  
-  try {
-    setS(load());
-    isFresh = !S;
-    if (isFresh) {
-      setS(freshState());
-      seedJournal();
-      save();
-    }
-  } catch (err) {
-    console.error('[BOOT] Erreur load/init :', err);
-    // Si le load a planté (save corrompue par ex), repartir sur un fresh
-    try {
-      setS(freshState());
-      seedJournal();
-      save();
-      isFresh = true;
-    } catch (err2) {
-      console.error('[BOOT] Erreur sur fresh state :', err2);
-      alert("DRIFT : impossible d'initialiser le jeu.\n" + err2.message);
-      return; // sans state on ne peut rien faire
-    }
-  }
-  
-  if (!isFresh) {
-    try {
-      catchupReport = catchUpOffline();
-    } catch (err) {
-      console.error('[BOOT] Erreur catchUpOffline :', err);
-      // Pas grave, on continue sans rattrapage
-    }
-  }
-  
-  try {
-    autoAssignAllFreeMembers();
-  } catch (err) {
-    console.error('[BOOT] Erreur autoAssign :', err);
-  }
-  
-  try {
-    setupHandlers();
-  } catch (err) {
-    console.error('[BOOT] Erreur setupHandlers :', err);
-  }
-  
-  try {
-    render();
-  } catch (err) {
-    console.error('[BOOT] Erreur render initial :', err);
-  }
-  
-  if (catchupReport) {
-    try { showCatchupModal(catchupReport); }
-    catch (err) { console.error('[BOOT] Erreur catchup modal :', err); }
-  }
-  
-  // ============================================================
-  // DÉMARRAGE DU TICK — protégé pour ne jamais s'arrêter
-  // ============================================================
-  // Wrapper qui capture les exceptions du tick, sinon une seule erreur
-  // tue tout le système.
-  function safeTick() {
-    try {
-      tick();
-    } catch (err) {
-      console.error('[TICK] Erreur dans tick() :', err);
-      // On essaye au moins d'avancer le temps minimal et de sauvegarder
-      try {
-        if (S?.meta) {
-          S.meta.gameMin = (S.meta.gameMin || 0) + (MIN_PER_TICK || 1);
-          S.meta.lastTickRealMs = Date.now();
-        }
-      } catch (e) {}
-    }
-  }
-  // Lance le tick principal
-  let tickIntervalId = setInterval(safeTick, TICK_MS);
-  
-  // Watchdog : surveille que le tick tourne toujours.
-  // Si gameMin n'a pas bougé depuis 5 secondes alors que la PWA est visible,
-  // on relance le tick.
-  let lastWatchdogCheck = { time: Date.now(), gameMin: S?.meta?.gameMin || 0 };
-  setInterval(() => {
-    if (!S || !S.meta) return;
-    if (document.visibilityState !== 'visible') return;
-    
-    const now = Date.now();
-    const elapsed = now - lastWatchdogCheck.time;
-    const advanced = (S.meta.gameMin || 0) - lastWatchdogCheck.gameMin;
-    
-    // Si > 5 sec se sont écoulées et gameMin n'a pas bougé d'une seule minute,
-    // c'est que le tick est mort. On le relance.
-    if (elapsed > 5000 && advanced === 0) {
-      console.warn('[WATCHDOG] Tick gelé détecté — redémarrage');
-      try { clearInterval(tickIntervalId); } catch (e) {}
-      tickIntervalId = setInterval(safeTick, TICK_MS);
-      // Force aussi un render() pour rafraîchir l'UI
-      try { render(); } catch (e) {}
-    }
-    
-    lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
-  }, 5000);
-  
-  // Rattrapage à chaque retour au premier plan
-  document.addEventListener('visibilitychange', () => {
-    if (!S) return;
-    if (document.visibilityState === 'hidden') {
-      S.meta.lastTickRealMs = Date.now();
-      try { save(); } catch (e) {}
-      return;
-    }
-    if (document.visibilityState === 'visible') {
-      const now = Date.now();
-      const elapsedMs = now - (S.meta.lastTickRealMs || now);
-      // Au-delà de 30s d'écart, on rattrape silencieusement
-      if (elapsedMs > 30000) {
-        const ticksToSim = Math.min(
-          Math.floor(elapsedMs / TICK_MS),
-          OFFLINE_MAX_HOURS * 3600
-        );
-        try {
-          for (let i = 0; i < ticksToSim; i++) {
-            tickOnce({ silent: true });
-          }
-          S.meta.lastTickRealMs = now;
-          save();
-          render();
-        } catch (err) {
-          console.error('[VISIBILITY] Erreur rattrapage :', err);
-        }
-      }
-      // S'assurer aussi que le tick principal tourne après reprise
-      lastWatchdogCheck = { time: Date.now(), gameMin: S.meta.gameMin || 0 };
+// Libellé d'une durée réelle
+function realDurationLabel(hours, long = false) {
+  if (hours < 1) return `${Math.round(hours * 60)} ${long ? 'minutes' : 'min'}`;
+  if (hours < 24) return `${hours.toFixed(1)} ${long ? 'heures' : 'h'}`;
+  return `${(hours / 24).toFixed(1)} jours`;
+}
+
+// ---- Rattrapage du temps écoulé (hors ligne, page gelée, retour d'onglet) ----
+// Appelée par tick() quand l'écart avec l'horloge réelle est grand. Simule
+// par morceaux (page réactive, barre de progression si c'est long), incidents
+// et événements résolus automatiquement, puis affiche « Reprise du contact ».
+const CATCHUP_PROGRESS_MIN_TICKS = 900;   // ~15 min d'absence et plus : barre de progression
+const CATCHUP_REPORT_MIN_HOURS = 5 / 60;  // en dessous de 5 min réelles : ni modale ni journal
+
+export function catchUpOffline() {
+  if (!S?.meta || isCatchingUp()) return false;
+  const now = Date.now();
+  const elapsedMs = Math.max(0, now - S.meta.lastTickRealMs);
+  const elapsedHours = elapsedMs / 3600000;
+  const due = Math.floor(elapsedMs / TICK_MS);
+  const maxTicks = Math.floor(OFFLINE_MAX_HOURS * 3600);
+  const ticks = Math.min(due, maxTicks);
+  const capped = due > maxTicks;
+  const before = snapshotForCatchup();
+  const seqStart = _autoSeq;
+  const progress = ticks >= CATCHUP_PROGRESS_MIN_TICKS && !decisionUiBusy() ? openCatchupProgress() : null;
+  const started = runCatchUp(ticks, {
+    onProgress: (done, total) => progress?.update(done, total),
+    onDone: done => {
+      progress?.close();
+      finishCatchUp({ before, seqStart, elapsedHours, simulatedHours: done * MIN_PER_TICK / 60, capped });
     }
   });
-  
-  // Sauvegarde aussi avant fermeture
-  window.addEventListener('pagehide', () => {
-    if (S) {
-      S.meta.lastTickRealMs = Date.now();
-      try { save(); } catch (e) {}
+  if (!started) progress?.close();
+  return started;
+}
+
+function finishCatchUp({ before, seqStart, elapsedHours, simulatedHours, capped }) {
+  const summary = diffSnapshot(before, snapshotForCatchup()).concat(autoResolvedLines(autoResolvedSince(seqStart)));
+  syncPendingFlags();
+  if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
+    // Une seule entrée de journal pour résumer la période
+    const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS}h)` : '';
+    log('neutral', esc(`Reprise du contact après ${realDurationLabel(elapsedHours)}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`));
+  }
+  save();
+  try { render(); } catch (e) { reportTickError('render', e); }
+  if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
+    const report = { realElapsedHours: elapsedHours, simulatedHours, capped, summary };
+    if (!decisionUiBusy()) showCatchupModal(report);
+    else toast('Reprise du contact : le résumé est dans le journal.');
+  }
+}
+
+// Barre de progression du rattrapage (dans #modal, sans bouton : elle se
+// ferme d'elle-même). Renvoie { update, close } ou null.
+function openCatchupProgress() {
+  const m = $('#modal');
+  const bg = $('#modalBg');
+  if (!m || !bg) return null;
+  m.className = 'modal incident-modal';
+  m.innerHTML = `
+    <div class="incident-eyebrow">Reprise du contact</div>
+    <h3 class="incident-title">Synchronisation de l'avant-poste…</h3>
+    <p class="incident-body">L'avant-poste a continué de tourner pendant ton absence. Simulation en cours : <span id="catchupPct">0</span> %</p>
+    <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:12px">
+      <div id="catchupBar" style="height:100%;width:0%;background:var(--amber);transition:width .15s linear"></div>
+    </div>
+  `;
+  bg.classList.add('show');
+  let lastPaint = 0;
+  return {
+    update(done, total) {
+      const t = performance.now();
+      if (t - lastPaint < 100 && done < total) return;
+      lastPaint = t;
+      const pct = total ? Math.floor(done * 100 / total) : 100;
+      const p = $('#catchupPct');
+      const b = $('#catchupBar');
+      if (p) p.textContent = String(pct);
+      if (b) b.style.width = pct + '%';
+    },
+    close() {
+      if (!$('#catchupBar')) return;   // remplacée entre-temps par une autre fenêtre
+      bg.classList.remove('show');
+      m.className = 'modal';
     }
-  });
-  
-  console.log('[BOOT] DRIFT démarré, version', VERSION);
+  };
 }
 
 // Modale "bon retour" qui résume ce qui s'est passé pendant l'absence
 function showCatchupModal(report) {
   // En dessous de 5 minutes réelles, on ne montre rien (zéro friction)
-  if (report.realElapsedHours < 5/60) return;
-
-  const realLabel = report.realElapsedHours < 1
-    ? `${Math.round(report.realElapsedHours * 60)} minutes`
-    : report.realElapsedHours < 24
-      ? `${report.realElapsedHours.toFixed(1)} heures`
-      : `${(report.realElapsedHours / 24).toFixed(1)} jours`;
+  if (report.realElapsedHours < CATCHUP_REPORT_MIN_HOURS) return;
 
   const summaryHTML = report.summary.length > 0
     ? `<ul style="list-style:none;padding:0;margin:14px 0 0;">${
         report.summary.map(line =>
-          `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${line}</li>`
+          `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${esc(line)}</li>`
         ).join('')
       }</ul>`
     : '<p style="font-style:italic;color:var(--text-mute);margin-top:10px">L\'avant-poste a tenu sans encombre.</p>';
@@ -5470,11 +6262,12 @@ function showCatchupModal(report) {
        </p>`
     : '';
 
+  $('#modal').className = 'modal';   // pas de classe héritée d'une autre fenêtre (incident-modal…)
   showModal({
     title: 'Reprise du contact',
     body: `
       <span style="display:block;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;margin-bottom:4px;">
-        Absence : ${realLabel}
+        Absence : ${realDurationLabel(report.realElapsedHours, true)}
       </span>
       <span style="display:block;color:var(--text-dim);margin-bottom:4px;">
         L'avant-poste a continué de tourner pendant ton absence. Voici ce qu'il s'est passé :
@@ -5487,6 +6280,280 @@ function showCatchupModal(report) {
     primaryLabel: "Reprendre",
     onPrimary: () => {}
   });
+}
+
+// ============================================================
+// 10. DÉMARRAGE — verrou d'onglet, chargement, boucle de jeu
+// ============================================================
+
+const TICK_POLL_MS = 250;   // tick() est appelé 4×/s ; il ne simule que les secondes écoulées
+let _loopStarted = false;
+
+// Un tick protégé : une erreur ne tue jamais la boucle. tick() gère lui-même
+// l'avance du temps, la sauvegarde automatique et le rendu (isolés).
+function safeTick() {
+  try { tick(); } catch (err) { reportTickError('tick', err); }
+  try { pumpDecisions(); } catch (err) { reportTickError('décisions', err); }
+}
+
+// ---- Verrou d'onglet : une seule partie active par navigateur ----
+// Deux onglets ouverts s'écraseraient mutuellement la sauvegarde. Le premier
+// prend un verrou (Web Locks) ; les suivants affichent une modale et ne
+// simulent ni ne sauvegardent, jusqu'à « Utiliser cet onglet » : l'onglet actif
+// sauvegarde, se met en pause et rend le verrou. Repli sans Web Locks :
+// BroadcastChannel (ping/pong). Filet de sécurité : l'événement « storage ».
+const TAB_LOCK_NAME = 'drift_tab_lock';
+let _tabRole = 'unknown';      // 'primary' | 'yielded' | 'secondary'
+let _tabChannel = null;
+let _releaseTabLock = null;
+
+function tabChannel() {
+  if (_tabChannel || typeof BroadcastChannel === 'undefined') return _tabChannel;
+  try {
+    _tabChannel = new BroadcastChannel('drift_tabs');
+    _tabChannel.addEventListener('message', e => {
+      if (_tabRole !== 'primary') return;
+      const type = e.data?.type;
+      if (type === 'ping') _tabChannel.postMessage({ type: 'pong' });
+      else if (type === 'takeover') yieldToOtherTab(true);
+    });
+  } catch (e) {
+    _tabChannel = null;
+  }
+  return _tabChannel;
+}
+
+// Résout true si cet onglet obtient la main (attente max waitMs ; steal :
+// reprend de force un verrou tenu par un onglet qui ne répond plus).
+function acquireTabLock(waitMs = 1500, steal = false) {
+  tabChannel();
+  if (navigator.locks?.request) {
+    return new Promise(resolve => {
+      const ctrl = new AbortController();
+      const timer = steal ? null : setTimeout(() => ctrl.abort(), waitMs);
+      let granted = false;
+      navigator.locks.request(TAB_LOCK_NAME, steal ? { steal: true } : { signal: ctrl.signal }, () => {
+        granted = true;
+        clearTimeout(timer);
+        _tabRole = 'primary';
+        resolve(true);
+        return new Promise(release => { _releaseTabLock = release; });   // verrou gardé jusqu'à release
+      }).catch(() => {
+        clearTimeout(timer);
+        if (!granted) resolve(false);                          // délai dépassé : un autre onglet a la main
+        else if (_tabRole === 'primary') yieldToOtherTab(false);  // verrou repris de force ailleurs
+      });
+    });
+  }
+  const ch = _tabChannel;
+  if (!ch) { _tabRole = 'primary'; return Promise.resolve(true); }
+  return new Promise(resolve => {
+    let answered = false;
+    const onMsg = e => { if (e.data?.type === 'pong') answered = true; };
+    ch.addEventListener('message', onMsg);
+    ch.postMessage({ type: 'ping' });
+    setTimeout(() => {
+      ch.removeEventListener('message', onMsg);
+      if (!answered) _tabRole = 'primary';
+      resolve(!answered);
+    }, 400);
+  });
+}
+
+// Un autre onglet prend la main : on sauvegarde (si on nous l'a demandé
+// poliment), on se met en pause et on rend le verrou.
+function yieldToOtherTab(saveFirst) {
+  if (_tabRole !== 'primary') return;
+  _tabRole = 'yielded';
+  if (saveFirst) { try { save(); } catch (e) { /* stockage inaccessible */ } }
+  lockSaves('autre-onglet');
+  setSimPaused(true);
+  if (_releaseTabLock) { _releaseTabLock(); _releaseTabLock = null; }
+  showOtherTabModal(true);
+}
+
+function showOtherTabModal(yielded) {
+  $('#modal').className = 'modal';
+  showModal({
+    title: 'DRIFT est déjà ouvert dans un autre onglet',
+    body: (yielded
+      ? "La partie a été reprise dans un autre onglet. "
+      : "La partie tourne déjà dans un autre onglet. ")
+      + "Pour éviter que les deux onglets ne s'écrasent mutuellement la sauvegarde, celui-ci reste en pause.",
+    hideCancel: true,
+    primaryLabel: 'Utiliser cet onglet',
+    onPrimary: () => takeOverTab(yielded)
+  });
+}
+
+function takeOverTab(reloadAfter) {
+  toast('Reprise de la partie dans cet onglet…');
+  tabChannel()?.postMessage({ type: 'takeover' });
+  acquireTabLock(4000)
+    .then(ok => ok || acquireTabLock(0, true))
+    .then(ok => {
+      if (!ok) { showOtherTabModal(reloadAfter); return; }
+      // Onglet mis en pause : son état en mémoire est périmé → rechargement
+      if (reloadAfter) { location.reload(); return; }
+      startSession();
+    });
+}
+
+// ---- Sauvegarde illisible ----
+// Rien n'est écrasé tant que le joueur n'a pas choisi : la chaîne brute est
+// copiée sous une clé de secours, et on propose de l'exporter, d'importer
+// une autre sauvegarde ou de recommencer.
+function showCorruptSaveModal(res) {
+  $('#modal').className = 'modal';
+  const backupNote = res.backupKey
+    ? `Une copie de secours est gardée dans ce navigateur (<code>${esc(res.backupKey)}</code>).`
+    : `⚠ Aucune copie de secours n'a pu être créée (stockage plein ?) : exporte la sauvegarde avant de recommencer.`;
+  showModal({
+    title: 'Sauvegarde illisible',
+    body: `
+      <p>La sauvegarde de ta colonie n'a pas pu être chargée : ${esc(res.error?.message || 'erreur inconnue')}.</p>
+      <p>Rien n'a été effacé. ${backupNote}</p>
+      <p>Tu peux l'exporter (pour la réparer ou la transmettre), importer une autre sauvegarde, ou recommencer une partie.</p>
+      <div class="btn-row" style="justify-content:flex-start;flex-wrap:wrap;margin-top:12px">
+        <button id="corruptExport">Exporter la sauvegarde endommagée</button>
+        <button id="corruptImport">Importer une sauvegarde…</button>
+      </div>`,
+    bodyIsHTML: true,
+    hideCancel: true,
+    primaryLabel: res.backupKey ? 'Recommencer une partie' : 'Recommencer quand même',
+    primaryClass: 'danger',
+    onPrimary: () => {
+      unlockSaves();
+      setS(freshState());
+      seedJournal();
+      save();
+      toast('Nouvelle fondation établie');
+      startGameLoop();
+    }
+  });
+  $('#corruptExport')?.addEventListener('click', () => exportRawSave(res.raw));
+  $('#corruptImport')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', () => {
+      const f = input.files?.[0];
+      if (f) importSave(f, { onCancel: () => showCorruptSaveModal(res) });
+    });
+    input.click();
+  });
+}
+
+// ---- Démarrage ----
+function boot() {
+  try { setupHandlers(); } catch (err) { console.error('[BOOT] Erreur setupHandlers :', err); }
+  acquireTabLock()
+    .then(ok => {
+      if (ok) startSession();
+      else { _tabRole = 'secondary'; showOtherTabModal(false); }
+    })
+    .catch(err => {
+      console.error('[BOOT] Verrou d\'onglet :', err);
+      _tabRole = 'primary';
+      startSession();
+    });
+}
+
+// Charge la sauvegarde (ou crée une partie) puis lance la boucle de jeu.
+function startSession() {
+  let res;
+  try { res = loadSave(); } catch (err) { res = { status: 'error', error: err, raw: null }; }
+  if (res.status === 'error') {
+    lockSaves('sauvegarde-illisible');
+    showCorruptSaveModal(res);
+    return;
+  }
+  try {
+    if (res.status === 'ok') {
+      setS(res.data);
+      if (res.newer) toast(`Sauvegarde d'une version plus récente du jeu : certaines données peuvent être ignorées.`);
+      else if (res.warnings?.length) toast(`Sauvegarde chargée avec ${res.warnings.length} avertissement(s) (détails dans la console).`);
+    } else {
+      setS(freshState());
+      seedJournal();
+      save();
+    }
+  } catch (err) {
+    console.error('[BOOT] Erreur init :', err);
+    alert("DRIFT : impossible d'initialiser le jeu.\n" + err.message);
+    return;   // sans state on ne peut rien faire
+  }
+  startGameLoop();
+}
+
+function startGameLoop() {
+  if (_loopStarted) return;
+  _loopStarted = true;
+  markSessionStart();   // l'horloge « session » repart de zéro
+
+  try {
+    autoAssignAllFreeMembers();
+  } catch (err) {
+    console.error('[BOOT] Erreur autoAssign :', err);
+  }
+  try {
+    render();
+  } catch (err) {
+    console.error('[BOOT] Erreur render initial :', err);
+  }
+
+  // Premier tick tout de suite : rattrape l'absence (par morceaux si elle
+  // est longue) puis réaffiche la décision en attente éventuelle.
+  safeTick();
+  let tickIntervalId = setInterval(safeTick, TICK_POLL_MS);
+
+  // Watchdog : surveille que le tick tourne toujours.
+  // Si gameMin n'a pas bougé depuis 5 secondes alors que la PWA est visible
+  // (et qu'aucun rattrapage / pause n'est en cours), on relance le tick.
+  let lastWatchdogCheck = { time: Date.now(), gameMin: S?.meta?.gameMin || 0 };
+  setInterval(() => {
+    if (!S || !S.meta) return;
+    const now = Date.now();
+    if (document.visibilityState !== 'visible' || isSimPaused() || isCatchingUp()) {
+      lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
+      return;
+    }
+    const elapsed = now - lastWatchdogCheck.time;
+    const advanced = (S.meta.gameMin || 0) - lastWatchdogCheck.gameMin;
+    if (elapsed > 5000 && advanced === 0) {
+      console.warn('[WATCHDOG] Tick gelé détecté — redémarrage');
+      try { clearInterval(tickIntervalId); } catch (e) { /* rien */ }
+      tickIntervalId = setInterval(safeTick, TICK_POLL_MS);
+      try { render(); } catch (e) { /* rien */ }
+    }
+    lastWatchdogCheck = { time: now, gameMin: S.meta.gameMin || 0 };
+  }, 5000);
+
+  // Onglet caché : on sauvegarde (sans toucher à lastTickRealMs : tick()
+  // simulera tout ce qui est dû). Retour au premier plan : tick() tout de
+  // suite, qui rattrape l'écart (par morceaux s'il est grand).
+  document.addEventListener('visibilitychange', () => {
+    if (!S?.meta || isSimPaused()) return;
+    if (document.visibilityState === 'hidden') {
+      try { save(); } catch (e) { /* rien */ }
+      return;
+    }
+    safeTick();
+    lastWatchdogCheck = { time: Date.now(), gameMin: S.meta.gameMin || 0 };
+  });
+
+  // Sauvegarde aussi avant fermeture
+  window.addEventListener('pagehide', () => {
+    if (S?.meta) { try { save(); } catch (e) { /* rien */ } }
+  });
+
+  // Filet de sécurité multi-onglets : un autre onglet écrit la sauvegarde
+  // alors que celui-ci se croit seul → on se met en pause sans écraser.
+  window.addEventListener('storage', e => {
+    if (e.key === SAVE_KEY && e.newValue !== null && _tabRole === 'primary') yieldToOtherTab(false);
+  });
+
+  console.log('[BOOT] DRIFT démarré, version', VERSION);
 }
 
 // Différer le démarrage pour éviter les problèmes de Temporal Dead Zone
