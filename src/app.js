@@ -1213,8 +1213,9 @@ function selectExpeditionScenes(body, rng) {
   // Découpe : intro + corps (3-7) + outro
   const intros = SCENES.filter(s => s.tags.includes('intro') &&
     s.tags.every(t => t === 'intro' || tags.includes(t) || t === 'signal' && body.signal !== 'aucun'));
+  // (le tag 'ruines' est présent dans tags dès que le corps a des ruines)
   const outros = SCENES.filter(s => s.tags.includes('outro') &&
-    s.tags.every(t => t === 'outro' || tags.includes(t) || t === 'ruines'));
+    s.tags.every(t => t === 'outro' || tags.includes(t)));
 
   const bodyScenes = SCENES.filter(s => {
     if (s.tags.includes('intro') || s.tags.includes('outro')) return false;
