@@ -196,7 +196,10 @@ export function openResearchModal(techId) {
   const br = TECH_BRANCHES[tech.branch] || { nom: tech.branch, color: 'var(--amber)' };
   const running = isTechResearching(techId);
   const queued = researchQueue().includes(techId);
-  const canQueue = !r.ok && !running && !queued && hasApp('enqueueResearch') && (S.research || []).length >= labSlots() && unmetPrereqs(techId).length === 0;
+  // canResearch répond { ok, queued } quand le laboratoire est occupé (V1) ;
+  // l'ancienne forme (refus) reste gérée.
+  const canQueue = !running && !queued && hasApp('enqueueResearch')
+    && ((r.ok && r.queued) || (!r.ok && (S.research || []).length >= labSlots() && unmetPrereqs(techId).length === 0));
   const cost = tech.cost || {};
   const lines = techEffectsLines(tech);
   const m = $('#modal');

@@ -1244,7 +1244,6 @@ export function inventoryCount() {
 //   CHRONICLES (chronicles.js) → src/content/histoires/*.js (= HISTOIRES)
 import * as N from './engine/narration.js';
 import { sceneDepuisAncienne, estAncienneScene, choixDepuisAncien } from './engine/ancien-format.js';
-import { fmtDuree } from './util.js';
 
 const HISTOIRES = CHRONICLES;
 // Id de la scène-intro synthétique d'un épisode : l'expédition ne stocke que cet

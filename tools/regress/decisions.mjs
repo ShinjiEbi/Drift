@@ -150,7 +150,8 @@ try {
   await clickChoice(page, '#modal [data-event-choice="0"]');
   await page.waitForSelector('#consContinue', { timeout: 2000 });
   const cons = await page.evaluate(async () => ({ txt: document.querySelector('#modal').textContent, metal: (await import('./src/state.js')).S.res.metal }));
-  check(cons.metal === 60 && /−240 Métal/.test(cons.txt) && /\+90 Datacubes/.test(cons.txt), 'conséquences = montants réellement appliqués');
+  // Le filet du Commandement (V1) ajoute un peu de métal à chaque tick : marge < 1.
+  check(Math.abs(cons.metal - 60) < 1 && /−240 Métal/.test(cons.txt) && /\+90 Datacubes/.test(cons.txt), 'conséquences = montants réellement appliqués' + (Math.abs(cons.metal - 60) < 1 ? '' : ' (métal : ' + cons.metal + ')'));
   await page.click('#consContinue');
 
   // ------------------------------------------------------------------

@@ -190,6 +190,9 @@ try {
   await page.waitForFunction(() => document.querySelector('#gameTime')?.textContent?.includes('J1'), null, { timeout: 10000 });
   await page.waitForTimeout(800);
   await installHelpers();
+  // Ce test porte sur les chroniques : pas d'incident ni d'événement de colonie
+  // (leurs fenêtres bloqueraient la navigation au milieu du parcours).
+  await page.evaluate(() => { const S = window.__t.S(); S.nextEventMin = 1e12; S.nextIncidentMin = 1e12; S.pendingDecisions = []; });
   const garantie = await page.evaluate(() => {
     const S = window.__t.S();
     window.__t.app.tickChronicles();   // (appelé à chaque tick ; ici sans attendre le premier)
