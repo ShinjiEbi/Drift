@@ -183,6 +183,20 @@ try {
     const r = app.assignMember(old.id, 'commandement', 0);
     return { neutral: b.mult === 1 && b.label === null, eff: eff.jobsFilled === 1, noDepuis: b2.mult === 1, reclick: r.ok === true };
   });
+
+  // M6 — un officier sur un poste supprimé (module rétrogradé) ne compte plus
+  await scenario('M6 : commandement limité aux postes ouverts', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.commandement = { level: 2 };
+    const off = mk({ skills: { science: 3 } });
+    const ok = app.assignMember(off.id, 'commandement', 1).ok;
+    const before = app.globalCommandBonus();
+    S.modules.commandement.level = 1;              // le poste « Officier scientifique » disparaît
+    const after = app.globalCommandBonus();
+    const staffed = app.staffOf('commandement').length;
+    return { ok, before: before === 1, after: after === 0, staffConsistent: staffed === after };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

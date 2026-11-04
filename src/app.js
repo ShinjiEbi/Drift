@@ -423,12 +423,17 @@ export function moduleEfficiency(modKey) {
   return { fillFraction, prodMult, qualityBonus, upkeepMult, securityBonus, supportBonus, jobsTotal: jobs.length, jobsFilled: filled };
 }
 
-// Bonus global de la colonie : somme des cmd partout
+// Bonus global de la colonie : somme des cmd partout.
+// Comme staffOf, ne compte que les postes ouverts au niveau actuel du module
+// (cf. jobsForModule) : un officier resté sur un poste supprimé (module
+// endommagé/rétrogradé) ne compte plus.
 export function globalCommandBonus() {
   let n = 0;
   for (const k in S.assignments) {
     const [modKey, idxStr] = k.split(':');
-    const job = MODULE_JOBS[modKey]?.[parseInt(idxStr, 10)];
+    const idx = parseInt(idxStr, 10);
+    if (!(idx < (S.modules[modKey]?.level || 0))) continue;
+    const job = MODULE_JOBS[modKey]?.[idx];
     if (!job || job.role !== 'commandement') continue;
     const m = S.crew.find(c => c.id === S.assignments[k]);
     if (m && m.statut === 'travail') n++;
