@@ -25,8 +25,8 @@ const expId = await page.evaluate(async () => {
   return 'e_qt';
 });
 const mini = async () => {
-  await page.evaluate(() => document.querySelector('nav.tabs button[data-tab="galaxy"]').click());
-  await page.evaluate(() => document.querySelector('#subtab-expeditions')?.click());
+  await page.evaluate(() => document.querySelector('nav.tabs button[data-tab="expeditions"]').click());
+  await page.evaluate(() => document.querySelector('#subtab-missions')?.click());
   await page.waitForTimeout(200);
   await page.click(`button[data-resume-exp="e_qt"]`);
   await page.waitForTimeout(200);

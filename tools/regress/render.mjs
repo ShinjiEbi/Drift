@@ -22,14 +22,14 @@ try {
   const hidden = await page.evaluate(async () => {
     const ui = await import('./src/ui.js');
     const st = await import('./src/state.js');
-    ui.selectTab('crew'); ui.selectSubtab('crew', 'recruit');
-    ui.selectTab('overview');
+    ui.selectTab('equipage'); ui.selectSubtab('equipage', 'recrutement');
+    ui.selectTab('base');
     const before = document.querySelector('#candidateList').innerHTML;
     st.S.candidates.push(st.genCandidate());
     ui.render();
     const whileHidden = document.querySelector('#candidateList').innerHTML;
-    const badge = Number(document.querySelector('#crewBadge').textContent);
-    ui.selectTab('crew');
+    const badge = Number(document.querySelector('#recrutementBadge').textContent);
+    ui.selectTab('equipage');
     const shown = document.querySelector('#candidateList').innerHTML;
     return { unchanged: before === whileHidden, badge, n: st.S.candidates.length, updated: shown !== whileHidden };
   });
@@ -42,12 +42,12 @@ try {
     const ui = await import('./src/ui.js');
     const st = await import('./src/state.js');
     st.S.build = { id: 'habitat', targetLevel: 2, totalMin: 100000, doneMin: 10 };
-    ui.selectTab('overview');
+    ui.gotoView('base', 'afaire');
     ui.render();
-    const bar = document.querySelector('#buildSlot .bar');
+    const bar = document.querySelector('#dashActivity .act-row[data-id="build"] .pbar-fill');
     const w0 = bar.style.width;
     for (let i = 0; i < 20; i++) { st.tickOnce({ silent: true }); st.S.build.doneMin += 500; ui.render(); }
-    const bar2 = document.querySelector('#buildSlot .bar');
+    const bar2 = document.querySelector('#dashActivity .act-row[data-id="build"] .pbar-fill');
     st.S.build = null;
     ui.render();
     return { same: bar === bar2, moved: bar2.style.width !== w0 };
@@ -62,7 +62,7 @@ try {
     const m = S.crew.find(c => c.statut === 'libre') || S.crew[0];
     m.statut = 'formation';
     S.training.push({ id: 't_regress', memberId: m.id, skill: 'medecine', targetLvl: 2, doneMin: 0, totalMin: 100000, failChance: 0.1, cost: {} });
-    ui.selectTab('crew'); ui.selectSubtab('crew', 'formation');
+    ui.gotoView('equipage', 'formation');
   });
   const btn = page.locator('#formationList button[data-cancel="t_regress"]');
   await btn.scrollIntoViewIfNeeded();
@@ -82,7 +82,7 @@ try {
   const focus = await page.evaluate(async () => {
     const ui = await import('./src/ui.js');
     const st = await import('./src/state.js');
-    ui.selectTab('modules'); ui.selectSubtab('modules', 'assignments');
+    ui.gotoView('base', 'postes');
     const b = document.querySelector('#optimizeAssignBtn');
     b.focus();
     for (let i = 0; i < 5; i++) { st.tickOnce({ silent: true }); ui.render(); }
@@ -99,19 +99,19 @@ try {
     const victim = S.crew[0];
     const realName = victim.name;
     Object.defineProperty(victim, 'name', { configurable: true, get() { throw new Error('nom illisible (test)'); } });
-    ui.selectTab('crew'); ui.selectSubtab('crew', 'personnel');
+    ui.gotoView('equipage', 'personnel');
     const clock0 = document.querySelector('#gameTime').textContent;
     let threw = false;
     for (let i = 0; i < 5; i++) {
-      try { st.tickOnce({ silent: true }); ui.render(); } catch { threw = true; }
+      try { st.S.meta.gameMin += 60; st.tickOnce({ silent: true }); ui.render(); } catch { threw = true; }   // 1 tick = 1 s : on avance d'une minute pour voir l'horloge bouger
     }
     const errBox = !!document.querySelector('#subview-personnel > .render-error');
     const clockMoved = document.querySelector('#gameTime').textContent !== clock0;
-    ui.selectTab('journal');
-    const journalOk = document.querySelectorAll('#journalList li').length > 0 && !document.querySelector('#view-journal > .render-error');
+    ui.gotoView('recits', 'journal');
+    const journalOk = document.querySelectorAll('#journalList li').length > 0 && !document.querySelector('#subview-journal > .render-error');
     // Réparation : le message disparaît au rendu suivant
     Object.defineProperty(victim, 'name', { configurable: true, writable: true, value: realName });
-    ui.selectTab('crew');
+    ui.selectTab('equipage');
     const recovered = !document.querySelector('#subview-personnel > .render-error');
     return { threw, errBox, clockMoved, journalOk, recovered };
   });
@@ -139,9 +139,9 @@ try {
     S.factions = S.factions || {};
     S.factions.f_bad = { id: 'f_bad', type: 'faction_inconnue', name: 'Inconnus', reputation: 0, bodyName: '?' };
     S.expHistory.unshift({ finishedAt: 0, bodyName: 'X', vesselName: 'Y', crewCount: 1 });
-    const views = [['crew', 'personnel'], ['crew', 'formation'], ['crew', 'soins'], ['galaxy', 'fleet'], ['galaxy', 'expeditions'], ['galaxy', 'diplomatie']];
+    const views = [['equipage', 'personnel'], ['equipage', 'formation'], ['equipage', 'soins'], ['expeditions', 'vaisseaux'], ['expeditions', 'missions'], ['expeditions', 'diplomatie'], ['base', 'afaire'], ['base', 'construction'], ['recits', 'chroniques'], ['labo', 'recherche']];
     for (const [tab, sub] of views) { ui.selectTab(tab); ui.selectSubtab(tab, sub); ui.render(); }
-    ui.selectTab('galaxy'); ui.selectSubtab('galaxy', 'cartographie');
+    ui.gotoView('expeditions', 'carte');
     S.ui = { galaxyView: 'system', currentSystemId: sys.id };
     ui.render();
     S.ui = { galaxyView: 'body', currentSystemId: sys.id, currentBodyId: sys.bodies[0].id };

@@ -45,11 +45,11 @@ try {
     return {
       shown: document.querySelector('#modalBg').classList.contains('show'),
       tab: document.querySelector('nav.tabs button.active')?.dataset.tab,
-      sub: document.querySelector('#view-modules nav.subtabs button.active')?.dataset.subtabMod,
+      sub: document.querySelector('#view-base nav.subtabs button.active')?.dataset.subtab,
       cls: document.querySelector('#modal').className,
     };
   });
-  t.check(!nav.err && !nav.shown && nav.tab === 'modules' && nav.sub === 'assignments', 'cliquer « colons sans poste » ouvre Modules › Affectations', JSON.stringify(nav));
+  t.check(!nav.err && !nav.shown && nav.tab === 'base' && nav.sub === 'postes', 'cliquer « colons sans poste » ouvre Base › Postes', JSON.stringify(nav));
   t.check(nav.cls === 'modal', 'la modale fermée ne garde pas de classe (alerts-modal…)', nav.cls);
 
   // ---- Décisions en attente : comptées, rouvertes au clic ----
@@ -129,7 +129,7 @@ try {
     const patient = S.crew.find(m => m.statut === 'libre' && m !== worker);
     patient.statuts.push({ key, since: S.meta.gameMin, revealed: true, diagnosed: false, lastDiagAt: S.meta.gameMin });
     patient.statut = 'infirmerie';
-    ui.selectTab('crew'); ui.selectSubtab('crew', 'soins'); ui.render();
+    ui.gotoView('equipage', 'soins'); ui.render();
     const admit = !!document.querySelector(`#subview-soins button[data-act="admit"][data-mid="${CSS.escape(worker.id)}"]`);
     const diag = document.querySelector(`#subview-soins button[data-act="diagnose"][data-mid="${CSS.escape(patient.id)}"]`);
     const expected = app.canDiagnose(patient.id, 0);

@@ -214,8 +214,8 @@ try {
   const intro = await page.evaluate(id => { const s = window.__t.app.currentScene(window.__t.exp(id)); return s && { id: s.id, n: s.choices.length, text: String(s.text).slice(0, 40) }; }, exp1);
   check(phase1 === 'sur_place' && intro?.id === '__chron_intro__' && intro.n > 0, `arrivée sur place avec la scène-intro (${JSON.stringify(intro)})`);
   // Interface : onglet Galaxie > Expéditions > Reprendre la mission
-  await page.click('nav.tabs button[data-tab="galaxy"]', { force: true });
-  await page.click('[data-subtab-galaxy="expeditions"]', { force: true });
+  await page.click('nav.tabs button[data-tab="expeditions"]', { force: true });
+  await page.click('[data-subtab="missions"]', { force: true });
   await page.waitForTimeout(200);
   await page.click(`button[data-resume-exp="${exp1}"]`, { force: true });
   await page.waitForTimeout(150);
@@ -282,10 +282,10 @@ try {
     `Adèle a rejoint l'avant-poste comme colon complet (${JSON.stringify(adele)})`);
   const elie = people.cand.find(p => p.ch === 'elie');
   check(elie && elie.origin?.label === "L'Anneau Tracé", `habitat plein : Élie attend dans les candidatures (${JSON.stringify(elie || { habitat: reports.anneau_trace.habitat, crew: people.crew.map(p => p.ch), cand: people.cand.map(p => p.ch) })})`);
-  for (const t of ['crew', 'galaxy', 'overview']) {
+  for (const t of ['equipage', 'expeditions', 'base']) {
     await page.click(`nav.tabs button[data-tab="${t}"]`, { force: true });
     await page.waitForTimeout(150);
-    const subs = await page.$$(`#view-${t} [data-subtab], #view-${t} [data-subtab-galaxy]`);
+    const subs = await page.$$(`#view-${t} [data-subtab]`);
     for (const s of subs) { if (!(await s.isDisabled())) { await s.click({ force: true }); await page.waitForTimeout(100); } }
   }
   flushErrors('vues équipage / candidats sans erreur avec les PNJ');
@@ -337,8 +337,8 @@ try {
   check(legacy.mira?.origin?.label === 'Le Pulsar Silencieux' && legacy.mira.ch === 'soeur' && !legacy.mira.traits.includes('chronique_soeur') && Array.isArray(legacy.mira.sequels) && legacy.mira.salary > 0,
     `l'ancien colon de chronique est réparé (${JSON.stringify(legacy.mira)})`);
   // L'expédition débloquée se joue jusqu'au bout via l'overlay
-  await page.click('nav.tabs button[data-tab="galaxy"]', { force: true });
-  await page.click('[data-subtab-galaxy="expeditions"]', { force: true });
+  await page.click('nav.tabs button[data-tab="expeditions"]', { force: true });
+  await page.click('[data-subtab="missions"]', { force: true });
   await page.waitForTimeout(200);
   await page.click('button[data-resume-exp="e_legacy"]', { force: true });
   await page.waitForTimeout(150);
@@ -347,7 +347,7 @@ try {
   const legacyEnd = await page.evaluate(() => { const e = window.__t.exp('e_legacy'); return { phase: e?.phase, idx: e && window.__t.body(e.bodyId).chronicle.episodeIdx }; });
   check(r.done && legacyEnd.phase === 'retour' && legacyEnd.idx === 1, `l'épisode débloqué se termine (${r.trace.length} choix, épisode suivant idx ${legacyEnd.idx})`);
   await page.evaluate(() => document.querySelectorAll('#sceneOverlay.show').forEach(e => e.classList.remove('show')));
-  await page.click('nav.tabs button[data-tab="crew"]', { force: true });
+  await page.click('nav.tabs button[data-tab="equipage"]', { force: true });
   await page.waitForTimeout(150);
   flushErrors('rechargement et réparation sans erreur');
 } catch (e) {

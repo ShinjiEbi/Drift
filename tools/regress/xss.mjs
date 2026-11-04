@@ -78,11 +78,11 @@ try {
   }, PAYLOAD);
 
   // Rend toutes les vues
-  const views = [['overview'], ['modules', 'construction'], ['modules', 'assignments'],
-    ['crew', 'personnel'], ['crew', 'recruit'], ['crew', 'formation'], ['crew', 'soins'],
-    ['galaxy', 'cartographie'], ['galaxy', 'fleet'], ['galaxy', 'expeditions'], ['galaxy', 'diplomatie'],
-    ['stocks', 'inventory'], ['stocks', 'library'], ['stocks', 'research'], ['stocks', 'workshop'],
-    ['arcs'], ['journal']];
+  const views = [['base', 'afaire'], ['base', 'construction'], ['base', 'postes'],
+    ['equipage', 'personnel'], ['equipage', 'recrutement'], ['equipage', 'formation'], ['equipage', 'soins'],
+    ['expeditions', 'carte'], ['expeditions', 'vaisseaux'], ['expeditions', 'missions'], ['expeditions', 'diplomatie'],
+    ['labo', 'inventaire'], ['labo', 'bibliotheque'], ['labo', 'recherche'], ['labo', 'atelier'],
+    ['recits', 'chroniques'], ['recits', 'filsrouges'], ['recits', 'journal'], ['recits', 'archives'], ['recits', 'annales']];
   const renderErrors = await page.evaluate(async (views) => {
     const ui = await import('./src/ui.js');
     const st = await import('./src/state.js');
@@ -94,7 +94,7 @@ try {
     // Cartographie : niveau système puis corps
     const sys = st.S.galaxy.systems[0];
     st.S.ui = { galaxyView: 'system', currentSystemId: sys.id };
-    ui.selectTab('galaxy'); ui.selectSubtab('galaxy', 'cartographie'); ui.render();
+    ui.gotoView('expeditions', 'carte'); ui.render();
     st.S.ui = { galaxyView: 'body', currentSystemId: sys.id, currentBodyId: sys.bodies[0].id };
     ui.render();
     return [...document.querySelectorAll('.render-error')].map(e => e.dataset.view);
@@ -107,7 +107,7 @@ try {
   await close();
   await page.evaluate(async () => {
     const ui = await import('./src/ui.js');
-    ui.selectTab('modules'); ui.selectSubtab('modules', 'assignments');
+    ui.gotoView('base', 'postes');
     document.querySelector('#assignList .slot-row')?.click();
   });
   await close();
@@ -130,7 +130,7 @@ try {
   await close();
   await page.evaluate(async () => {
     const ui = await import('./src/ui.js');
-    ui.selectTab('galaxy'); ui.selectSubtab('galaxy', 'diplomatie');
+    ui.gotoView('expeditions', 'diplomatie');
     document.querySelector('[data-diplo-launch]')?.click();
   });
   await close();
@@ -142,11 +142,27 @@ try {
   const inputValue = await page.evaluate(() => document.querySelector('#modalInput')?.value);
   t.check(inputValue === PAYLOAD, 'le champ de renommage affiche le nom tel quel');
   await close();
+  // Fenêtres V1 : accueil (noms de la colonie et des colons), confirmation, légende, toasts
+  const v1 = await page.evaluate(async (P) => {
+    const ui = await import('./src/ui.js');
+    ui.maybeWelcome({ force: true });
+    const welcome = document.querySelector('#modal').innerText;
+    document.querySelector('#modalBg').classList.remove('show');
+    ui.confirmModal({ titre: P, texte: P, confirmer: P, annuler: P });
+    const confirm = document.querySelector('#modal h3')?.textContent;
+    document.querySelector('#modalBg').classList.remove('show');
+    ui.gotoView('equipage', 'personnel');
+    document.querySelector('[data-glossary]')?.click();
+    document.querySelector('#modalBg').classList.remove('show');
+    ui.toast(P);
+    return { welcome: welcome.includes(P), confirm, toast: document.querySelector('#toast').textContent.includes(P) };
+  }, PAYLOAD);
+  t.check(v1.welcome && v1.confirm === PAYLOAD && v1.toast, 'accueil, confirmation et toasts affichent les noms tels quels', JSON.stringify(v1));
 
   // Overlay de scène, puis combat
   const sceneOk = await page.evaluate(async () => {
     const ui = await import('./src/ui.js');
-    ui.selectTab('galaxy'); ui.selectSubtab('galaxy', 'expeditions');
+    ui.gotoView('expeditions', 'missions');
     const btn = document.querySelector(`[data-resume-exp="${window.__expId}"]`);
     if (!btn) return 'pas de bouton Reprendre';
     btn.click();

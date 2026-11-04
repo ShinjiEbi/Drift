@@ -2,7 +2,7 @@
 /* global document, window */
 // tools/regress/tactile.mjs — non-régression du constat F11 (cibles tactiles).
 // Usage : node tools/regress/tactile.mjs
-// À 360 px : les actions principales font au moins 44 px de haut ; les petits
+// À 360 px : les actions principales (vues, modale, menu ⋯) font au moins 44 px ; les petits
 // boutons d'en-tête de carte ont une zone de toucher d'au moins 44 px
 // (vérifiée par elementFromPoint au-dessus et au-dessous du bouton).
 import { loadPlaywright, startServer, reporter, openGame, fillColony } from './_ui.mjs';
@@ -23,11 +23,11 @@ try {
     // Une recherche et une fabrication en cours pour afficher leurs boutons « Annuler »
     S.research.push({ id: 'r_t', techId: Object.keys((await import('./src/catalog.js')).TECH_TREE)[0], doneMin: 0, totalMin: 600 });
     S.fabrication.push({ id: 'f_t', fabId: Object.keys((await import('./src/catalog.js')).FABRICATIONS)[0], doneMin: 0, totalMin: 600 });
-    const MAIN = ['footer.actions button', 'nav.tabs button', 'nav.subtabs button', '.module button.build', '.person .actions-row button',
-      '.assign-toolbar .quick-action', '.cta-btn', '.back-btn'];
+    const MAIN = ['nav.tabs button', 'nav.subtabs button', '.module button.build', '.mod-more', '.person .actions-row button', '.pc-summary',
+      '.assign-toolbar .quick-action', '.cta-btn', '.back-btn', '.attn-btn', '.obj-btn', '.act-go', '.chip', '.care-btn', '.cc-btn', '.bp-cancel', '#menuBtn'];
     const SMALL = ['.staff-panel .sp-link', '.research-active .ra-cancel', '.fab-active .fa-cancel'];
-    const views = [['overview'], ['modules', 'construction'], ['modules', 'assignments'], ['crew', 'recruit'], ['crew', 'soins'],
-      ['galaxy', 'fleet'], ['stocks', 'research'], ['stocks', 'workshop']];
+    const views = [['base', 'afaire'], ['base', 'construction'], ['base', 'postes'], ['equipage', 'personnel'], ['equipage', 'recrutement'], ['equipage', 'soins'],
+      ['expeditions', 'vaisseaux'], ['recits', 'journal'], ['labo', 'recherche'], ['labo', 'atelier']];
     const tooSmall = new Map();
     const hitBad = new Map();
     for (const [tab, sub] of views) {
@@ -55,17 +55,24 @@ try {
       }
     }
     // Modale : boutons et éléments de sélection
-    ui.selectTab('modules'); ui.selectSubtab('modules', 'assignments');
+    ui.gotoView('base', 'postes');
     document.querySelector('#assignList .slot-row')?.click();
     for (const el of document.querySelectorAll('#modal button, #modal .assign-pick-item')) {
       const h = el.getBoundingClientRect().height;
       if (h < 43.5) tooSmall.set('modale ' + (el.className || el.tagName), Math.round(h));
     }
     document.querySelector('#modalBg').classList.remove('show');
+    // Menu « ⋯ » : tous ses boutons et interrupteurs
+    ui.openMenu();
+    for (const el of document.querySelectorAll('#menuSheet button')) {
+      const h = el.getBoundingClientRect().height;
+      if (h < 43.5) tooSmall.set('menu ' + (el.id || el.className || el.tagName), Math.round(h));
+    }
+    ui.closeMenu();
     window.scrollTo(0, 0);
     return { tooSmall: [...tooSmall].map(([k, v]) => `${k}: ${v}px`), hitBad: [...hitBad].map(([k, v]) => `${k}: ${v}`) };
   });
-  t.check(r.tooSmall.length === 0, 'actions principales ≥ 44 px de haut', r.tooSmall.join(' ; '));
+  t.check(r.tooSmall.length === 0, 'actions principales (vues, modale, menu) ≥ 44 px de haut', r.tooSmall.join(' ; '));
   t.check(r.hitBad.length === 0, 'petits boutons : zone de toucher ≥ 44 px', r.hitBad.join(' ; '));
 } catch (e) {
   t.fail('exception du test : ' + e.message);

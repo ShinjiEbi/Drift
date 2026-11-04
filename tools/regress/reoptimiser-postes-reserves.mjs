@@ -30,7 +30,7 @@ const r = await page.evaluate(async () => {
   return { x: x.id, slot: globalThis.__slot, before };
 });
 console.log('X en expédition, poste réservé :', JSON.stringify(r.before));
-await page.evaluate(() => { document.querySelector('nav.tabs button[data-tab="modules"]').click(); document.querySelector('[data-subtab-mod="assignments"]').click(); });
+await page.evaluate(() => { document.querySelector('nav.tabs button[data-tab="base"]').click(); document.querySelector('[data-subtab="postes"]').click(); });
 await page.waitForTimeout(200);
 await page.click('#optimizeAssignBtn');
 await page.waitForTimeout(200);
