@@ -264,3 +264,9 @@ export function accord(m, masc, fem, neutre) {
 
 // Pluriel simple : plur(2, 'colon') → « 2 colons »
 export const plur = (n, sing, pl = sing + 's') => `${n} ${Math.abs(n) > 1 ? pl : sing}`;
+
+// État d'un fil rouge (arc) : App.getArcState si présent, sinon lecture directe
+export function arcState(id) {
+  const st = appCall('getArcState', [id], null);
+  return (st && typeof st === 'object') ? st : (S?.arcs?.[id] || { unlocked: false, completedSteps: [], rewardClaimed: false });
+}

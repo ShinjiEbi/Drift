@@ -4,7 +4,8 @@
 import { $ } from '../util.js';
 import { RES_LABELS, RESOURCES, SKILL_LIST, SKILL_LABELS } from '../constants.js';
 import { MODULES, MODULE_JOBS, TECH_TREE, FABRICATIONS } from '../catalog.js';
-import { CHRONICLES } from '../chronicles.js';
+// Imports d'espace de noms : un export renommé par le moteur narratif ne casse pas le chargement
+import * as Chron from '../chronicles.js';
 import { S, computeRates, capOf, buildTime, aliveCrew, startBuild } from '../state.js';
 import {
   moduleEfficiency, jobsForModule, jobKey, isEligibleForJob, jobReqText,
@@ -54,7 +55,7 @@ export function chroniclesList() {
     for (const b of sys.bodies || []) {
       const ch = b.chronicle;
       if (!ch?.id) continue;
-      const def = CHRONICLES[ch.id];
+      const def = Chron.CHRONICLES?.[ch.id];
       const episodes = def?.episodes?.length || 0;
       const onSite = (S.expeditions || []).some(e => e.bodyId === b.id);
       out.push({

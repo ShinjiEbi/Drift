@@ -6,15 +6,15 @@ import { RES_LABELS, BUILD_TIME_MULT } from '../constants.js';
 import {
   ITEMS, ITEM_TYPES, ITEM_ORIGINS, BLUEPRINTS, TECH_TREE, TECH_BRANCHES, FABRICATIONS, MODULES,
 } from '../catalog.js';
-import { ARCS } from '../data-arcs-factions.js';
+import * as ArcsData from '../data-arcs-factions.js';
 import { S } from '../state.js';
 import {
   isExoticUnlocked, isTechCompleted, isTechResearching, canResearch, startResearch, cancelResearch,
   laboratoryBonuses, workshopBonuses, workshopSlots, isFabAvailable, canFabricate, startFabrication,
-  cancelFabrication, inventoryCount, getArcState,
+  cancelFabrication, inventoryCount,
 } from '../app.js';
 import {
-  appCall, hasApp, esc, fmt, fmtDuree, setHTML, progressHTML, emptyState, filterChips, getFilter, dayOf, plur,
+  appCall, hasApp, esc, fmt, fmtDuree, setHTML, progressHTML, emptyState, filterChips, getFilter, dayOf, plur, arcState,
 } from './common.js';
 import { toast, render, confirmModal, markCancelled } from '../ui.js';
 import { renderStaffPanel } from './equipage.js';
@@ -39,7 +39,7 @@ function unmetPrereqs(techId) {
   for (const t of tech.prereq?.tech || []) if (!isTechCompleted(t)) out.push(TECH_TREE[t]?.nom || t);
   if (tech.prereq?.blueprint && !S.discoveries?.[tech.prereq.blueprint]) out.push(`schéma ${bpNom(tech.prereq.blueprint)}`);
   if (tech.prereq?.requireAnyAlienBlueprint && !isExoticUnlocked() && !out.includes('un schéma alien')) out.push('un schéma alien');
-  if (tech.prereq?.requireArc && !getArcState(tech.prereq.requireArc).rewardClaimed) out.push(`fil rouge « ${ARCS[tech.prereq.requireArc]?.nom || tech.prereq.requireArc} » achevé`);
+  if (tech.prereq?.requireArc && !arcState(tech.prereq.requireArc).rewardClaimed) out.push(`fil rouge « ${ArcsData.ARCS?.[tech.prereq.requireArc]?.nom || tech.prereq.requireArc} » achevé`);
   return out;
 }
 

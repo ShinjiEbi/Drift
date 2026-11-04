@@ -13,7 +13,7 @@
 // qu'il n'est pas achevé. Lecture seule : rien n'est modifié dans S.
 
 import { MODULES, TECH_TREE } from './catalog.js';
-import { ARCS } from './data-arcs-factions.js';
+import * as ArcsData from './data-arcs-factions.js';
 import { computeRates, crewCap, aliveCrew } from './state.js';
 import { fmtDuree } from './util.js';
 import * as App from './app.js';
@@ -178,7 +178,7 @@ function hints(S) {
 
 // ---- Étape courante du fil rouge « L'Avant-poste » ----
 function arcObjective(S) {
-  const arc = ARCS[ARC_ID];
+  const arc = ArcsData.ARCS?.[ARC_ID];
   if (!arc) return null;
   const st = S.arcs?.[ARC_ID] || { completedSteps: [] };
   const done = Array.isArray(st.completedSteps) ? st.completedSteps : [];

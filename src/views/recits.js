@@ -4,11 +4,10 @@
 
 import { $ } from '../util.js';
 import { BLUEPRINTS, TECH_TREE } from '../catalog.js';
-import { ARCS } from '../data-arcs-factions.js';
+import * as ArcsData from '../data-arcs-factions.js';
 import { S, aliveCrew } from '../state.js';
-import { getArcState } from '../app.js';
 import {
-  esc, fmtDuree, setHTML, safeHTML, emptyState, filterChips, getFilter, calendar, pad2, plur,
+  esc, fmtDuree, setHTML, safeHTML, emptyState, filterChips, getFilter, calendar, pad2, plur, arcState,
 } from './common.js';
 import { chroniclesList } from './base.js';
 
@@ -102,8 +101,9 @@ export function renderArcs() {
   const sub = $('#arcsSub');
   const content = $('#arcsContent');
   if (!content) return;
+  const ARCS = ArcsData.ARCS || {};
   const ids = Object.keys(ARCS);
-  const states = Object.fromEntries(ids.map(id => [id, getArcState(id)]));
+  const states = Object.fromEntries(ids.map(id => [id, arcState(id)]));
   const unlocked = ids.filter(id => states[id].unlocked).length;
   const completed = ids.filter(id => states[id].rewardClaimed).length;
   setHTML(sub, `<b>${unlocked}/${ids.length}</b> fil${unlocked > 1 ? 's' : ''} ouvert${unlocked > 1 ? 's' : ''} · <b>${completed}</b> achevé${completed > 1 ? 's' : ''}`);
