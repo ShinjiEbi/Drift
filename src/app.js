@@ -4219,9 +4219,26 @@ function onArrival(exp) {
       delete exp.chronicleRef;
     }
   }
+  // Site déjà fouillé récemment : butin réduit pour toute la mission (hors chronique)
+  exp.lootMult = isChronicleExpedition(exp) ? 1 : bodyLootMult(body);
+  if (exp.lootMult < 1) {
+    exp.accumulatedLog.push(`Site déjà fouillé récemment : butin réduit (≈${Math.round(exp.lootMult * 100)} %), aucun gain de réputation.`);
+  }
   // Active la première scène
   exp.sceneIdx = 0;
   exp.awaitingChoice = true;
+}
+
+// ---- Épuisement des sites pillés ----
+// Un site fouillé ne rend que LOOT_DEPLETED_MULT de son butin, puis se
+// reconstitue linéairement en LOOT_RECOVERY_DAYS jours de jeu.
+const LOOT_DEPLETED_MULT = 0.25;
+const LOOT_RECOVERY_DAYS = 30;
+function bodyLootMult(body) {
+  if (!body || typeof body.lootedAt !== 'number') return 1;
+  const days = Math.max(0, (S.meta.gameMin - body.lootedAt) / 1440);
+  if (days >= LOOT_RECOVERY_DAYS) return 1;
+  return LOOT_DEPLETED_MULT + (1 - LOOT_DEPLETED_MULT) * days / LOOT_RECOVERY_DAYS;
 }
 
 // Départ après scènes : finit la mission et programme le retour
@@ -4231,7 +4248,12 @@ function startReturn(exp) {
   exp.awaitingChoice = false;
   const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
   const body = sys?.bodies.find(b => b.id === exp.bodyId);
-  if (body) body.looted = true;
+  if (body) {
+    body.looted = true;
+    // Le site est épuisé s'il a été fouillé (les épisodes de chronique ne comptent pas)
+    const tookSomething = Object.values(exp.accumulatedLoot).some(v => v > 0) || exp.accumulatedItems.length > 0;
+    if (!isChronicleExpedition(exp) && tookSomething) body.lootedAt = S.meta.gameMin;
+  }
   // Calcul résumé pour le journal
   const lootSummary = Object.entries(exp.accumulatedLoot).map(([k,v]) => `${v} ${RES_LABELS[k]}`).join(', ') || 'rien';
   const itemsSummary = exp.accumulatedItems.length > 0
@@ -4577,6 +4599,9 @@ export function playChoice(expId, choiceIdx) {
     outcome = success ? choice.risky.success : choice.risky.fail;
     exp.accumulatedLog.push(`Jet ${label} : ${roll}${bonus >= 0 ? '+' : ''}${bonus} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
   }
+  // Site déjà fouillé : butin réduit (jamais pour les scènes de chronique)
+  const lootMult = isChronicleScene(scene) ? 1 : (typeof exp.lootMult === 'number' ? exp.lootMult : 1);
+  const depletionRng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|epuise`);
 
   // Applique l'outcome
   if (outcome === 'next' || !outcome) {
@@ -4594,12 +4619,12 @@ export function playChoice(expId, choiceIdx) {
     for (const k in outcome.loot) {
       // Les montants négatifs ne sont pas des gains (un coût s'exprime avec consume)
       if (!(outcome.loot[k] > 0)) continue;
-      const amount = Math.floor(outcome.loot[k] * alienMult);
+      const amount = Math.floor(outcome.loot[k] * alienMult * lootMult);
       exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + amount;
     }
     // Sur ruines alien, une fraction des datacubes obtenus est aussi crédité en datacubes_alien
     if (isAlienRuins && outcome.loot.datacubes > 0) {
-      const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * 0.4);
+      const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * lootMult * 0.4);
       exp.accumulatedAlienDatacubes = (exp.accumulatedAlienDatacubes || 0) + alienShare;
     }
     // Cap par cargo du vaisseau
@@ -4612,12 +4637,17 @@ export function playChoice(expId, choiceIdx) {
       exp.accumulatedLog.push("Cargaison à saturation : la suite ne pourra pas être emportée.");
     }
   }
+  // Site déjà fouillé : les objets et schémas ne se retrouvent qu'avec une chance réduite
+  const keepFinds = lootMult >= 1 || depletionRng() < lootMult;
+  if (!keepFinds && (outcome.item || outcome.blueprint)) {
+    exp.accumulatedLog.push("Quelqu'un est déjà passé par là : il ne reste rien de précieux.");
+  }
   // Item
-  if (outcome.item) {
+  if (outcome.item && keepFinds) {
     exp.accumulatedItems.push(outcome.item);
   }
   // Blueprint : tire un schéma de l'origine demandée et l'ajoute aux items + bibliothèque
-  if (outcome.blueprint) {
+  if (outcome.blueprint && keepFinds) {
     const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|bp`);
     let originPool;
     if (outcome.blueprint === 'auto') {
@@ -4665,7 +4695,10 @@ export function playChoice(expId, choiceIdx) {
   // Réputation faction (0.21)
   if (outcome.reputation) {
     const faction = factionForExpedition(exp);
-    if (faction) {
+    if (faction && outcome.reputation > 0 && lootMult < 1) {
+      // Revisite d'un site récemment fouillé : pas de réputation à regagner
+      exp.accumulatedLog.push(`${faction.name} : déjà rencontrés récemment, réputation inchangée.`);
+    } else if (faction) {
       adjustReputation(faction.id, outcome.reputation);
       exp.accumulatedLog.push(`${faction.name} : réputation ${outcome.reputation > 0 ? '+' : ''}${outcome.reputation}.`);
     }
