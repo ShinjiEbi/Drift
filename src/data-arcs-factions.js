@@ -4,6 +4,7 @@
 import { S, aliveCrew } from './state.js';
 import { BLUEPRINTS } from './catalog.js';
 import { isTechCompleted } from './app.js';
+import { PACING } from './constants.js';
 
 export const ARCS = {
   // ===============================================================
@@ -242,9 +243,9 @@ export const FACTION_TYPES = {
       { resource: 'metal',    amount: 50,  repGain: 8,  label: 'Matériaux' },
       { resource: 'biomasse', amount: 80,  repGain: 14, label: 'Provisions' }
     ],
-    giftCooldown: 3 * 24 * 60,   // 3 jours jeu entre cadeaux
+    giftCooldown: PACING.GIFT_COOLDOWN,   // entre deux cadeaux (12 h réelles)
     // Don d'alliance (réputation ≥ 75)
-    allianceGift: { resource: 'metal', amount: 40, interval: 20 * 24 * 60 }
+    allianceGift: { resource: 'metal', amount: 40, interval: 3 * PACING.JOUR }
   },
   alien_a: {
     label: "Alien-A · Cristalline",
@@ -264,8 +265,8 @@ export const FACTION_TYPES = {
       { resource: 'cristal',   amount: 40,  repGain: 9,  label: 'Cristaux' },
       { resource: 'datacubes', amount: 35,  repGain: 15, label: 'Archives' }
     ],
-    giftCooldown: 3 * 24 * 60,
-    allianceGift: { resource: 'datacubes', amount: 20, interval: 18 * 24 * 60 }
+    giftCooldown: PACING.GIFT_COOLDOWN,
+    allianceGift: { resource: 'datacubes', amount: 20, interval: 3 * PACING.JOUR }
   },
   alien_b: {
     label: "Alien-B · Organique",
@@ -285,8 +286,8 @@ export const FACTION_TYPES = {
       { resource: 'biomasse', amount: 90,  repGain: 15, label: 'Provisions' },
       { resource: 'datacubes',amount: 20,  repGain: 6,  label: 'Données biologiques' }
     ],
-    giftCooldown: 3 * 24 * 60,
-    allianceGift: { resource: 'biomasse', amount: 60, interval: 18 * 24 * 60 }
+    giftCooldown: PACING.GIFT_COOLDOWN,
+    allianceGift: { resource: 'biomasse', amount: 60, interval: 3 * PACING.JOUR }
   },
   fusion: {
     label: "Hybride",
@@ -305,8 +306,8 @@ export const FACTION_TYPES = {
       { resource: 'biomasse',  amount: 50,  repGain: 9,  label: 'Provisions' },
       { resource: 'metal',     amount: 40,  repGain: 6,  label: 'Matériaux' }
     ],
-    giftCooldown: 3 * 24 * 60,
-    allianceGift: { resource: 'cristal', amount: 30, interval: 22 * 24 * 60 }
+    giftCooldown: PACING.GIFT_COOLDOWN,
+    allianceGift: { resource: 'cristal', amount: 30, interval: 4 * PACING.JOUR }
   }
 };
 

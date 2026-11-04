@@ -10,7 +10,11 @@
 //   stepBonus(l) = 1.0 si l≤2, 1.2 si l∈[3..4], 1.4 si l∈[5..6], 1.6 si l≥7
 //   → monter en niveau devient économiquement intéressant à chaque palier
 // Ces formules sont utilisées dans les cost: et prod: ci-dessous.
+import { PACING } from './constants.js';
+
 const triCost = l => l * (l + 1) / 2;
+// Durée d'un chantier (secondes réelles) : base × croissance^(niveau − 1), cf. PACING.
+const buildCurve = id => l => Math.round((PACING.BUILD_BASE[id] ?? PACING.BUILD_BASE_DEFAULT) * Math.pow(PACING.BUILD_GROWTH, l - 1));
 const stepBonus = l => l <= 2 ? 1.0 : l <= 4 ? 1.2 : l <= 6 ? 1.4 : 1.6;
 
 export const MODULES = {
@@ -22,27 +26,33 @@ export const MODULES = {
     desc: "Cœur logique de l'avant-poste. Sa survie conditionne la nôtre.",
     maxLevel: 5,
     cost: l => ({ metal: 80*triCost(l), cristal: 40*triCost(l) }),
-    time: l => 8*l,
+    time: buildCurve('commandement'),
     prereq: () => ({}),
-    effect: () => "Débloque les autres modules. Niveau requis pour les paliers."
+    // V1 : un filet de métal et de cristal (récupération, recyclage) — aucune
+    // ouverture ne peut plus bloquer la partie faute de mine. Pas d'entretien.
+    // prodFixed : unités par HEURE RÉELLE (non indexées sur PROD_MULT, sans personnel).
+    prodFixed: () => ({ metal: 250, cristal: 150 }),
+    effect: () => `+250 métal · +150 cristal /h (récupération) · débloque les autres modules`
   },
   generateur_solaire: {
     nom: 'Générateur solaire',
     desc: "Voilures photovoltaïques tendues sur la roche. Silence et lumière.",
     maxLevel: 8,
     cost: l => ({ metal: Math.round(30*triCost(l)), cristal: Math.round(15*triCost(l)) }),
-    time: l => 5*l,
+    time: buildCurve('generateur_solaire'),
     prereq: l => l===1 ? {} : { commandement: 1 },
     // 0.25 : énergie de base relevée +33% (8 au lieu de 6)
     prod: l => ({ energie: Math.round((8*l + 2*(l-1)) * stepBonus(l)) }),
-    effect: l => `+${Math.round((8*l + 2*(l-1)) * stepBonus(l))} énergie/min`
+    // V1 : chaque niveau agrandit les accumulateurs
+    capBonus: l => ({ energie: 80*l }),
+    effect: l => `+${Math.round((8*l + 2*(l-1)) * stepBonus(l))} énergie/min · +${80*l} stockage d'énergie`
   },
   mine_surface: {
     nom: 'Mine de surface',
     desc: "Extraction des veines affleurantes. Bruit constant, vibrations.",
     maxLevel: 8,
     cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(20*triCost(l)) }),
-    time: l => 6*l,
+    time: buildCurve('mine_surface'),
     prereq: () => ({ commandement: 1 }),
     // 0.25 : prod cristal doublée (4 au lieu de 2)
     prod: l => ({
@@ -50,7 +60,9 @@ export const MODULES = {
       cristal: Math.round(4*l * stepBonus(l))
     }),
     upkeep: l => ({ energie: 2*l }),
-    effect: l => `+${Math.round(5*l * stepBonus(l))} métal · +${Math.round(4*l * stepBonus(l))} cristal /min · −${2*l} énergie`
+    // V1 : chaque niveau ajoute des aires de stockage du minerai
+    capBonus: l => ({ metal: 200*l, cristal: 150*l }),
+    effect: l => `+${Math.round(5*l * stepBonus(l))} métal · +${Math.round(4*l * stepBonus(l))} cristal /min · −${2*l} énergie · stockage +${200*l} métal, +${150*l} cristal`
   },
   hydroponie: {
     nom: 'Hydroponie',
@@ -62,25 +74,27 @@ export const MODULES = {
       cristal: Math.round(30*triCost(l)),
       biomasse: l > 1 ? 10*(l-1) : 0
     }),
-    time: l => 7*l,
+    time: buildCurve('hydroponie'),
     prereq: () => ({ commandement: 1 }),
     // 0.27.2 : prod doublée (8*l au lieu de 4*l) pour qu'hydroponie niv 1
     // soit autosuffisante même sans staff affecté (sinon JOB_BASE_FRACTION 30%
     // la rend déficitaire vs upkeep habitat).
     prod: l => ({ biomasse: Math.round(8*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 3*l }),
-    effect: l => `+${Math.round(8*l * stepBonus(l))} biomasse/min · −${3*l} énergie`
+    capBonus: l => ({ biomasse: 100*l }),
+    effect: l => `+${Math.round(8*l * stepBonus(l))} biomasse/min · −${3*l} énergie · stockage +${100*l} biomasse`
   },
   habitat: {
     nom: 'Habitat',
     desc: "Couchettes empilées, cloisons fines, vapeurs de café synthétique. S'agrandit et se densifie à mesure que la colonie prospère.",
     maxLevel: 8,
     cost: l => ({ metal: Math.round(90*triCost(l)), cristal: Math.round(40*triCost(l)), biomasse: 5*l }),
-    time: l => 9*l,
+    time: buildCurve('habitat'),
     prereq: () => ({ commandement: 1 }),
     capCrew: l => [0, 8, 20, 36, 56, 80, 108, 140, 176][l] || 0,
+    capBonus: l => ({ metal: 100*l, biomasse: 50*l }),   // V1 : réserves et magasins
     upkeep: l => ({ energie: 1*l, biomasse: 2*l }),
-    effect: l => `+${[0,8,20,36,56,80,108,140,176][l]||0} places · −${1*l} énergie · −${2*l} biomasse`
+    effect: l => `+${[0,8,20,36,56,80,108,140,176][l]||0} places · stockage +${100*l} métal, +${50*l} biomasse · −${1*l} énergie · −${2*l} biomasse`
   },
   laboratoire: {
     nom: 'Laboratoire',
@@ -88,20 +102,21 @@ export const MODULES = {
     maxLevel: 6,
     // 0.25 : coût cristal divisé par 2 (50*tri au lieu de 100*l²)
     cost: l => ({ metal: Math.round(100*l), cristal: Math.round(50*triCost(l)), datacubes: l>1 ? 5*l : 0 }),
-    time: l => 12*l,
+    time: buildCurve('laboratoire'),
     prereq: () => ({ commandement: 2 }),
     // 0.25 : prod datacubes augmentée 50% (1.5*l au lieu de 1*l brut → 0.75 effectif)
     prod: l => ({ datacubes: Math.round(1.5*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 5*l }),
+    capBonus: l => ({ datacubes: 60*l }),
     flag: 'recherche',
-    effect: l => `+${Math.round(1.5*l * stepBonus(l))} datacube/min · −${5*l} énergie · débloque la recherche`
+    effect: l => `+${Math.round(1.5*l * stepBonus(l))} datacube/min · −${5*l} énergie · stockage +${60*l} datacubes · débloque la recherche`
   },
   atelier: {
     nom: 'Atelier',
     desc: "Imprimantes, étaux, copeaux. Tout ce qui se casse finit ici.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(150*l), cristal: Math.round(60*l) }),
-    time: l => 10*l,
+    time: buildCurve('atelier'),
     prereq: () => ({ commandement: 2 }),
     upkeep: l => ({ energie: 3*l }),
     flag: 'fabrication',
@@ -112,7 +127,7 @@ export const MODULES = {
     desc: "Voûte ouverte sur le ciel. Le sas grince à chaque cycle.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(200*l), cristal: Math.round(80*l), energie: Math.round(30*l) }),
-    time: l => 15*l,
+    time: buildCurve('hangar'),
     prereq: () => ({ commandement: 2, atelier: 1 }),
     upkeep: l => ({ energie: 2*l }),
     flag: 'expedition',
@@ -123,7 +138,7 @@ export const MODULES = {
     desc: "Paraboles enchâssées dans le permafrost. Captent ce qu'on n'attendait pas.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(80*l), cristal: Math.round(100*l) }),
-    time: l => 11*l,
+    time: buildCurve('antenne'),
     prereq: () => ({ commandement: 1 }),
     upkeep: l => ({ energie: 2*l }),
     flag: 'scan',
@@ -134,7 +149,7 @@ export const MODULES = {
     desc: "Émetteur longue portée diffusant les conditions d'engagement. Les candidats se signalent par message-relais.",
     maxLevel: 6,
     cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(30*triCost(l)), energie: Math.round(10*l) }),
-    time: l => 8*l,
+    time: buildCurve('balise_recrutement'),
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 1*l }),
     flag: 'recrutement',
@@ -145,7 +160,7 @@ export const MODULES = {
     desc: "Blocs de logements modulaires, espaces communs, jardins sous dôme pressurisé. Quand une base devient une vraie colonie.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(300*triCost(l)), cristal: Math.round(120*triCost(l)), biomasse: Math.round(20*l) }),
-    time: l => 20*l,
+    time: buildCurve('quartiers_residentiels'),
     prereq: () => ({ commandement: 2, habitat: 3 }),
     capCrew: l => [0, 30, 65, 105, 150, 200][l] || 0,
     upkeep: l => ({ energie: 3*l, biomasse: 5*l }),
@@ -156,7 +171,7 @@ export const MODULES = {
     desc: "Salles de simulation, bibliothèque de protocoles, mannequins d'exercice. Les colons en sortent meilleurs ou cassés.",
     maxLevel: 4,
     cost: l => ({ metal: Math.round(120*l), cristal: Math.round(80*l), datacubes: l>1 ? 5*l : 0 }),
-    time: l => 14*l,
+    time: buildCurve('formation'),
     prereq: () => ({ commandement: 2, habitat: 1 }),
     upkeep: l => ({ energie: 3*l, biomasse: 1*l }),
     flag: 'formation',
@@ -167,7 +182,7 @@ export const MODULES = {
     desc: "Lits suspendus, scanners portables, odeur d'antiseptique. Le silence y est différent.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(100*l), cristal: Math.round(70*l), biomasse: Math.round(10*l) }),
-    time: l => 12*l,
+    time: buildCurve('infirmerie'),
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 2*l, biomasse: 1*l }),
     flag: 'soins',
@@ -180,7 +195,7 @@ export const MODULES = {
     desc: "Salle des Accords, traducteurs cristallins, archives protocolaires. Le seuil où les factions s'écoutent vraiment.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(150*triCost(l)), cristal: Math.round(120*triCost(l)), biomasse: Math.round(30*l) }),
-    time: l => 14*l,
+    time: buildCurve('ambassade'),
     prereq: () => ({ commandement: 2, habitat: 1 }),
     upkeep: l => ({ energie: 3*l, biomasse: 1*l }),
     flag: 'diplomatie',
@@ -212,7 +227,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_mining_advanced',
     cost: l => ({ metal: Math.round(800*triCost(l)/3), cristal: Math.round(400*triCost(l)/3), energie: Math.round(100*l) }),
-    time: l => 24*l,
+    time: buildCurve('mine_profonde'),
     prereq: () => ({ commandement: 3, mine_surface: 3, atelier: 1 }),
     // Très forte production, lourdement coûteuse en énergie/biomasse
     prod: l => ({
@@ -229,7 +244,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_fusion',
     cost: l => ({ metal: Math.round(1000*triCost(l)/3), cristal: Math.round(800*triCost(l)/3), datacubes: 30*l }),
-    time: l => 36*l,
+    time: buildCurve('reacteur_fusion'),
     prereq: () => ({ commandement: 3, generateur_solaire: 4 }),
     // Énorme production d'énergie, demande biomasse (algues pour eau lourde) et cristal (réfrigérant)
     prod: l => ({ energie: Math.round(50*l * stepBonus(l)) }),
@@ -243,7 +258,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_bioreacteur',
     cost: l => ({ metal: Math.round(600*triCost(l)/3), cristal: Math.round(500*triCost(l)/3), biomasse: 30*l }),
-    time: l => 30*l,
+    time: buildCurve('bioreacteur'),
     prereq: () => ({ commandement: 3, hydroponie: 3, laboratoire: 2 }),
     // Production hybride biomasse + datacubes
     prod: l => ({
@@ -260,26 +275,25 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_stockage_quantique',
     cost: l => ({ metal: Math.round(1200*l), cristal: Math.round(1000*l), datacubes: 50*l }),
-    time: l => 48*l,
+    time: buildCurve('synthetiseur_quantique'),
     prereq: () => ({ commandement: 4, atelier: 3, laboratoire: 3 }),
     // Pas de prod directe, mais débloque la conversion de ressources via UI
     upkeep: l => ({ energie: 20*l }),
     flag: 'synthese',
     effect: l => `Convertit ressources via UI dédiée · −${20*l} énergie`
   },
+  // V1 : module de base (plus de tech requise) — le stockage n'est jamais un mur.
   silo_cryogenique: {
     nom: 'Silo cryogénique',
     desc: "Cuves scellées à atmosphère contrôlée. La conservation devient une science exacte.",
     maxLevel: 4,
-    tier: 2,
-    requireTech: 'tech_stockage_cryo',
     cost: l => ({ metal: Math.round(400*triCost(l)/3), cristal: Math.round(200*triCost(l)/3) }),
-    time: l => 18*l,
+    time: buildCurve('silo_cryogenique'),
     prereq: () => ({ commandement: 2 }),
     // Bonus de capacité de stockage
-    capBonus: l => ({ metal: 500*l, cristal: 400*l, biomasse: 200*l }),
+    capBonus: l => ({ metal: 1500*l, cristal: 1200*l, biomasse: 400*l }),
     upkeep: l => ({ energie: 2*l }),
-    effect: l => `+${500*l} cap métal · +${400*l} cap cristal · +${200*l} cap biomasse · −${2*l} énergie`
+    effect: l => `+${1500*l} cap métal · +${1200*l} cap cristal · +${400*l} cap biomasse · −${2*l} énergie`
   },
   memoire_cristalline: {
     nom: 'Mémoire cristalline',
@@ -288,7 +302,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_memoire_cristalline',
     cost: l => ({ metal: Math.round(500*triCost(l)/3), cristal: Math.round(600*triCost(l)/3), datacubes_alien: 20*l }),
-    time: l => 30*l,
+    time: buildCurve('memoire_cristalline'),
     prereq: () => ({ commandement: 3, laboratoire: 3 }),
     // Bonus de capacité datacubes + bonus de recherche (effet géré dans techEffects)
     capBonus: l => ({ datacubes: 200*l }),
@@ -298,6 +312,19 @@ export const MODULES = {
   }
 };
 
+
+// V1 : les niveaux élevés coûtent proportionnellement plus cher (× PACING.COST_GROWTH
+// par niveau au-delà du premier) : la production croît moins vite que les coûts et
+// la progression s'étale sur des semaines. Montants arrondis à 5.
+for (const def of Object.values(MODULES)) {
+  const baseCost = def.cost;
+  def.cost = l => {
+    const f = Math.pow(PACING.COST_GROWTH, Math.max(0, l - 1));
+    const out = {};
+    for (const [k, v] of Object.entries(baseCost(l))) out[k] = v > 0 ? Math.max(1, Math.round(v * f / 5) * 5) : v;
+    return out;
+  };
+}
 
 // Définition des postes par bâtiment, par niveau.
 // Format : { roleKey, req: {skill?:{key,min}, trait?:'..'} }
@@ -1184,11 +1211,11 @@ export const TECH_TREE = {
     effects:{ baseFractionDelta: 0.15 },
     desc:"Systèmes auto-régulés. Plancher des postes vacants relevé de 15 points (30% → 45% du rendement), recherche et atelier sans personnel compris." },
   tech_mining_advanced:    { branch:'ingenierie', tier:3, nom:"Extraction profonde",
-    cost:{ datacubes:120, time: 720 }, prereq:{ tech:['tech_metallurgie'], blueprint:'bp_extraction_avancee' },
+    cost:{ datacubes:120, time: 720 }, prereq:{ tech:['tech_metallurgie'] },
     effects:{ moduleMaxLevelDelta:{ mine_surface: 1 } },
     desc:"Atteint les couches géologiques profondes. Mine de surface : niveau max +1 (jusqu'à 9)." },
   tech_stockage_cryo:      { branch:'ingenierie', tier:3, nom:"Stockage cryogénique",
-    cost:{ datacubes:100, time: 600 }, prereq:{ tech:['tech_circuiterie'], blueprint:'bp_module_stockage' },
+    cost:{ datacubes:100, time: 600 }, prereq:{ tech:['tech_circuiterie'] },
     effects:{ capacityMult:{ metal:1.5, cristal:1.5, biomasse:1.5 } },
     desc:"Cuves cryogéniques scellées. Capacité max +50% pour métal, cristal et biomasse." },
   tech_blindage:           { branch:'ingenierie', tier:3, nom:"Blindage stratifié",
@@ -2888,27 +2915,30 @@ export const SCENES = [
 
 // Traitements : un statut peut avoir plusieurs traitements selon le palier de l'infirmerie.
 // chaque traitement : { nom, durationMin, cost, requiresMedSkill }
+// Durées en secondes réelles (V1). Sans médecin plus compétent ni bonus d'infirmerie.
+// V1 : les soins vitaux ne coûtent que de la biomasse (les datacubes, rares, partent
+// en recherche : un blessé ne doit pas mourir faute de données).
 export const TREATMENTS = {
   blessure_legere: [
-    { nom: "Sutures et repos", durationMin: 60*4, cost: { biomasse:5 }, requiresMedSkill: 0 }
+    { nom: "Sutures et repos", durationMin: 40*60, cost: { biomasse:5 }, requiresMedSkill: 0 }
   ],
   blessure_grave: [
-    { nom: "Chirurgie d'urgence", durationMin: 60*12, cost: { biomasse:20, datacubes:5 }, requiresMedSkill: 2 }
+    { nom: "Chirurgie d'urgence", durationMin: 2*3600, cost: { biomasse:25 }, requiresMedSkill: 2 }
   ],
   infection: [
-    { nom: "Antibiotiques", durationMin: 60*8, cost: { biomasse:10 }, requiresMedSkill: 1 }
+    { nom: "Antibiotiques", durationMin: 80*60, cost: { biomasse:10 }, requiresMedSkill: 1 }
   ],
   pathogene_alien: [
-    { nom: "Antitoxine xeno + isolation", durationMin: 60*16, cost: { biomasse:15, datacubes:10 }, requiresMedSkill: 3, requiresQuarantine: true }
+    { nom: "Antitoxine xeno + isolation", durationMin: 160*60, cost: { biomasse:30 }, requiresMedSkill: 3, requiresQuarantine: true }
   ],
   trauma_psy: [
-    { nom: "Thérapie longue", durationMin: 60*36, cost: { datacubes:5 }, requiresMedSkill: 2 }
+    { nom: "Thérapie longue", durationMin: 6*3600, cost: { biomasse:10 }, requiresMedSkill: 2 }
   ],
   parasite: [
-    { nom: "Extraction chirurgicale", durationMin: 60*12, cost: { biomasse:15, datacubes:5 }, requiresMedSkill: 3 }
+    { nom: "Extraction chirurgicale", durationMin: 2*3600, cost: { biomasse:20 }, requiresMedSkill: 3 }
   ],
   mutation: [
-    { nom: "Thérapie génique", durationMin: 60*24, cost: { datacubes:20, biomasse:10 }, requiresMedSkill: 4 }
+    { nom: "Thérapie génique", durationMin: 4*3600, cost: { datacubes:20, biomasse:10 }, requiresMedSkill: 4 }
   ]
 };
 
