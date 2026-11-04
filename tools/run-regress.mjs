@@ -2,6 +2,7 @@
 // tools/run-regress.mjs — lance tous les tests de non-régression de tools/regress/.
 // Usage : node tools/run-regress.mjs [filtre]
 // Chaque fichier est un script autonome qui sort avec le code 1 en cas d'échec.
+// Les fichiers dont le nom commence par « _ » sont des aides partagées, pas des tests.
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -11,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'regress');
 const filter = process.argv[2] || '';
 const files = fs.existsSync(DIR)
-  ? fs.readdirSync(DIR).filter(f => /\.(mjs|cjs|js)$/.test(f) && f.includes(filter)).sort()
+  ? fs.readdirSync(DIR).filter(f => /\.(mjs|cjs|js)$/.test(f) && !f.startsWith('_') && f.includes(filter)).sort()
   : [];
 
 if (!files.length) {
