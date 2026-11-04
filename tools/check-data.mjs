@@ -2,7 +2,9 @@
 // tools/check-data.mjs — vérifie les références croisées des données du jeu.
 // Usage : node tools/check-data.mjs
 // Échoue (code 1) si une donnée pointe vers quelque chose qui n'existe pas :
-// item, schéma, tech, module, ennemi, scène, compétence, caractéristique…
+// item, schéma, tech, module, ennemi, compétence, caractéristique…
+// Le contenu narratif (scènes d'expédition, chroniques, rencontres de combat) est
+// vérifié par tools/check-content.mjs.
 
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,20 +34,14 @@ const imp = f => import(pathToFileURL(path.join(ROOT, 'src', f)).href);
 const K = await imp('constants.js');
 const CAT = await imp('catalog.js');
 const RAW_ITEMS = new Set(Object.keys(CAT.ITEMS));   // avant l'injection des schémas par app.js
-const CH = await imp('chronicles.js');
-const APP = await imp('app.js');
+await imp('app.js');   // (effet de bord : ajoute les schémas aux ITEMS)
 const DAF = await imp('data-arcs-factions.js');
 
-const { MODULES, MODULE_JOBS, VESSELS, ITEMS, BLUEPRINTS, TECH_TREE, FABRICATIONS, ITEM_NAME_TO_ID,
-  SCENES, TRAITS, ENEMY_TYPES, BIOMES, ATMOSPHERES, RUINES } = CAT;
-const { CHRONICLES, CHRONICLE_SCENES } = CH;
+const { MODULES, MODULE_JOBS, VESSELS, BLUEPRINTS, TECH_TREE, FABRICATIONS, ITEM_NAME_TO_ID,
+  TRAITS, ENEMY_TYPES } = CAT;
 const RESOURCES = new Set(K.RESOURCES);
 const SKILLS = new Set(K.SKILL_LIST);
-const STATS = new Set(Object.keys(K.STAT_LABELS));
-const STATUTS = new Set(Object.keys(APP.STATUTS));
 const ALL_ITEMS = new Set([...RAW_ITEMS, ...Object.keys(BLUEPRINTS)]);
-const ORIGINS_WITH_BP = new Set(Object.values(BLUEPRINTS).map(b => b.origin));
-const NPCS = new Set(Object.values(CHRONICLES).flatMap(c => Object.keys(c.characters || {})));
 
 const errors = [];
 const err = (ctx, msg) => errors.push(`${ctx} : ${msg}`);
@@ -129,13 +125,6 @@ for (const [id, e] of Object.entries(ENEMY_TYPES)) {
   checkRes(e.loot, `ENEMY_TYPES.${id}.loot`);
   for (const l of e.itemLoot || []) if (!ALL_ITEMS.has(l.item)) err(`ENEMY_TYPES.${id}.itemLoot`, `item inconnu « ${l.item} »`);
 }
-{
-  // Chaque ennemi doit pouvoir être rencontré : au moins une scène le fait combattre
-  const met = new Set();
-  const collect = o => { for (const e of (o && o.combat?.enemies) || []) met.add(e); };
-  for (const s of [...SCENES, ...CHRONICLE_SCENES]) for (const c of s.choices || []) { collect(c.outcome); collect(c.risky?.success); collect(c.risky?.fail); }
-  for (const id of Object.keys(ENEMY_TYPES)) if (!met.has(id)) err(`ENEMY_TYPES.${id}`, 'jamais rencontré (aucune scène ne lance de combat contre lui)');
-}
 
 // ---- Types de factions ----
 for (const [id, ft] of Object.entries(DAF.FACTION_TYPES)) {
@@ -147,112 +136,13 @@ for (const [id, ft] of Object.entries(DAF.FACTION_TYPES)) {
   if (ft.allianceGift && !RESOURCES.has(ft.allianceGift.resource)) err(`FACTION_TYPES.${id}.allianceGift`, `ressource inconnue « ${ft.allianceGift.resource} »`);
 }
 
-// ---- Scènes d'expédition et de chronique ----
-const allScenes = [...SCENES.map(s => ['SCENES', s]), ...CHRONICLE_SCENES.map(s => ['CHRONICLE_SCENES', s])];
-const sceneIds = new Set();
-for (const [, s] of allScenes) {
-  if (sceneIds.has(s.id)) err(`scène ${s.id}`, 'id dupliqué');
-  sceneIds.add(s.id);
-}
-const chronSceneIds = new Set(CHRONICLE_SCENES.map(s => s.id));
-
-function checkReq(req, ctx) {
-  if (!req) return;
-  if (req.skill && !SKILLS.has(req.skill.key)) err(ctx, `req.skill inconnue « ${req.skill.key} »`);
-  if (req.stat && !STATS.has(req.stat.key)) err(ctx, `req.stat inconnue « ${req.stat.key} »`);
-  if (req.trait && !TRAITS[req.trait]) err(ctx, `req.trait inconnu « ${req.trait} »`);
-  if (req.item && !ALL_ITEMS.has(req.item)) err(ctx, `req.item inconnu « ${req.item} »`);
-  if (req.flag !== undefined && (typeof req.flag !== 'object' || !req.flag.key)) err(ctx, 'req.flag mal formé (attendu { key, equals|min|max })');
-}
-function checkOutcome(o, ctx, inChron) {
-  if (!o || o === 'next' || typeof o !== 'object') return;
-  // Les journaux d'expédition sont assainis au chargement (< > " neutralisés) :
-  // un guillemet droit y deviendrait « ” » après rechargement.
-  if (typeof o.log === 'string' && /[<>"]/.test(o.log)) err(ctx, 'log contient < > ou " (utiliser « » pour citer)');
-  if (o.loot) checkRes(o.loot, `${ctx}.loot`);
-  if (o.item !== undefined && (typeof o.item !== 'string' || !ALL_ITEMS.has(o.item))) err(ctx, `item inconnu « ${o.item} »`);
-  if (o.status !== undefined && !STATUTS.has(o.status)) err(ctx, `statut inconnu « ${o.status} »`);
-  if (o.blueprint !== undefined && o.blueprint !== 'auto') {
-    for (const p of [].concat(o.blueprint)) if (!ORIGINS_WITH_BP.has(p)) err(ctx, `aucun schéma d'origine « ${p} »`);
-  }
-  if (o.combat) for (const e of o.combat.enemies || []) if (!ENEMY_TYPES[e]) err(ctx, `ennemi inconnu « ${e} »`);
-  if (o.combat?.lootOnWin) checkRes(o.combat.lootOnWin, `${ctx}.combat.lootOnWin`);
-  if (o.next && !(inChron ? chronSceneIds : sceneIds).has(o.next)) err(ctx, `next vers une scène inconnue « ${o.next} »`);
-  if (o.addCandidate && NPCS.size && !NPCS.has(o.addCandidate)) err(ctx, `PNJ inconnu « ${o.addCandidate} »`);
-}
-for (const [kind, s] of allScenes) {
-  const inChron = kind === 'CHRONICLE_SCENES';
-  (s.choices || []).forEach((c, i) => {
-    const ctx = `${kind}.${s.id}[${i}]`;
-    checkReq(c.req, ctx);
-    if (c.consume) {
-      for (const [k, v] of Object.entries(c.consume)) {
-        if (k === 'item') { if (!ALL_ITEMS.has(v)) err(ctx, `consume.item inconnu « ${v} »`); }
-        else if (!RESOURCES.has(k)) err(ctx, `consume en ressource inconnue « ${k} »`);
-      }
-    }
-    if (c.risky) {
-      if (!STATS.has(c.risky.stat)) err(ctx, `risky.stat « ${c.risky.stat} » n'est pas une caractéristique (${[...STATS].join(', ')})`);
-      checkOutcome(c.risky.success, `${ctx}.success`, inChron);
-      checkOutcome(c.risky.fail, `${ctx}.fail`, inChron);
-    } else checkOutcome(c.outcome, ctx, inChron);
-  });
-}
-
-// ---- Chroniques ----
-for (const [id, c] of Object.entries(CHRONICLES)) {
-  for (const ep of c.episodes || []) if (!chronSceneIds.has(ep.firstScene)) err(`CHRONICLES.${id}`, `firstScene inconnue « ${ep.firstScene} »`);
-  const r = c.requires || {};
-  for (const [k, table] of [['biome', BIOMES], ['atmosphere', ATMOSPHERES], ['ruines', RUINES]]) {
-    for (const v of [].concat(r[k] ?? [])) if (!table[v]) err(`CHRONICLES.${id}.requires.${k}`, `valeur jamais générée « ${v} »`);
-  }
-  for (const [cid, ch] of Object.entries(c.characters || {})) {
-    for (const k of Object.keys(ch.skills || {})) if (!SKILLS.has(k)) err(`CHRONICLES.${id}.characters.${cid}`, `compétence inconnue « ${k} »`);
-    for (const k of Object.keys(ch.stats || {})) if (!STATS.has(k)) err(`CHRONICLES.${id}.characters.${cid}`, `caractéristique inconnue « ${k} »`);
-    for (const t of ch.traits || []) if (!TRAITS[t]) err(`CHRONICLES.${id}.characters.${cid}`, `trait inconnu « ${t} »`);
-  }
-}
-// Valeurs de flags attendues (intro d'épisode, req.flag.equals) qu'aucun choix n'écrit jamais :
-// la branche correspondante est inaccessible.
-{
-  const written = {};
-  for (const s of CHRONICLE_SCENES) {
-    const cid = s.chronicleEpisode?.chronicle;
-    for (const c of s.choices || []) {
-      for (const o of [c.outcome, c.risky?.success, c.risky?.fail]) {
-        for (const [k, v] of Object.entries((o && o.setFlags) || {})) {
-          ((written[cid] ??= {})[k] ??= new Set()).add(typeof v === 'string' && /^[+-]\d+$/.test(v) ? '±' : String(v));
-        }
-      }
-    }
-  }
-  const reachable = (cid, k, v) => {
-    if (String(CHRONICLES[cid]?.initialFlags?.[k]) === String(v)) return true;
-    const w = written[cid]?.[k];
-    return !!w && (w.has(String(v)) || (w.has('±') && Number.isFinite(Number(v))));
-  };
-  for (const [cid, c] of Object.entries(CHRONICLES)) {
-    for (const ep of c.episodes || []) {
-      for (const [k, table] of Object.entries(ep.introByFlag || {})) {
-        for (const v of Object.keys(table)) if (!reachable(cid, k, v)) err(`CHRONICLES.${cid}`, `intro « ${ep.title} » pour ${k} = ${v} : valeur jamais écrite`);
-      }
-    }
-  }
-  for (const s of CHRONICLE_SCENES) {
-    (s.choices || []).forEach((c, i) => {
-      const f = c.req?.flag;
-      if (f && f.equals !== undefined && !reachable(s.chronicleEpisode?.chronicle, f.key, f.equals)) err(`CHRONICLE_SCENES.${s.id}[${i}]`, `req.flag ${f.key} = ${f.equals} : valeur jamais écrite`);
-    });
-  }
-}
-
 // ---- Arcs ----
 for (const [id, a] of Object.entries(DAF.ARCS)) {
   if (a.reward?.tech && !TECH_TREE[a.reward.tech]) err(`ARCS.${id}`, `tech de récompense inconnue « ${a.reward.tech} »`);
 }
 
 // ---- Résultat ----
-const counts = `${Object.keys(MODULES).length} modules, ${RAW_ITEMS.size} items, ${Object.keys(BLUEPRINTS).length} schémas, ${Object.keys(TECH_TREE).length} techs, ${Object.keys(FABRICATIONS).length} fabrications, ${SCENES.length} scènes, ${CHRONICLE_SCENES.length} scènes de chronique, ${Object.keys(ENEMY_TYPES).length} ennemis`;
+const counts = `${Object.keys(MODULES).length} modules, ${RAW_ITEMS.size} items, ${Object.keys(BLUEPRINTS).length} schémas, ${Object.keys(TECH_TREE).length} techs, ${Object.keys(FABRICATIONS).length} fabrications, ${Object.keys(ENEMY_TYPES).length} ennemis`;
 if (errors.length) {
   console.error(`✗ ${errors.length} erreur(s) de données :`);
   for (const e of errors) console.error('  - ' + e);

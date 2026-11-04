@@ -12,7 +12,10 @@
 //  - E11 : un PNJ recruté est un colon complet (origin, salary, sequels…), ou un candidat
 //          si l'habitat est plein ; un ancien colon de chronique sans `origin` est réparé ;
 //  - M2  : les paiements de chronique débitent bien la colonie (consume) ;
-//  - M16 : une chronique déjà attribuée ne l'est pas une seconde fois.
+//  - M16 : une chronique déjà attribuée ne l'est pas une seconde fois ;
+//  - V1  : épisodes espacés (rythme.entreEpisodes) : « en attente » puis « La suite est
+//          prête », listChronicles, apparition garantie d'une histoire en début de partie,
+//          vue getSceneView et résultat du choix (exp.dernierResultat).
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -99,19 +102,33 @@ async function installHelpers() {
       for (const m of st.S.crew) if (m.skills?.science === 4 && m.statut !== 'expedition' && m.statut !== 'mort') { m.statut = 'libre'; m.statuts = []; m.sante = 100; }
     };
     T.body = id => st.S.galaxy.systems.flatMap(s => s.bodies).find(b => b.id === id);
+    // Lieux compatibles avec chaque histoire (apparition.lieu des fichiers de src/content/histoires/)
+    const LIEUX = {
+      pulsar_silencieux: { ruines: 'humaines', atmosphere: 'toxique' },
+      sanctuaire_vert: { ruines: 'alien_a', biome: 'jungle' },
+      couvee_dormante: { ruines: 'alien_b', biome: 'glace' },
+      anneau_trace: { atmosphere: 'anormale', biome: 'desert' },
+      veilleurs_beth: { ruines: 'humaines', biome: 'ocean' },
+      marche_etrange: { ruines: 'fusion', biome: 'toundra' },
+    };
     // Corps de test : propriétés compatibles avec la chronique, chronique forcée
+    // (et retirée d'un autre corps où l'apparition garantie l'aurait placée)
     T.prepareBody = (idx, chronId) => {
       const S = st.S;
+      for (const b of S.galaxy.systems.flatMap(s => s.bodies)) if (b.chronicle?.id === chronId) delete b.chronicle;
       const sys = S.galaxy.systems.filter(s => s.distance > 0.8).sort((a, b) => a.distance - b.distance)[idx];
       sys.scanned = true;
       const body = sys.bodies[0];
-      const req = ch.CHRONICLES[chronId].requires || {};
-      for (const k of ['ruines', 'biome', 'atmosphere', 'vie', 'danger']) if (req[k]) body[k] = [].concat(req[k])[0];
-      body.chronicle = { id: chronId, episodeIdx: 0, flags: { ...ch.CHRONICLES[chronId].initialFlags }, completed: false, currentSceneId: null };
+      Object.assign(body, { type: 'planete' }, LIEUX[chronId]);
+      body.chronicle = { id: chronId, episodeIdx: 0, flags: { ...ch.CHRONICLES[chronId].drapeaux }, completed: false, currentSceneId: null, pretAt: 0, annoncee: true };
       body.chronicleChecked = true;
       return body.id;
     };
-    T.crewIds = () => st.S.crew.filter(m => m.statut === 'libre' && m.skills.science === 4).slice(0, 4).map(m => m.id);
+    // L'épisode suivant est jouable tout de suite (le délai réel est testé à part)
+    T.skipDelay = bodyId => { const c = T.body(bodyId).chronicle; if (c) c.pretAt = 0; };
+    // Équipe de test : les colons « science 4 » libres ou en poste (l'auto-affectation
+    // peut les avoir mis au travail entre deux expéditions)
+    T.crewIds = () => st.S.crew.filter(m => (m.statut === 'libre' || m.statut === 'travail') && m.skills.science === 4).slice(0, 4).map(m => m.id);
     T.launch = bodyId => {
       T.refill();
       const before = st.S.expeditions.length;
@@ -139,8 +156,8 @@ async function installHelpers() {
         if (!scene) return { trace, done: false, stuck: 'scène introuvable' };
         const avail = scene.choices.map((c, i) => ({ c, i })).filter(({ c }) => app.evaluateChoice(e, c).available);
         if (!avail.length) return { trace, done: false, stuck: 'aucun choix disponible dans ' + scene.id };
-        const outs = c => [c.outcome, c.risky?.success].filter(o => o && typeof o === 'object');
-        const pick = avail.find(({ c }) => outs(c).some(o => o.addCandidate))
+        const outs = c => (c._v1.test ? [...c._v1.test.reussite, ...c._v1.test.echec] : c._v1.effets || []);
+        const pick = avail.find(({ c }) => outs(c).some(e => e.recrute))
           || (opts.prefer && avail.find(({ c }) => opts.prefer.test(c.label)))
           || avail[0];
         const resBefore = { ...st.S.res };
@@ -172,12 +189,22 @@ try {
   await page.waitForFunction(() => document.querySelector('#gameTime')?.textContent?.includes('J1'), null, { timeout: 10000 });
   await page.waitForTimeout(800);
   await installHelpers();
+  const garantie = await page.evaluate(() => {
+    const S = window.__t.S();
+    window.__t.app.tickChronicles();   // (appelé à chaque tick ; ici sans attendre le premier)
+    const x = S.galaxy.systems.flatMap(s => s.bodies.map(b => ({ b, s }))).find(o => o.b.chronicle);
+    return x ? { id: x.b.chronicle.id, d: x.s.distance, annoncee: x.b.chronicle.annoncee, liste: window.__t.app.listChronicles(S).map(c => `${c.id}:${c.etat}`) } : null;
+  });
+  check(garantie && garantie.d <= 2.4 && (garantie.annoncee ? garantie.liste.includes(`${garantie.id}:decouverte`) : garantie.liste.length === 0),
+    `apparition garantie : une histoire placée à portée de l'antenne de départ (${JSON.stringify(garantie)})`);
   await page.evaluate(() => window.__t.setupColony());
   flushErrors('colonie de test prête');
 
   console.log('1b. Une chronique n\'est attribuée qu\'à un seul corps (M16)');
   const dup = await page.evaluate(() => {
     const T = window.__t; const S = T.S();
+    // L'apparition garantie a pu placer une histoire : on repart d'une galaxie sans histoire
+    for (const b of S.galaxy.systems.flatMap(s => s.bodies)) delete b.chronicle;
     const systems = S.galaxy.systems.filter(s => s.distance > 0.8).sort((a, b) => a.distance - b.distance).slice(10, 14);
     const bodies = systems.map(s => { s.scanned = true; return s.bodies[0]; });
     // Corps compatibles avec les 3 chroniques à ruines humaines ; tirage toujours gagnant
@@ -213,6 +240,9 @@ try {
   const phase1 = await page.evaluate(id => window.__t.fastForward(id, 'sur_place'), exp1);
   const intro = await page.evaluate(id => { const s = window.__t.app.currentScene(window.__t.exp(id)); return s && { id: s.id, n: s.choices.length, text: String(s.text).slice(0, 40) }; }, exp1);
   check(phase1 === 'sur_place' && intro?.id === '__chron_intro__' && intro.n > 0, `arrivée sur place avec la scène-intro (${JSON.stringify(intro)})`);
+  const vue = await page.evaluate(id => window.__t.app.getSceneView(id), exp1);
+  check(vue && vue.titre === 'Le signal' && vue.chronique?.titre === 'Le Pulsar Silencieux' && vue.chronique.episode === 1 && vue.choix.length === 1 && vue.choix[0].disponible && /^<p>/.test(vue.texteHTML),
+    `getSceneView : « ${vue?.titre} », ${vue?.chronique?.titre} ép. ${vue?.chronique?.episode}/${vue?.chronique?.episodes}, choix ${JSON.stringify(vue?.choix?.map(c => c.label))}`);
   // Interface : onglet Galaxie > Expéditions > Reprendre la mission
   await page.click('nav.tabs button[data-tab="expeditions"]', { force: true });
   await page.click('[data-subtab="missions"]', { force: true });
@@ -228,16 +258,51 @@ try {
     overlayShown = await page.evaluate(() => document.querySelector('#sceneOverlay')?.classList.contains('show'));
     if (!overlayShown) break;
     await page.evaluate(() => window.__t.refill());
-    const btn = await page.$('#sceneInner button[data-choice]:not([disabled])');
-    if (!btn) break;
-    await btn.click({ force: true });
+    // Clic dans la page : l'overlay peut être redessiné entre la recherche et le clic
+    const clicked = await page.evaluate(() => {
+      const btn = document.querySelector('#sceneInner button[data-choice]:not([disabled])');
+      if (btn) btn.click();
+      return !!btn;
+    });
+    if (!clicked) break;
     await page.waitForTimeout(80);
     clicks++;
   }
   const after1 = await page.evaluate(id => ({ phase: window.__t.exp(id)?.phase, chron: window.__t.S().galaxy.systems.flatMap(s => s.bodies).find(b => b.chronicle?.id === 'pulsar_silencieux').chronicle }), exp1);
   check(clicks >= 2 && after1.phase === 'retour' && after1.chron.episodeIdx === 1, `épisode 1 joué en ${clicks} clics, retour engagé, épisode suivant = 2 (idx ${after1.chron.episodeIdx})`);
+  const res1 = await page.evaluate(id => { const e = window.__t.exp(id); return { r: e?.dernierResultat, bilan: window.__t.app.expeditionSummary(id) }; }, exp1);
+  check(res1.r && res1.r.texte.length > 0 && res1.r.label && Array.isArray(res1.r.gains) && Array.isArray(res1.r.pertes),
+    `résultat du dernier choix gardé pour l'affichage (« ${res1.r?.label} » → ${JSON.stringify(res1.r?.texte)})`);
+  check(res1.bilan && res1.bilan.chronique?.id === 'pulsar_silencieux' && res1.bilan.equipe.length > 0 && res1.bilan.faits.length > 0,
+    `bilan d'expédition au départ du site (${JSON.stringify(res1.bilan && { lieu: res1.bilan.lieu, gains: res1.bilan.gains, faits: res1.bilan.faits.length })})`);
   await page.evaluate(id => window.__t.fastForward(id, 'rentree'), exp1);
   flushErrors('aucune erreur pendant l\'épisode joué à la souris');
+
+  console.log('2b. Épisodes espacés en temps réel (V1)');
+  const rythme = await page.evaluate(b => {
+    const T = window.__t; const S = T.S();
+    const body = T.body(b);
+    const avant = T.app.listChronicles(S).find(c => c.id === 'pulsar_silencieux');
+    // Relancer tout de suite : l'épisode 2 n'est pas prêt, l'expédition explore normalement
+    const id = T.launch(b);
+    const e = T.exp(id);
+    const scenes = [...e.scenes];
+    const enCours = T.app.listChronicles(S).find(c => c.id === 'pulsar_silencieux').etat;
+    S.expeditions.splice(S.expeditions.indexOf(e), 1);
+    S.fleet.find(v => v.id === 'v_regress').available = true;
+    for (const mid of e.crewIds) S.crew.find(m => m.id === mid).statut = 'libre';
+    // 18 h plus tard : « La suite est prête »
+    S.meta.gameMin = body.chronicle.pretAt;
+    const journal = S.journal.length;
+    T.app.tickChronicles();
+    const apres = T.app.listChronicles(S).find(c => c.id === 'pulsar_silencieux');
+    const annonce = S.journal.slice(journal).map(j => j.txt).find(t => /suite est prête/.test(t)) || null;
+    return { avant, scenes, enCours, apres, annonce };
+  }, pulsarBody);
+  check(rythme.avant?.etat === 'en_attente' && rythme.avant.prochainDans > 17 * 3600 && rythme.avant.prochainDans <= 18 * 3600 && rythme.avant.episode === 2,
+    `après l'épisode 1 : « en attente », épisode 2 dans ${Math.round((rythme.avant?.prochainDans || 0) / 3600)} h`);
+  check(!rythme.scenes.includes('__chron_intro__') && rythme.scenes.length >= 4, `pendant le délai, l'expédition explore normalement (${rythme.scenes.join(', ')})`);
+  check(rythme.apres?.etat === 'prete' && rythme.apres.prochainDans === 0 && !!rythme.annonce, `18 h plus tard : « ${rythme.apres?.etat} », journal : ${rythme.annonce}`);
 
   console.log('3. Les 6 chroniques jouées jusqu\'à une fin');
   const chronIds = await page.evaluate(() => Object.keys(window.__t.ch.CHRONICLES));
@@ -251,6 +316,7 @@ try {
       if (chronId === 'anneau_trace' && state.episodeIdx === 2) {
         rep.habitat = await page.evaluate(() => window.__t.fillHabitat());
       }
+      await page.evaluate(b => window.__t.skipDelay(b), bodyId);
       const id = await page.evaluate(b => window.__t.launch(b), bodyId);
       if (!id) { rep.error = 'lancement impossible'; break; }
       await page.evaluate(id => window.__t.fastForward(id, 'sur_place'), id);
@@ -298,7 +364,9 @@ try {
     sys.scanned = true;
     const body = sys.bodies[0];
     body.ruines = 'alien_a'; body.biome = 'jungle';
-    body.chronicle = { id: 'sanctuaire_vert', episodeIdx: 0, flags: { ...T.ch.CHRONICLES.sanctuaire_vert.initialFlags }, completed: false, currentSceneId: '__chron_intro__' };
+    for (const b of S.galaxy.systems.flatMap(s => s.bodies)) if (b.chronicle?.id === 'sanctuaire_vert') delete b.chronicle;
+    // Chronique au format 0.32/0.33 (sans pretAt ni annoncee)
+    body.chronicle = { id: 'sanctuaire_vert', episodeIdx: 0, flags: { ...T.ch.CHRONICLES.sanctuaire_vert.drapeaux }, completed: false, currentSceneId: '__chron_intro__' };
     body.chronicleChecked = true;
     const crewIds = T.crewIds().slice(0, 2);
     for (const id of crewIds) S.crew.find(m => m.id === id).statut = 'expedition';
@@ -345,7 +413,7 @@ try {
   check(await page.evaluate(() => document.querySelector('#sceneOverlay')?.classList.contains('show')), 'l\'overlay s\'ouvre sur l\'expédition débloquée');
   const r = await page.evaluate(() => window.__t.playOut('e_legacy'));
   const legacyEnd = await page.evaluate(() => { const e = window.__t.exp('e_legacy'); return { phase: e?.phase, idx: e && window.__t.body(e.bodyId).chronicle.episodeIdx }; });
-  check(r.done && legacyEnd.phase === 'retour' && legacyEnd.idx === 1, `l'épisode débloqué se termine (${r.trace.length} choix, épisode suivant idx ${legacyEnd.idx})`);
+  check(r.done && legacyEnd.phase === 'retour' && legacyEnd.idx === 1, `l'épisode débloqué se termine (${r.trace.length} choix, épisode suivant idx ${legacyEnd.idx}${r.stuck ? ', ' + r.stuck : ''}, phase ${legacyEnd.phase})`);
   await page.evaluate(() => document.querySelectorAll('#sceneOverlay.show').forEach(e => e.classList.remove('show')));
   await page.click('nav.tabs button[data-tab="equipage"]', { force: true });
   await page.waitForTimeout(150);

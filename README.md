@@ -17,8 +17,12 @@ src/
   constants.js           VERSION, multiplicateurs, libellés
   util.js                RNG seedé, $/$$, formats, esc() (échappement HTML), uid()
   catalog.js             données : MODULES, VESSELS, ITEMS, BLUEPRINTS, TECH_TREE,
-                         FABRICATIONS, SCENES, BIOMES, TRAITS, ENEMY_TYPES…
-  chronicles.js          chroniques planétaires (scènes, fins, personnages)
+                         FABRICATIONS, BIOMES, TRAITS, ENEMY_TYPES… (SCENES : réexport du contenu)
+  content/               contenu narratif en données pures (histoires, scènes d'expédition ;
+                         événements, incidents, fils rouges, lore en vague 2) — voir
+                         docs/ecrire-pour-drift.md
+  engine/narration.js    moteur narratif : conditions (mini-langage), textes, effets, choix
+  chronicles.js          passerelle vers les histoires de content/histoires/
   data-arcs-factions.js  ARCS et FACTION_TYPES
   state.js               état S, temps de jeu, sauvegarde, migrations, galaxie
   app.js                 logique : postes, médical, recherche, incidents, événements,
@@ -58,12 +62,17 @@ Les outils de développement ont besoin de Node 22 et de `npm ci`
 ```sh
 npm ci
 npm run lint          # ESLint (variables non définies, clés en double…)
-npm run check:data    # références croisées des données (items, scènes, techs…)
+npm run check:data    # références croisées des données (items, techs, modules…)
+npm run check:content # contenu narratif : schéma, références, graphe des histoires, typographie
 npm run sw:check      # le cache hors-ligne correspond bien aux fichiers publiés
 npm run smoke         # test de fumée dans Chromium : onglets, 10 jours simulés, rechargement
 npm run test:regress  # tests de non-régression (tools/regress/)
 npm test              # tout ce qui précède
 ```
+
+Pour écrire du contenu (histoires, scènes) : `docs/ecrire-pour-drift.md`, et
+`npm run histoire -- <id>` pour jouer une histoire dans le terminal (`--tout`
+liste tous les chemins jusqu'à chaque fin).
 
 `smoke` et `test:regress` utilisent Playwright, qui n'est pas une dépendance
 du projet : installez-le avec `npm i --no-save playwright && npx playwright install chromium`,

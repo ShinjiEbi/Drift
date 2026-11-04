@@ -28,7 +28,7 @@
 
 // @generated-start — tools/sw-version.mjs (npm run sw:write)
 const APP_VERSION = '0.33.0';
-const CONTENT_HASH = '4f3b166997a7';
+const CONTENT_HASH = '12738331efb1';
 const PRECACHE_URLS = [
   './index.html',
   './favicon.ico',
@@ -61,7 +61,30 @@ const PRECACHE_URLS = [
   './src/catalog.js',
   './src/chronicles.js',
   './src/constants.js',
+  './src/content/dsl.js',
+  './src/content/histoires/anneau-trace.js',
+  './src/content/histoires/couvee-dormante.js',
+  './src/content/histoires/marche-etrange.js',
+  './src/content/histoires/pulsar-silencieux.js',
+  './src/content/histoires/sanctuaire-vert.js',
+  './src/content/histoires/veilleurs-beth.js',
+  './src/content/index.js',
+  './src/content/scenes/anomalies-signaux.js',
+  './src/content/scenes/arrivees-departs.js',
+  './src/content/scenes/biomes.js',
+  './src/content/scenes/civilisations.js',
+  './src/content/scenes/dangers.js',
+  './src/content/scenes/epaves-stations.js',
+  './src/content/scenes/faune-flore.js',
+  './src/content/scenes/haltes.js',
+  './src/content/scenes/ruines-cristallines.js',
+  './src/content/scenes/ruines-humaines.js',
+  './src/content/scenes/ruines-melees.js',
+  './src/content/scenes/ruines-organiques.js',
+  './src/content/vocabulaire.js',
   './src/data-arcs-factions.js',
+  './src/engine/ancien-format.js',
+  './src/engine/narration.js',
   './src/notifications.js',
   './src/objectives.js',
   './src/pwa.js',
