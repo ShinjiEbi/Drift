@@ -115,14 +115,23 @@ export function memberAt(modKey, slotIdx) {
   return S.crew.find(m => m.id === id) || null;
 }
 
+// Motifs de refus d'affectation selon le statut du colon
+const UNAVAILABLE_REASONS = {
+  mort: 'Décédé',
+  expedition: 'En expédition',
+  formation: 'En formation',
+  infirmerie: 'À l\'infirmerie',
+  diplomatie: 'En mission diplomatique'
+};
+
 // Affecte un membre à un poste (gère désaffectation préalable)
 export function assignMember(memberId, modKey, slotIdx) {
   const member = S.crew.find(m => m.id === memberId);
   if (!member) return { ok: false, reason: 'Colon introuvable' };
-  if (member.statut === 'mort') return { ok: false, reason: 'Décédé' };
-  if (member.statut === 'expedition') return { ok: false, reason: 'En expédition' };
-  if (member.statut === 'formation') return { ok: false, reason: 'En formation' };
-  if (member.statut === 'infirmerie') return { ok: false, reason: 'À l\'infirmerie' };
+  // Seul un colon présent et disponible (libre ou déjà en poste) peut être affecté
+  if (member.statut !== 'libre' && member.statut !== 'travail') {
+    return { ok: false, reason: UNAVAILABLE_REASONS[member.statut] || `Indisponible (${member.statut})` };
+  }
 
   const jobs = jobsForModule(modKey);
   const job = jobs[slotIdx];
@@ -149,7 +158,11 @@ export function assignMember(memberId, modKey, slotIdx) {
       occupant.posteHistorique.push({ ...occupant.posteInfo, jusqua: S.meta?.gameMin || 0 });
       delete occupant.posteInfo;
     }
-    occupant.statut = 'libre';
+    delete S.assignments[jobKey(modKey, slotIdx)];
+    // Seul un occupant présent au poste redevient libre. Un occupant absent
+    // (expédition, soins, formation, mission) garde son statut : il perd
+    // seulement la réservation et sera « libre » à son retour (returnToBase).
+    if (occupant.statut === 'travail') occupant.statut = 'libre';
   }
 
   // Affecte et enregistre le poste actuel
@@ -278,6 +291,30 @@ export function repairCrewState() {
   if (!S || !Array.isArray(S.crew)) return;
   const byId = new Map(S.crew.map(m => [m.id, m]));
   const alive = id => { const m = byId.get(id); return !!m && m.statut !== 'mort'; };
+  // Affectations vers un colon disparu ou mort
+  if (S.assignments) {
+    for (const k of Object.keys(S.assignments)) {
+      if (!alive(S.assignments[k])) delete S.assignments[k];
+    }
+  }
+  // Statut de présence : un colon embarqué dans une expédition ou une mission
+  // diplomatique en cours doit en porter le statut (anciens bugs : remplacement
+  // d'un occupant absent, diagnostic qui « libérait » le médecin…).
+  const inExpedition = new Set();
+  for (const exp of S.expeditions || []) for (const id of exp.crewIds || []) inExpedition.add(id);
+  const inMission = new Set((S.diplomaticMissions || []).map(d => d.memberId));
+  const inTraining = new Set((S.training || []).map(t => t.memberId));
+  for (const m of S.crew) {
+    if (m.statut === 'mort') continue;
+    const present = m.statut === 'libre' || m.statut === 'travail';
+    if (inExpedition.has(m.id)) { if (present) m.statut = 'expedition'; continue; }
+    if (inMission.has(m.id)) { if (present) m.statut = 'diplomatie'; continue; }
+    const hasPost = !!memberAssignment(m.id);
+    // Absence qui n'existe plus (expédition/mission/formation disparue) : retour à la base
+    const stuck = m.statut === 'expedition' || m.statut === 'diplomatie'
+      || (m.statut === 'formation' && !inTraining.has(m.id));
+    if (stuck || present) m.statut = hasPost ? 'travail' : 'libre';
+  }
   // Traitements : statut visé identifié par sa clé, index recalé, orphelins et doublons retirés
   if (Array.isArray(S.treatments)) {
     S.treatments = S.treatments.filter(t => alive(t.memberId));
@@ -1810,8 +1847,7 @@ export function startDiagnostic(memberId, statusIdx) {
     if (S.res[k] < cost[k]) { toast(`Ressources insuffisantes (${RES_LABELS[k]})`); return; }
   }
   for (const k in cost) S.res[k] -= cost[k];
-  doctor.statut = 'expedition';   // bloqué temporaire (réutilise le statut, géré dans render)
-  doctor.statut = 'libre';        // simplification : diagnostic instantané narratif
+  // Diagnostic instantané : le médecin garde son statut (et son poste)
 
   const success = rollDiagnostic(memberId, status.key, doctor);
   if (success) {

@@ -36,9 +36,17 @@ let failed = 0;
 
 // Prépare dans la page un utilitaire window.__t : état neuf + fabrique de colons.
 async function prepare() {
+  // Mémorise les setInterval du jeu pour couper la boucle de tick une fois démarré :
+  // les scénarios manipulent l'état et avancent le temps eux-mêmes.
+  await page.addInitScript(() => {
+    const orig = window.setInterval;
+    window.__intervals = [];
+    window.setInterval = (...a) => { const id = orig(...a); window.__intervals.push(id); return id; };
+  });
   await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
   await page.waitForFunction(() => document.querySelector('#gameTime')?.textContent?.includes('J1'), null, { timeout: 10000 });
   await page.evaluate(async () => {
+    window.__intervals.forEach(id => clearInterval(id));
     const st = await import('./src/state.js');
     const app = await import('./src/app.js');
     window.__t = {
