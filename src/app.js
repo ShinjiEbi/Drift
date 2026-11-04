@@ -136,19 +136,28 @@ export function assignMember(memberId, modKey, slotIdx) {
   const jobs = jobsForModule(modKey);
   const job = jobs[slotIdx];
   if (!job) return { ok: false, reason: 'Poste inexistant' };
+
+  const prev = memberAssignment(memberId);
+  // Déjà à ce poste : rien à changer (l'ancienneté n'est pas remise à zéro
+  // et l'historique de carrière ne reçoit pas d'entrée en double)
+  if (prev && prev.modKey === modKey && prev.slotIdx === slotIdx) {
+    member.statut = 'travail';
+    return { ok: true };
+  }
   if (!isEligibleForJob(member, job)) return { ok: false, reason: 'Prérequis non remplis' };
 
-  // Désaffecte le membre de son poste précédent (s'il en avait un)
-  const prev = memberAssignment(memberId);
-  if (prev) {
-    // Archive career history before leaving previous post
-    if (member.posteInfo) {
-      if (!member.posteHistorique) member.posteHistorique = [];
-      member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
-      delete member.posteInfo;
-    }
-    delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
+  // Reprise du poste décrit par posteInfo (ex. après une remise à plat de
+  // toutes les affectations) : l'ancienneté continue.
+  const keepTenure = member.posteInfo?.modKey === modKey && member.posteInfo?.slotIdx === slotIdx
+    && typeof member.posteInfo.depuis === 'number';
+  // Archive le poste précédent dans l'historique de carrière
+  if (member.posteInfo && !keepTenure) {
+    if (!member.posteHistorique) member.posteHistorique = [];
+    member.posteHistorique.push({ ...member.posteInfo, jusqua: S.meta?.gameMin || 0 });
+    delete member.posteInfo;
   }
+  // Désaffecte le membre de son poste précédent (s'il en avait un)
+  if (prev) delete S.assignments[jobKey(prev.modKey, prev.slotIdx)];
 
   // Si un autre colon occupait ce poste, le désaffecter
   const occupant = memberAt(modKey, slotIdx);
@@ -168,13 +177,15 @@ export function assignMember(memberId, modKey, slotIdx) {
   // Affecte et enregistre le poste actuel
   S.assignments[jobKey(modKey, slotIdx)] = memberId;
   member.statut = 'travail';
-  member.posteInfo = {
-    modKey,
-    slotIdx,
-    titre: job.label,
-    role: job.role,
-    depuis: S.meta?.gameMin || 0
-  };
+  if (!keepTenure) {
+    member.posteInfo = {
+      modKey,
+      slotIdx,
+      titre: job.label,
+      role: job.role,
+      depuis: S.meta?.gameMin || 0
+    };
+  }
   return { ok: true };
 }
 
@@ -210,8 +221,9 @@ export function unassignSlot(modKey, slotIdx) {
 
 // Bonus de production lié à l'ancienneté dans le poste actuel.
 // Un colon qui reste longtemps sur son poste devient plus efficace.
+// posteInfo peut manquer (colon affecté avant 0.32) : pas de bonus, pas d'erreur.
 export function ancienneteBonus(member) {
-  if (!member?.posteInfo) return { mult: 1.0, label: null, annees: 0 };
+  if (!member?.posteInfo || typeof member.posteInfo.depuis !== 'number') return { mult: 1.0, label: null, annees: 0 };
   const dureeMin = (S.meta?.gameMin || 0) - (member.posteInfo.depuis || 0);
   const annees = dureeMin / YEAR_IN_GAME_MIN;
   if (annees < 1)  return { mult: 1.0,  label: null,          annees };

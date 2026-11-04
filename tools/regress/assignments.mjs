@@ -144,6 +144,45 @@ try {
     T.expeditions = []; T.diplomaticMissions = [];
     return ok;
   });
+
+  // M7 — recliquer sur son propre poste ne remet pas l'ancienneté à zéro
+  await scenario('M7 : ancienneté conservée en recliquant sur son poste', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.meta.gameMin = 10 * 43200;                    // 10 ans de jeu écoulés (1 an = 30 j)
+    const vet = mk({ skills: { pilotage: 3 } });
+    app.assignMember(vet.id, 'commandement', 0);
+    vet.posteInfo.depuis = S.meta.gameMin - 8 * 43200;   // 8 ans en poste → Vétéran
+    const before = app.ancienneteBonus(vet);
+    const hist = (vet.posteHistorique || []).length;
+    const r = app.assignMember(vet.id, 'commandement', 0);
+    const after = app.ancienneteBonus(vet);
+    // Remise à plat des affectations (« Réoptimiser ») puis réaffectation au même poste
+    S.assignments = {}; vet.statut = 'libre';
+    app.assignMember(vet.id, 'commandement', 0);
+    const afterReset = app.ancienneteBonus(vet);
+    return {
+      veteran: before.label === 'Vétéran',
+      ok: r.ok === true,
+      kept: after.mult === before.mult && after.label === 'Vétéran',
+      noDupHistory: (vet.posteHistorique || []).length === hist,
+      keptAfterReset: afterReset.label === 'Vétéran' && vet.statut === 'travail'
+    };
+  });
+
+  // M7 — un colon affecté avant 0.32 (sans posteInfo) ne fait rien planter
+  await scenario('M7 : posteInfo absent toléré', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    const old = mk({ statut: 'travail', skills: { pilotage: 3 } });
+    S.assignments['commandement:0'] = old.id;
+    const b = app.ancienneteBonus(old);
+    const eff = app.moduleEfficiency('commandement');
+    old.posteInfo = { modKey: 'commandement', slotIdx: 0 };   // migration incomplète (sans depuis)
+    const b2 = app.ancienneteBonus(old);
+    const r = app.assignMember(old.id, 'commandement', 0);
+    return { neutral: b.mult === 1 && b.label === null, eff: eff.jobsFilled === 1, noDepuis: b2.mult === 1, reclick: r.ok === true };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {
