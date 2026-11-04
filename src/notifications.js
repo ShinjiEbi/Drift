@@ -1,14 +1,19 @@
-// notifications.js — Système de notifications PUSH UNIQUEMENT (0.27.3)
+// notifications.js — notifications système (push natives) de DRIFT
 //
-// L'ancienne version (0.26) gérait aussi un panneau inline. Retiré dans 0.27.3
-// car redondant avec le journal de bord. Cette version conserve l'API publique
-// (les helpers notif.*) pour ne pas casser les 18 hooks placés dans le code,
-// mais ne fait plus que :
-//   1. Envoyer une push native quand l'app est en arrière-plan (et que l'utilisateur l'a activé)
-//   2. Rien d'autre — pas de stockage, pas de panneau, pas de badge
+// Depuis 0.27.3 il n'y a plus de panneau de notifications dans l'interface :
+// les événements restent visibles dans le journal de bord (log()) et le
+// bandeau d'alertes (collectAlerts()). Ce module se contente d'envoyer une
+// notification système quand l'app est en arrière-plan, si le joueur l'a
+// activé (bouton du pied de page, voir setupNotifHandlers dans ui.js).
 //
-// Les événements importants restent visibles dans le journal de bord
-// (via log()) et le bandeau d'alertes (via collectAlerts()).
+// API utilisée par le jeu :
+//   • notif.* — un helper par type d'événement (appelés depuis app.js/state.js)
+//   • getNotifPermission, requestNotifPermission, isPushEnabled, setPushEnabled (ui.js)
+//
+// Affichage : via le service worker (registration.showNotification — seul
+// moyen sur Android et dans une PWA iOS) ; le clic est géré par
+// 'notificationclick' dans sw.js. Si aucun service worker n'est disponible
+// (enregistrement échoué, navigateur sans SW), repli sur new Notification().
 
 import { S } from './state.js';
 
@@ -16,46 +21,33 @@ import { S } from './state.js';
 //   CONFIGURATION
 // ============================================================
 
+// Anti-rafale : après une notification, celles de même importance ou moins
+// importantes sont ignorées pendant ce délai. Une notification PLUS
+// importante (ou critique) passe toujours.
 const PUSH_MIN_INTERVAL_MS = 5000;
-let lastPushTimestamp = 0;
+// Délai maximal d'attente d'un service worker actif avant le repli.
+const SW_READY_TIMEOUT_MS = 3000;
 
-export const NOTIF_TYPES = {
-  economy:    { label: 'Économie',     icon: '⚙' },
-  crew:       { label: 'Équipage',     icon: '👥' },
-  expedition: { label: 'Expédition',   icon: '🛰' },
-  research:   { label: 'Recherche',    icon: '🔬' },
-  event:      { label: 'Événement',    icon: '⚠' },
-  chronicle:  { label: 'Chronique',    icon: '📜' }
+let lastPush = { at: 0, prio: 0 };
+
+const NOTIF_TYPES = {
+  economy:    { label: 'Économie' },
+  crew:       { label: 'Équipage' },
+  expedition: { label: 'Expédition' },
+  research:   { label: 'Recherche' },
+  event:      { label: 'Événement' },
+  chronicle:  { label: 'Chronique' }
 };
 
-export const NOTIF_SEVERITIES = {
-  info:     { label: 'Info',     prio: 1 },
-  success:  { label: 'Succès',   prio: 2 },
-  warn:     { label: 'Attention',prio: 3 },
-  critical: { label: 'Critique', prio: 4 }
+const NOTIF_SEVERITIES = {
+  info:     { prio: 1 },
+  success:  { prio: 2 },
+  warn:     { prio: 3 },
+  critical: { prio: 4 }
 };
 
 // ============================================================
-//   API PUBLIQUE
-// ============================================================
-
-export function pushNotif(opts) {
-  if (!opts || !opts.title) return null;
-  if (!opts.skipPush) {
-    tryPushSystemNotification({
-      type: opts.type || 'event',
-      severity: opts.severity || 'info',
-      title: opts.title,
-      body: opts.body || '',
-      action: opts.action || null,
-      timestamp: Date.now()
-    });
-  }
-  return null;
-}
-
-// ============================================================
-//   PUSH NATIVES
+//   PERMISSION ET RÉGLAGE
 // ============================================================
 
 export function getNotifPermission() {
@@ -85,42 +77,101 @@ export function isPushEnabled() {
   return S?.flags?.pushNotifications === true;
 }
 
+// ============================================================
+//   ENVOI
+// ============================================================
+
+function pushNotif(opts) {
+  if (!opts || !opts.title) return;
+  tryPushSystemNotification({
+    type: opts.type || 'event',
+    severity: opts.severity || 'info',
+    title: opts.title,
+    body: opts.body || '',
+    action: opts.action || null,
+    timestamp: Date.now()
+  });
+}
+
 function tryPushSystemNotification(notif) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
   if (!isPushEnabled()) return;
   if (typeof document !== 'undefined' && document.visibilityState === 'visible') return;
   if (notif.severity === 'info') return;
-  const now = Date.now();
-  if (now - lastPushTimestamp < PUSH_MIN_INTERVAL_MS) return;
-  lastPushTimestamp = now;
 
+  const prio = NOTIF_SEVERITIES[notif.severity]?.prio || 1;
+  const critical = prio >= NOTIF_SEVERITIES.critical.prio;
+  const now = Date.now();
+  if (!critical && now - lastPush.at < PUSH_MIN_INTERVAL_MS && prio <= lastPush.prio) return;
+  lastPush = { at: now, prio };
+
+  const typeLabel = NOTIF_TYPES[notif.type]?.label || '';
+  const title = `DRIFT — ${typeLabel}`;
+  const target = notif.action?.target || null;
+  const opts = {
+    body: notif.title + (notif.body ? '\n' + notif.body : ''),
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-96.png',
+    // Même tag = remplace la précédente du même type. Une critique (mort,
+    // incident…) a son propre tag pour ne jamais être écrasée.
+    tag: critical ? `${notif.type}-critical-${now}` : notif.type,
+    timestamp: notif.timestamp,
+    silent: notif.severity === 'success',
+    requireInteraction: critical,
+    data: { target }
+  };
+  showSystemNotification(title, opts, target).catch((e) => console.warn('[NOTIFS] Erreur push :', e));
+}
+
+// Registration du service worker si un SW actif est (ou devient vite) disponible.
+async function activeRegistration() {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null;
   try {
-    const typeLabel = NOTIF_TYPES[notif.type]?.label || '';
-    const opts = {
-      body: notif.title + (notif.body ? '\n' + notif.body : ''),
-      icon: './icons/icon-192.png',
-      badge: './icons/icon-96.png',
-      tag: notif.type,
-      timestamp: notif.timestamp,
-      silent: notif.severity === 'success',
-      requireInteraction: notif.severity === 'critical',
-      data: { target: notif.action?.target || null }
-    };
-    if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
-      navigator.serviceWorker.ready.then((reg) => {
-        reg.showNotification(`DRIFT — ${typeLabel}`, opts);
-      });
-    } else {
-      new Notification(`DRIFT — ${typeLabel}`, opts);
-    }
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return null;
+    if (reg.active) return reg;
+    // Installation en cours : on attend 'ready', mais pas indéfiniment
+    // ('ready' ne se résout jamais si l'installation échoue).
+    return await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((resolve) => setTimeout(() => resolve(null), SW_READY_TIMEOUT_MS))
+    ]);
   } catch (e) {
-    console.warn('[NOTIFS] Erreur push :', e);
+    return null;
   }
 }
 
+async function showSystemNotification(title, opts, target) {
+  const reg = await activeRegistration();
+  if (reg) {
+    try {
+      await reg.showNotification(title, opts);
+      return;
+    } catch (e) {
+      console.warn('[NOTIFS] showNotification a échoué, repli :', e);
+    }
+  }
+  // Repli sans service worker. (Lève une TypeError sur Android Chrome, où
+  // seul le SW peut notifier : rien de plus à faire dans ce cas.)
+  const n = new Notification(title, opts);
+  n.onclick = () => {
+    n.close();
+    try { window.focus(); } catch (e) { /* ignoré */ }
+    if (target) goToTab(target);
+  };
+}
+
+// Affiche l'onglet demandé (nom comparé aux onglets existants, jamais
+// injecté dans un sélecteur).
+function goToTab(name) {
+  const btn = Array.from(document.querySelectorAll('nav.tabs button[data-tab]'))
+    .find((b) => b.dataset.tab === name);
+  if (btn) btn.click();
+}
+
 // ============================================================
-//   Helpers haut-niveau (compatibilité avec les 18 hooks existants)
+//   Helpers par type d'événement (appelés depuis app.js et state.js)
 // ============================================================
 
 export const notif = {
@@ -144,15 +195,3 @@ export const notif = {
   episodeDone:   (chronNom, ep)   => pushNotif({ type:'chronicle', severity:'success', title:`Épisode terminé`, body:`${chronNom} — ${ep}.` }),
   chronicleDone: (chronNom)       => pushNotif({ type:'chronicle', severity:'success', title:`Chronique achevée`, body:chronNom })
 };
-
-// ============================================================
-//   No-ops conservés pour compatibilité d'imports
-// ============================================================
-
-export function markNotifRead() {}
-export function markAllNotifsRead() {}
-export function dismissNotif() {}
-export function dismissAllNotifs() {}
-export function unreadNotifsCount() { return 0; }
-export function getNotifs() { return []; }
-export function purgeOldNotifs() {}
