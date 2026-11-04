@@ -36,7 +36,7 @@ export const ARCS = {
         id: 'eff_4',
         title: "Le déchiffrement",
         narrative: "Un linguiste expérimenté rassemble les pièces. Les enregistrements parlent d'un \"Contact\". Quelque chose qui a basculé. Quelque chose qu'ils n'ont pas su gérer.",
-        condition: () => (S.crew || []).some(m => (m.skills?.linguistique || 0) >= 4)
+        condition: () => aliveCrew().some(m => (m.skills?.linguistique || 0) >= 4)
       },
       {
         id: 'eff_5',
@@ -128,9 +128,20 @@ export const ARCS = {
         id: 'cou_2',
         title: "Système immunitaire",
         narrative: "Un colon a survécu à un pathogène alien. Son corps a appris quelque chose. Notre médecine commence à intégrer leur biochimie.",
-        condition: () => (S.crew || []).some(m =>
-          (m.sequels || []).some(s => s.key === 'pathogene_alien') ||
-          (m.statuts || []).some(s => s.key === 'pathogene_alien'))
+        // Suivi passif (appelé à chaque tick par tickArcs, même avant le déblocage de l'arc) :
+        // mémorise les colons atteints du pathogène alien.
+        track: (state) => {
+          for (const m of aliveCrew()) {
+            if (!(m.statuts || []).some(s => s.key === 'pathogene_alien')) continue;
+            if (!state.pathogenSeen) state.pathogenSeen = [];
+            if (!state.pathogenSeen.includes(m.id)) state.pathogenSeen.push(m.id);
+          }
+        },
+        // L'étape se valide APRÈS l'infection : un colon vivant qui a été atteint et ne l'est
+        // plus, ou qui porte une séquelle du pathogène (cicatrice_xeno / mutation_xeno).
+        condition: (state) => aliveCrew().some(m =>
+          (m.sequels || []).some(s => s.key === 'cicatrice_xeno' || s.key === 'mutation_xeno') ||
+          ((state?.pathogenSeen || []).includes(m.id) && !(m.statuts || []).some(s => s.key === 'pathogene_alien')))
       },
       {
         id: 'cou_3',

@@ -3512,6 +3512,14 @@ export function tickArcs() {
     const arc = ARCS[arcId];
     const state = getArcState(arcId);
 
+    // Suivi passif : une étape peut déclarer track(state) pour mémoriser un fait
+    // passager (ex. un colon infecté) avant que sa condition ne soit évaluée.
+    // Appelé à chaque tick, même si l'arc n'est pas encore débloqué.
+    for (const step of arc.steps) {
+      if (!step.track || isStepComplete(arcId, step.id)) continue;
+      try { step.track(state); } catch (e) {}
+    }
+
     // Déblocage
     if (!state.unlocked) {
       try {
@@ -3524,16 +3532,17 @@ export function tickArcs() {
       continue;
     }
 
-    // Progression des étapes (dans l'ordre)
+    // Progression des étapes, dans l'ordre : on s'arrête à la première étape
+    // non remplie. Plusieurs étapes consécutives peuvent se valider au même tick.
+    // Les étapes déjà validées (y compris hors ordre par une version antérieure)
+    // restent acquises et sont simplement sautées.
     for (const step of arc.steps) {
       if (isStepComplete(arcId, step.id)) continue;
-      try {
-        if (step.condition()) {
-          state.completedSteps.push(step.id);
-          log('success', `<em>${arc.nom} :</em> ${step.title}.`);
-        }
-      } catch (e) {}
-      // On n'arrête pas la boucle, plusieurs étapes peuvent se compléter en même temps si conditions remplies
+      let met = false;
+      try { met = !!step.condition(state); } catch (e) { met = false; }
+      if (!met) break;
+      state.completedSteps.push(step.id);
+      log('success', `<em>${arc.nom} :</em> ${step.title}.`);
     }
 
     // Récompense si arc complet et pas encore claim
@@ -3553,7 +3562,9 @@ function claimArcReward(arcId) {
   if (r.kind === 'blueprint') {
     addBlueprintToInventory(r.value, 'récompense de chronique');
   } else if (r.kind === 'tech') {
-    // Marque la tech comme "débloquée par chronique" (devient visible/disponible)
+    // Trace informative uniquement : le déblocage effectif de la tech légendaire
+    // est vérifié par canResearch() via prereq.requireArc (state.rewardClaimed).
+    // S.unlockedLegendaryTechs n'est lu nulle part ; conservé pour les sauvegardes.
     if (!S.unlockedLegendaryTechs) S.unlockedLegendaryTechs = {};
     S.unlockedLegendaryTechs[r.value] = true;
   } else if (r.kind === 'permanent_bonus') {
