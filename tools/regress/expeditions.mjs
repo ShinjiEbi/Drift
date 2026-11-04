@@ -120,9 +120,10 @@ try {
     // ---- F6 : outros ----
     sec('f6', () => {
       const outrosNoRuins = new Set(); const outrosRuins = new Set();
-      for (let i = 0; i < 40; i++) { const e = launch(); outrosNoRuins.add(e.scenes[e.scenes.length - 1]); cancel(e); }
+      // Tirage aléatoire : assez d'essais pour que le résultat ne dépende pas de la chance
+      for (let i = 0; i < 200; i++) { const e = launch(); outrosNoRuins.add(e.scenes[e.scenes.length - 1]); cancel(e); }
       body.ruines = 'humaines';
-      for (let i = 0; i < 40; i++) { const e = launch(); outrosRuins.add(e.scenes[e.scenes.length - 1]); cancel(e); }
+      for (let i = 0; i < 400 && !outrosRuins.has('outro_decouverte'); i++) { const e = launch(); outrosRuins.add(e.scenes[e.scenes.length - 1]); cancel(e); }
       return { noRuins: [...outrosNoRuins], ruins: [...outrosRuins] };
     });
     body.ruines = 'humaines';
