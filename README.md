@@ -27,7 +27,12 @@ src/
   state.js               état S, temps de jeu, sauvegarde, migrations, galaxie
   app.js                 logique : postes, médical, recherche, incidents, événements,
                          arcs, diplomatie, expéditions, combat, démarrage
-  ui.js                  rendu des vues, modales, journal, toasts
+  ui.js                  coquille : en-tête, 5 onglets (Base, Équipage, Expéditions,
+                         Récits, Labo), alertes, toasts, menu « ⋯ », fenêtres,
+                         écran de scène, combat, lancement d'expédition
+  views/                 une vue par onglet (base, equipage, expeditions, recits, labo)
+                         et common.js (formats, appels tolérants à app.js)
+  objectives.js          objectifs du tableau de bord (3 au plus, avec leur action)
   notifications.js       notifications système
   pwa.js                 enregistrement du service worker, bandeau de mise à jour,
                          bouton d'installation
