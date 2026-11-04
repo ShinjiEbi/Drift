@@ -791,7 +791,7 @@ export const ITEMS = {
     nom: "Grenade à concussion",
     type: 'weapon', origin: 'humain',
     desc: "Onde de choc concentrée. Étourdit plusieurs cibles simultanément, les rendant moins réactives pendant un round.",
-    combat: { aoe: true, damage: 3, stun: 1, label: "+3 dégâts zone, étourdit (−1 PA round suivant)" }
+    combat: { aoe: true, damage: 3, stun: 1, label: "+3 dégâts zone, étourdit (saute sa prochaine attaque)" }
   },
   grenade_iem: {
     nom: "Grenade IEM",
@@ -2988,7 +2988,7 @@ export const ENEMY_TYPES = {
 
   // — Machines / Gardiens —
   drone_gardien:      { nom: "Drone gardien",          category: 'machine', hp: 16, armor: 4, damage: [2, 6], accuracy: 75, pa: 2,
-    loot: { metal: 12, composants: 5 }, itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }] },
+    loot: { metal: 15, cristal: 2 }, itemLoot: [{ item: 'pistolet_plasma', chance: 0.20 }] },
   gardien_antique:    { nom: "Gardien antique",         category: 'machine', hp: 26, armor: 6, damage: [3, 8], accuracy: 65, pa: 2,
     loot: { metal: 25, cristal: 10 }, itemLoot: [{ item: 'grenade_iem', chance: 0.30 }, { item: 'bouclier_cinetique', chance: 0.15 }] },
   sentinelle_alien:   { nom: "Sentinelle alien",        category: 'machine', hp: 18, armor: 3, damage: [3, 7], accuracy: 70, pa: 2,
@@ -3035,9 +3035,9 @@ const COMBAT_SCENES = [
     weight: 3,
     text: "Une sphère métallique descend du plafond en ronronnant. Son œil rouge balaie la salle. Protocole de sécurité encore actif après des siècles.",
     choices: [
-      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 15, composants: 8 }, onDefeat: 'retreat' } } },
+      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 20, cristal: 3 }, onDefeat: 'retreat' } } },
       { label: "Pirater le protocole", req: { skill: { key: 'ingenierie', min: 3 } },
-        outcome: { loot: { metal: 20, composants: 10 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
+        outcome: { loot: { metal: 25, cristal: 5 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
       { label: "Contourner en silence", risky: { stat: 'dexterite', dc: 6,
           success: { log: "Le drone ne détecte rien. Passage libre." },
           fail:    { combat: { enemies: ['drone_gardien', 'drone_gardien'], lootOnWin: { metal: 20 }, onDefeat: 'retreat' } } } }

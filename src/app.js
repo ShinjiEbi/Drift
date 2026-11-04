@@ -3723,8 +3723,26 @@ export function allianceRequirement(f) {
   return { ok: true, why: '' };
 }
 
+// Compatibilité 0.31b : la ressource fantôme « composants » (butin de combat)
+// n'existe pas. Les sauvegardes qui en contiennent la voient convertie en métal.
+function purgeLegacyComposants() {
+  if (S.res && S.res.composants !== undefined) {
+    const n = Math.max(0, Math.floor(Number(S.res.composants) || 0));
+    delete S.res.composants;
+    if (n > 0) S.res.metal = Math.min(capOf('metal'), (S.res.metal || 0) + n);
+  }
+  for (const exp of S.expeditions || []) {
+    const loot = exp.accumulatedLoot;
+    if (!loot || loot.composants === undefined) continue;
+    const n = Math.max(0, Math.floor(Number(loot.composants) || 0));
+    delete loot.composants;
+    if (n > 0) loot.metal = (loot.metal || 0) + n;
+  }
+}
+
 // Détermine si une faction proposera une caravane à ce tick
 export function tickFactions() {
+  purgeLegacyComposants();
   if (!S.factions) return;
   for (const id in S.factions) {
     const f = S.factions[id];
@@ -4731,8 +4749,21 @@ function advanceScene(exp) {
 //   SYSTÈME DE COMBAT AU TOUR PAR TOUR (0.31)
 // ============================================================
 
-// Calcule les stats de combat d'un membre selon ses attributs + équipement embarqué
-export function memberCombatStats(member, expEquipment) {
+// Objets de combat « consommés par une action » (explosifs de zone, soins) : ils
+// restent dans la réserve commune de l'expédition et ne sont jamais portés.
+const isActionCombatItem = c => !!(c && (c.aoe || c.heal));
+// Explosifs utilisables par l'action « grenade », par ordre de priorité.
+const COMBAT_AOE_ITEMS = ['mine_eclats', 'grenade_concussion', 'grenade_iem'];
+// Trousses utilisables par l'action « Soigner », par ordre de priorité.
+const COMBAT_HEAL_KITS = ['nanobots_reparation', 'kit_medical'];
+const COMBAT_KIT_HEAL_DEFAULT = 8;   // trousse sans champ combat.heal (Kit médical avancé)
+// Ressources de butin héritées des anciennes données → ressource réelle.
+const COMBAT_LOOT_ALIASES = { composants: 'metal' };
+
+// Calcule les stats de combat d'un membre selon ses attributs + l'équipement qu'il PORTE.
+// `gear` : { itemId: n } attribué à ce membre (cf. allocateCombatGear) — et non la
+// soute entière de l'expédition. Les techs complétées s'appliquent à tout l'équipage.
+export function memberCombatStats(member, gear) {
   const vigueur    = member.stats?.vigueur    || 5;
   const dexterite  = member.stats?.dexterite  || 5;
   const sangfroid  = member.stats?.sangfroid  || 5;
@@ -4740,20 +4771,27 @@ export function memberCombatStats(member, expEquipment) {
   const medecine   = member.skills?.medecine  || 0;
   // Trait combattant_aguerri : +2 combat effectif
   const traitBonus = (member.traits || []).includes('combattant_aguerri') ? 2 : 0;
-  const effCombat  = combatSk + traitBonus;
+  // Techs : Résonance armée (expeditionCombatBonus) = +N en compétence de combat ;
+  // Blindage / Camouflage / Armure composite (expeditionThreatBonus < 0, menace
+  // réduite) = protection : +4 % d'esquive par point, +1 armure tous les 2 points.
+  const tech       = techEffectsAccumulated();
+  const techCombat = Math.max(0, tech.expeditionCombatBonus || 0);
+  const threatCut  = Math.max(0, -(tech.expeditionThreatBonus || 0));
+  const effCombat  = combatSk + traitBonus + techCombat;
 
   // Base HP selon Vigueur + exo-armure (bonus de vigueur → PV supplémentaires)
   let maxHp  = Math.max(3, 8 + (vigueur - 5) * 3);
   const maxPa  = 2 + Math.floor(sangfroid / 4);
 
-  // Scan de l'équipement : on garde la meilleure arme et cumule défenses
+  // Scan de l'équipement porté : meilleure arme + meilleures défenses
   let bestWeapon = null;    // { combat def } de la meilleure arme
   let armorBonus = 0, dodgeBonus = 0, armorPen = 0, shieldHp = 0;
 
-  for (const [itemId, count] of Object.entries(expEquipment || {})) {
+  for (const [itemId, count] of Object.entries(gear || {})) {
     if (count <= 0) continue;
     const c = ITEMS[itemId]?.combat;
-    if (!c) continue;
+    // Explosifs et soins ne sont pas des armes portées
+    if (!c || isActionCombatItem(c)) continue;
     // Meilleure arme = plus gros dégâts de base
     if ((c.damage || 0) > (bestWeapon?.damage || 0)) bestWeapon = c;
     if (c.armor) armorBonus = Math.max(armorBonus, c.armor);
@@ -4763,6 +4801,8 @@ export function memberCombatStats(member, expEquipment) {
     if (c.type === 'exo') maxHp += Math.max(0, (vigueur - 5)) * 2;
   }
   maxHp = Math.max(3, maxHp);
+  armorBonus += Math.floor(threatCut / 2);
+  dodgeBonus += threatCut * 4;
 
   // Dégâts de base : arme + skill combat
   const weaponDmg  = bestWeapon?.damage  || 0;
@@ -4791,13 +4831,15 @@ export function memberCombatStats(member, expEquipment) {
   }
 
   accuracy = Math.min(95, Math.max(20, accuracy));
+  dmgMin = Math.max(1, dmgMin);
+  dmgMax = Math.max(dmgMin, dmgMax);
 
   return {
     maxHp, maxPa,
     damage: [dmgMin, dmgMax],
     accuracy,
     armor: armorBonus,
-    dodge: dodgeBonus,
+    dodge: Math.min(60, dodgeBonus),
     armorPen,
     shieldHp,
     medecine,
@@ -4805,12 +4847,62 @@ export function memberCombatStats(member, expEquipment) {
   };
 }
 
+// Répartit l'équipement de combat embarqué entre les membres : chaque unité d'objet
+// est portée par UN seul membre, qui garde au plus une arme et une protection.
+// - Armes : la plus puissante d'abord, au meilleur porteur (compétence de combat
+//   + caractéristique liée au type d'arme) ; à égalité, au premier de l'équipe.
+// - Protections : l'exo-armure au plus vigoureux, les autres aux plus fragiles.
+// Explosifs (aoe) et soins (heal) restent en réserve commune : ils sont consommés
+// par les actions « grenade » et « Soigner ».
+function allocateCombatGear(team, equipment) {
+  const gear = Object.fromEntries(team.map(m => [m.id, {}]));
+  const weapons = [], protections = [];
+  for (const [itemId, count] of Object.entries(equipment || {})) {
+    const c = ITEMS[itemId]?.combat;
+    if (!c || isActionCombatItem(c) || !(count > 0)) continue;
+    for (let i = 0; i < count; i++) {
+      if ((c.damage || 0) > 0) weapons.push(itemId);
+      else if (c.armor || c.shieldHp || c.dodge || c.type === 'exo') protections.push(itemId);
+    }
+  }
+  const cdef = id => ITEMS[id].combat;
+  const protScore = c => (c.armor || 0) * 3 + (c.shieldHp || 0) + (c.dodge || 0) / 4;
+  weapons.sort((a, b) => (cdef(b).damage || 0) - (cdef(a).damage || 0) || (cdef(b).accuracy || 0) - (cdef(a).accuracy || 0));
+  protections.sort((a, b) => protScore(cdef(b)) - protScore(cdef(a)));
+
+  const statFor = { melee: 'vigueur', ranged: 'dexterite', precision: 'sangfroid' };
+  const skill = m => (m.skills?.combat || 0) + ((m.traits || []).includes('combattant_aguerri') ? 2 : 0);
+  const stat = (m, k) => m.stats?.[k] || 5;
+  const pickBest = (cands, score) => cands.reduce((a, b) => (score(b) > score(a) ? b : a));
+  const armed = new Set(), protectedIds = new Set();
+
+  for (const id of weapons) {
+    const cands = team.filter(m => !armed.has(m.id));
+    if (!cands.length) break;
+    const k = statFor[cdef(id).type] || 'dexterite';
+    const best = pickBest(cands, m => skill(m) * 2 + stat(m, k));
+    gear[best.id][id] = (gear[best.id][id] || 0) + 1;
+    armed.add(best.id);
+  }
+  for (const id of protections) {
+    const cands = team.filter(m => !protectedIds.has(m.id));
+    if (!cands.length) break;
+    const best = cdef(id).type === 'exo'
+      ? pickBest(cands, m => stat(m, 'vigueur'))
+      : pickBest(cands, m => -stat(m, 'vigueur'));
+    gear[best.id][id] = (gear[best.id][id] || 0) + 1;
+    protectedIds.add(best.id);
+  }
+  return gear;
+}
+
 // Initialise l'état de combat sur une expédition
 function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
   const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
+  const gear = allocateCombatGear(team, exp.equipment);
 
   const allies = team.map(m => {
-    const cs = memberCombatStats(m, exp.equipment);
+    const cs = memberCombatStats(m, gear[m.id]);
     return {
       id: m.id,
       name: m.name,
@@ -4822,6 +4914,7 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
       damage: cs.damage, accuracy: cs.accuracy,
       weaponType: cs.weaponType,
       medecine: cs.medecine,
+      gear: Object.keys(gear[m.id]),
       effects: []
     };
   });
@@ -4831,6 +4924,7 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
     if (!def) return null;
     return {
       idx, type: typeId, nom: def.nom,
+      category: def.category || null,
       hp: def.hp, maxHp: def.hp,
       armor: def.armor || 0,
       damage: def.damage || [1, 3],
@@ -4840,19 +4934,41 @@ function initCombat(exp, enemyTypeIds, lootOnWin, onDefeat) {
     };
   }).filter(Boolean);
 
+  // Aucun ennemi valide (données corrompues) : pas de combat, on poursuit la mission
+  if (enemies.length === 0 || allies.length === 0) {
+    exp.combat = null;
+    advanceScene(exp);
+    return;
+  }
+
+  const gearLines = allies.filter(a => a.gear.length)
+    .map(a => `${a.name} : ${a.gear.map(id => ITEMS[id]?.nom || id).join(', ')}`);
   exp.combat = {
     active: true,
     round: 1,
     phase: 'player',
+    seq: 0,            // compteur d'actions : entre dans la graine de chaque jet
     allies,
     enemies,
-    log: [`⚔ Contact ennemi — ${enemies.map(e => e.nom).join(', ')}`],
+    log: [`⚔ Contact ennemi — ${enemies.map(e => e.nom).join(', ')}`]
+      .concat(gearLines.length ? [`Équipement — ${gearLines.join(' · ')}`] : []),
     lootOnWin: lootOnWin || {},
     onDefeat: onDefeat || 'retreat',
     outcome: null,
     selectedAllyId: allies[0]?.id || null
   };
 }
+
+// RNG d'un jet de combat. Le compteur cbt.seq (absent des sauvegardes antérieures,
+// d'où le `|| 0`) rend chaque jet unique, même pour deux actions identiques
+// effectuées dans la même minute de jeu.
+function combatRng(exp, ...parts) {
+  const cbt = exp.combat;
+  cbt.seq = (cbt.seq || 0) + 1;
+  return rngFor(`${exp.seed}|cbt${cbt.round}|${cbt.seq}|${parts.join('|')}|${S.meta.gameMin}`);
+}
+
+const isStunned = enemy => (enemy.effects || []).some(e => e.type === 'stunned' && e.turnsLeft > 0);
 
 // Action d'un allié (appelée par l'UI)
 export function combatAllyAction(expId, allyId, action, targetIdx) {
@@ -4863,7 +4979,7 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   const ally = cbt.allies.find(a => a.id === allyId);
   if (!ally || ally.hp <= 0) return;
 
-  const rng = rngFor(`${exp.seed}|cbt${cbt.round}|${allyId}|${action}|${targetIdx}|${S.meta.gameMin}`);
+  const rng = combatRng(exp, allyId, action, targetIdx);
 
   if (action === 'attack' || action === 'precise') {
     const paCost = action === 'precise' ? 2 : 1;
@@ -4899,50 +5015,82 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
   }
   else if (action === 'heal') {
     if (ally.pa < 2) return;
-    const wounded = cbt.allies.filter(a => a.hp > 0 && a.hp < a.maxHp).sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
-    const healTarget = wounded[0] || ally;
+    // Il faut une compétence en médecine ou une trousse embarquée
+    const kit = COMBAT_HEAL_KITS.find(id => (exp.equipment?.[id] || 0) > 0);
+    if (!kit && !(ally.medecine > 0)) {
+      toast('Soigner requiert la compétence Médecine ou une trousse de soins embarquée.');
+      return;
+    }
+    const wounded = cbt.allies
+      .filter(a => a.hp > 0 && (a.hp < a.maxHp || (a.shieldHp || 0) < (a.maxShieldHp || 0)))
+      .sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
+    const healTarget = wounded[0];
+    if (!healTarget) { toast("Personne n'a besoin de soins."); return; }
     ally.pa -= 2;
-    const healAmt = 3 + ally.medecine * 2;
+    // Soin = savoir-faire du soigneur (3 + Médecine×2) + effet de la trousse utilisée
+    const kitHeal = kit ? (ITEMS[kit]?.combat?.heal ?? COMBAT_KIT_HEAL_DEFAULT) : 0;
+    if (kit) _consumeCombatItem(exp, kit);
+    const healAmt = (ally.medecine > 0 ? 3 + ally.medecine * 2 : 0) + kitHeal;
+    const hpBefore = healTarget.hp;
     healTarget.hp = Math.min(healTarget.maxHp, healTarget.hp + healAmt);
     // Restaure aussi le bouclier si partiellement entamé
+    let shieldNote = '';
     if (healTarget.maxShieldHp > 0 && healTarget.shieldHp < healTarget.maxShieldHp) {
+      const sBefore = healTarget.shieldHp;
       healTarget.shieldHp = Math.min(healTarget.maxShieldHp, healTarget.shieldHp + Math.floor(healAmt / 2));
+      if (healTarget.shieldHp > sBefore) shieldNote = `, bouclier +${healTarget.shieldHp - sBefore}`;
     }
-    const usedKit = _consumeCombatItem(exp, 'nanobots_reparation') || _consumeCombatItem(exp, 'kit_medical');
-    cbt.log.push(`${ally.name} soigne ${healTarget.name} : +${healAmt} PV${usedKit ? ' (kit utilisé)' : ''}.`);
+    cbt.log.push(`${ally.name} soigne ${healTarget.name} : +${healTarget.hp - hpBefore} PV${shieldNote}${kit ? ` (${ITEMS[kit]?.nom || kit} utilisé)` : ''}.`);
   }
   else if (action === 'grenade') {
     if (ally.pa < 1) return;
     // Priorité : mine_eclats, sinon grenade_concussion, sinon grenade_iem
-    const aoeItem = ['mine_eclats', 'grenade_concussion', 'grenade_iem'].find(id => (exp.equipment?.[id] || 0) > 0);
+    const aoeItem = COMBAT_AOE_ITEMS.find(id => (exp.equipment?.[id] || 0) > 0);
     if (!aoeItem) { toast('Aucun explosif AoE disponible !'); return; }
     const grDef = ITEMS[aoeItem]?.combat || {};
     _consumeCombatItem(exp, aoeItem);
     ally.pa -= 1;
     const baseDmg = 4 + (grDef.damage || 0) + Math.floor(rng() * 4);
-    const living = cbt.enemies.filter(e => e.hp > 0);
-    for (const e of living) {
+    const hits = [];
+    for (const e of cbt.enemies.filter(e => e.hp > 0)) {
       let dmg = baseDmg;
-      // Grenade IEM : bonus vs machines
-      if (aoeItem === 'grenade_iem' && e.category === 'machine') dmg += grDef.machineBonus || 8;
-      e.hp = Math.max(0, e.hp - Math.max(1, dmg - e.armor));
-      // Grenade concussion : étourdit (perd 1 PA au prochain tour)
-      if (aoeItem === 'grenade_concussion' && (grDef.stun || 0) > 0 && e.hp > 0) {
-        e.effects = e.effects || [];
-        e.effects.push({ type: 'stunned', turnsLeft: 1 });
+      // Grenade IEM : bonus vs machines (category absente des combats sauvegardés en 0.31b)
+      const category = e.category || ENEMY_TYPES[e.type]?.category;
+      if (grDef.machineBonus && category === 'machine') dmg += grDef.machineBonus;
+      const dealt = Math.max(1, dmg - (e.armor || 0));
+      e.hp = Math.max(0, e.hp - dealt);
+      // Grenade concussion : l'ennemi saute sa prochaine attaque (stun = nb d'attaques)
+      let stunNote = '';
+      if ((grDef.stun || 0) > 0 && e.hp > 0) {
+        e.effects = (e.effects || []).filter(x => x.type !== 'stunned');
+        e.effects.push({ type: 'stunned', turnsLeft: grDef.stun });
+        stunNote = ', étourdi';
       }
+      hits.push(`${e.nom} ${dealt}${e.hp <= 0 ? ' — neutralisé' : stunNote}`);
     }
     const itemNom = ITEMS[aoeItem]?.nom || aoeItem;
-    cbt.log.push(`${ally.name} lance ${itemNom} : ${baseDmg} dégâts à tous les ennemis !`);
+    cbt.log.push(`${ally.name} lance ${itemNom} : ${hits.join(' · ')} (dégâts après armure).`);
   }
   else if (action === 'end_turn') {
     ally.pa = 0;
     cbt.log.push(`${ally.name} passe son tour.`);
   }
   else if (action === 'retreat') {
-    cbt.log.push("Retraite ! L'équipe bat en retraite.");
+    // F3 — Décrocher a un prix : chaque ennemi encore actif (non étourdi)
+    // porte une attaque d'opportunité avant que l'équipe ne rompe le contact.
+    const chasers = cbt.enemies.filter(e => e.hp > 0 && !isStunned(e));
+    if (chasers.length > 0) {
+      cbt.log.push(`Retraite sous le feu : ${chasers.length} attaque${chasers.length > 1 ? 's' : ''} d'opportunité !`);
+      for (const enemy of chasers) _enemyAttack(cbt, enemy, rng);
+    }
     cbt.phase = 'ended';
-    cbt.outcome = 'retreat';
+    if (cbt.allies.every(a => a.hp <= 0)) {
+      cbt.outcome = 'defeat';
+      cbt.log.push("💀 Défaite — l'équipe est fauchée pendant la retraite.");
+    } else {
+      cbt.outcome = 'retreat';
+      cbt.log.push("Retraite ! L'équipe rompt le contact.");
+    }
     resolveCombatEnd(exp);
     render();
     return;
@@ -4975,49 +5123,59 @@ function _consumeCombatItem(exp, itemId) {
   return true;
 }
 
+// Une attaque d'un ennemi : cible l'allié vivant le plus entamé (ratio PV le plus bas).
+function _enemyAttack(cbt, enemy, rng) {
+  const aliveAllies = cbt.allies.filter(a => a.hp > 0);
+  if (aliveAllies.length === 0) return;
+  const target = aliveAllies.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b);
+  const coverArmor = (target.effects || []).find(e => e.type === 'cover')?.armor || 0;
+  const effectiveArmor = (target.armor || 0) + coverArmor;
+  const dodgeChance = target.dodge || 0;
+  const roll = Math.floor(rng() * 100);
+  const hit = roll >= dodgeChance && roll < enemy.accuracy;
+
+  if (hit) {
+    const [dmin, dmax] = enemy.damage;
+    const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1));
+    const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
+    // Les dégâts frappent le bouclier d'abord, puis les PV
+    if ((target.shieldHp || 0) > 0) {
+      const shieldAbsorb = Math.min(target.shieldHp, effectiveDmg);
+      target.shieldHp -= shieldAbsorb;
+      const overflow = effectiveDmg - shieldAbsorb;
+      if (overflow > 0) target.hp = Math.max(0, target.hp - overflow);
+      cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
+    } else {
+      target.hp = Math.max(0, target.hp - effectiveDmg);
+      cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${target.hp <= 0 ? ' — à terre !' : '.'}`);
+    }
+  } else {
+    cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 && roll < dodgeChance ? 'esquivé !' : 'raté !'}`);
+  }
+}
+
 function _processEnemyPhase(exp) {
   const cbt = exp.combat;
   cbt.phase = 'enemy';
   cbt.log.push(`— Phase ennemie (Round ${cbt.round}) —`);
 
-  const rng = rngFor(`${exp.seed}|enemy${cbt.round}|${S.meta.gameMin}`);
-  const living = () => cbt.allies.filter(a => a.hp > 0);
+  const rng = combatRng(exp, 'enemy');
 
   for (const enemy of cbt.enemies.filter(e => e.hp > 0)) {
-    // Ennemi étourdi → passe son tour
-    const stunned = enemy.effects?.some(e => e.type === 'stunned');
-    if (stunned) {
+    // Ennemi étourdi → passe son attaque
+    if (isStunned(enemy)) {
       cbt.log.push(`${enemy.nom} est étourdi — passe son attaque.`);
       continue;
     }
-    const aliveAllies = living();
-    if (aliveAllies.length === 0) break;
-    // Cible l'allié avec le ratio HP/maxHP le plus bas
-    const target = aliveAllies.reduce((a, b) => (a.hp / a.maxHp) < (b.hp / b.maxHp) ? a : b);
-    const coverArmor = target.effects.find(e => e.type === 'cover')?.armor || 0;
-    const effectiveArmor = target.armor + coverArmor;
-    const dodgeChance = target.dodge || 0;
-    const roll = Math.floor(rng() * 100);
-    const hit = roll >= dodgeChance && roll < enemy.accuracy;
+    if (!cbt.allies.some(a => a.hp > 0)) break;
+    _enemyAttack(cbt, enemy, rng);
+  }
 
-    if (hit) {
-      const [dmin, dmax] = enemy.damage;
-      const rawDmg = dmin + Math.floor(rng() * (dmax - dmin + 1));
-      const effectiveDmg = Math.max(1, rawDmg - effectiveArmor);
-      // Les dégâts frappent le bouclier d'abord, puis les PV
-      if ((target.shieldHp || 0) > 0) {
-        const shieldAbsorb = Math.min(target.shieldHp, effectiveDmg);
-        target.shieldHp -= shieldAbsorb;
-        const overflow = effectiveDmg - shieldAbsorb;
-        if (overflow > 0) target.hp = Math.max(0, target.hp - overflow);
-        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
-      } else {
-        target.hp = Math.max(0, target.hp - effectiveDmg);
-        cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${target.hp <= 0 ? ' — à terre !' : '.'}`);
-      }
-    } else {
-      cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 ? 'esquivé !' : 'raté !'}`);
-    }
+  // Décompte des effets ennemis (étourdissement…) : un stun de N fait sauter
+  // N phases ennemies, puis l'effet est purgé.
+  for (const e of cbt.enemies) {
+    if (!e.effects?.length) continue;
+    e.effects = e.effects.map(x => ({ ...x, turnsLeft: (x.turnsLeft || 0) - 1 })).filter(x => x.turnsLeft > 0);
   }
 
   // Défaite ?
@@ -5040,22 +5198,47 @@ function _processEnemyPhase(exp) {
   cbt.log.push(`— Round ${cbt.round} · Tour des alliés —`);
 }
 
+// Ajoute un butin de combat { ressource: n } à `into`, en ignorant les ressources
+// inconnues (les alias hérités, ex. « composants », sont convertis).
+function _addCombatLoot(into, loot) {
+  for (const [k, v] of Object.entries(loot || {})) {
+    const res = COMBAT_LOOT_ALIASES[k] || k;
+    if (!RESOURCES.includes(res) || !(v > 0)) continue;
+    into[res] = (into[res] || 0) + v;
+  }
+}
+
 function resolveCombatEnd(exp) {
   const cbt = exp.combat;
   cbt.active = false;
 
   if (cbt.outcome === 'victory') {
-    // Loot de victoire
-    for (const [k, v] of Object.entries(cbt.lootOnWin)) {
-      exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + v;
+    // Butin : récompense de la scène + dépouilles des ennemis vaincus
+    const gained = {};
+    _addCombatLoot(gained, cbt.lootOnWin);
+    for (const enemy of cbt.enemies) _addCombatLoot(gained, enemy.loot);
+    // Site déjà fouillé : butin réduit (exp.lootMult, posé au lancement de l'expédition)
+    const lootMult = exp.lootMult ?? 1;
+    if (lootMult !== 1) for (const k in gained) gained[k] = Math.floor(gained[k] * lootMult);
+    // Plafonné par la place restante dans la soute (même règle que le butin des scènes)
+    const vessel = S.fleet.find(v => v.id === exp.vesselId);
+    const cargoCap = vessel ? (VESSELS[vessel.type]?.cargo ?? 999) : 999;
+    const carried = Object.values(exp.accumulatedLoot).reduce((s, v) => s + v, 0);
+    const room = Math.max(0, cargoCap - carried);
+    const gainedTotal = Object.values(gained).reduce((s, v) => s + v, 0);
+    const ratio = gainedTotal > room ? room / gainedTotal : 1;
+    const taken = {};
+    for (const [k, v] of Object.entries(gained)) {
+      const n = Math.floor(v * ratio);
+      if (n <= 0) continue;
+      taken[k] = n;
+      exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + n;
     }
-    // Loot ressources + items des ennemis vaincus
-    const rng = rngFor(`${exp.seed}|loot${cbt.round}|${S.meta.gameMin}`);
+    const left = gainedTotal - Object.values(taken).reduce((s, v) => s + v, 0);
+    if (left > 0) exp.accumulatedLog.push(`Soute pleine : ${left} unité(s) de butin abandonnée(s) sur place.`);
+    // Loot d'items (chance-based)
+    const rng = combatRng(exp, 'loot');
     for (const enemy of cbt.enemies) {
-      for (const [k, v] of Object.entries(enemy.loot || {})) {
-        exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + v;
-      }
-      // Loot d'items (chance-based)
       const def = ENEMY_TYPES[enemy.type];
       for (const drop of (def?.itemLoot || [])) {
         if (rng() < drop.chance) {
@@ -5068,7 +5251,7 @@ function resolveCombatEnd(exp) {
       const m = S.crew.find(c => c.id === id);
       if (m) m.moral = Math.min(100, m.moral + 5);
     }
-    const lootDesc = Object.entries(cbt.lootOnWin).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
+    const lootDesc = Object.entries(taken).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
     exp.accumulatedLog.push(`Combat gagné${lootDesc ? ' : ' + lootDesc : ' — zone sécurisée'}.`);
     advanceScene(exp);
   } else {
