@@ -96,6 +96,10 @@ try {
     delete body.chronicle;
     const launch = (equipment = {}) => {
       refill();
+      // Expéditions ordinaires : pas d'histoire sur le corps de test (l'apparition
+      // garantie peut en placer une sur le corps compatible le plus proche)
+      delete body.chronicle;
+      body.chronicleChecked = true;
       for (const [k, n] of Object.entries(equipment)) S.inventory[k] = (S.inventory[k] || 0) + n;
       app.launchExpedition({ vesselId: 'v_rx', bodyId: body.id, crewIds: team, equipment });
       return S.expeditions[S.expeditions.length - 1];
