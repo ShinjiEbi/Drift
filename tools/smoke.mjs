@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
-const DAYS = Number(args[args.indexOf('--days') + 1]) || (args.includes('--days') ? 10 : 10);
+const DAYS = Number(args[args.indexOf('--days') + 1]) || 3;   // jours réels simulés (86 400 ticks chacun)
 
 let chromium;
 try {
@@ -144,23 +144,27 @@ try {
       if (Array.isArray(o)) { o.forEach((v, i) => scan(v, p + '[' + i + ']', d + 1)); return; }
       for (const k in o) scan(o[k], p + '.' + k, d + 1);
     };
+    // V1 : 1 tick = 1 seconde réelle, un jour = 86 400 ticks
+    const DAY = 86400;
     const t0 = performance.now();
-    for (let i = 0; i < DAYS * 1440; i++) {
+    for (let i = 0; i < DAYS * DAY; i++) {
       try { st.tickOnce({ silent: false }); } catch (e) { const k = 'tick: ' + e.message; errs[k] = (errs[k] || 0) + 1; }
-      if (i % 120 === 0) { try { ui.render(); } catch (e) { const k = 'render: ' + e.message; errs[k] = (errs[k] || 0) + 1; } }
-      if (i % 1440 === 0) {
+      if (i % 900 === 0) { try { ui.render(); } catch (e) { const k = 'render: ' + e.message; errs[k] = (errs[k] || 0) + 1; } }
+      if (i % 3600 === 0) {
         scan(S, 'S', 0);
         for (const k of Object.keys(S.res)) S.res[k] = Math.max(S.res[k], st.capOf(k) * 0.5);
+        // les décisions en direct s'accumulent sans joueur : on vide la file (sauf la dernière)
+        if (S.pendingDecisions.length > 1) S.pendingDecisions.splice(0, S.pendingDecisions.length - 1);
       }
     }
     const simMs = performance.now() - t0;
-    for (let i = 0; i < 1440; i++) {
+    for (let i = 0; i < 3600; i++) {
       try { st.tickOnce({ silent: true }); } catch (e) { const k = 'silent tick: ' + e.message; errs[k] = (errs[k] || 0) + 1; }
     }
     try { ui.render(); } catch (e) { errs['render final: ' + e.message] = 1; }
     scan(S, 'S', 0);
     st.save();
-    return { errs, nan: [...nan], msPerTick: simMs / (DAYS * 1440), alive: S.crew.filter(m => m.statut !== 'mort').length, gameMin: S.meta.gameMin, colonyName: S.meta.colonyName };
+    return { errs, nan: [...nan], msPerTick: simMs / (DAYS * DAY), alive: S.crew.filter(m => m.statut !== 'mort').length, gameMin: S.meta.gameMin, colonyName: S.meta.colonyName };
   }, DAYS);
   const simErrs = Object.entries(sim.errs);
   if (simErrs.length) fail(`erreurs pendant la simulation : ${simErrs.slice(0, 5).map(([k, n]) => `${k} (×${n})`).join(' | ')}`);
@@ -181,7 +185,7 @@ try {
   await page.waitForTimeout(2000);
   const after = await page.evaluate(async () => { const st = await import('./src/state.js'); return { gameMin: st.S?.meta?.gameMin, crew: st.S?.crew?.length }; });
   if (!(after.gameMin >= sim.gameMin)) fail(`sauvegarde non relue : gameMin ${after.gameMin} < ${sim.gameMin}`);
-  else ok(`sauvegarde relue (J${Math.floor(after.gameMin / 1440) + 1}, ${after.crew} colons)`);
+  else ok(`sauvegarde relue (jour ${Math.floor(after.gameMin / 86400) + 1}, ${after.crew} colons)`);
   flushErrors('rechargement sans erreur');
 } catch (e) {
   fail('exception du test : ' + e.message);

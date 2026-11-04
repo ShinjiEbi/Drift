@@ -80,6 +80,7 @@ async function installHelpers() {
     T.S = () => st.S;
     T.setupColony = () => {
       const S = st.S;
+      S.crew = []; S.assignments = {};   // V1 : colonie de test sans l'équipage de départ
       for (const [id, d] of Object.entries(cat.MODULES)) S.modules[id] = { level: d.maxLevel || 1 };
       for (const id of Object.keys(cat.TECH_TREE)) S.techCompleted[id] = { at: 0 };
       for (let i = 0; i < 4; i++) {

@@ -97,7 +97,7 @@ try {
     const { S } = await import('./src/state.js');
     return { n: S.pendingDecisions.length, auto: S.journal.filter(e => /décision automatique/.test(e.txt)).length };
   });
-  check(cap.n === 5 && cap.auto >= 2, `file plafonnée à 5 (${cap.n}), les plus anciennes résolues automatiquement (${cap.auto})`);
+  check(cap.n === 3 && cap.auto >= 4, `file plafonnée à 3 (${cap.n}), les plus anciennes mineures résolues automatiquement (${cap.auto})`);
   await page.evaluate(() => document.querySelector('#sceneOverlay').classList.remove('show'));
   await waitShown(page, /Corrélation/);
   check(true, 'la décision s\'affiche à la fermeture de la scène');
@@ -191,15 +191,23 @@ try {
     S.pendingChainIncidents = [{ incidentId: 'mine_eboulement', triggerAt: S.meta.gameMin }];
     const j0 = S.journal.length;
     st.tickOnce({ silent: true });
-    const silent = { pending: S.pendingDecisions.length, chain: S.pendingChainIncidents.length,
+    // V1 : hors ligne, un incident sérieux attend le retour du joueur…
+    const silent = { pending: S.pendingDecisions.map(d => d.refId), chain: S.pendingChainIncidents.length,
       logged: S.journal.slice(j0).some(e => /Éboulement dans la mine.*décision automatique/.test(e.txt)) };
+    S.pendingDecisions.length = 0;
+    // … un incident mineur (gravité 1) est tranché automatiquement
+    S.pendingChainIncidents = [{ incidentId: 'mine_filon_riche', triggerAt: S.meta.gameMin }];
+    const j1 = S.journal.length;
+    st.tickOnce({ silent: true });
+    const minor = { pending: S.pendingDecisions.length, logged: S.journal.slice(j1).some(e => /Filon inattendu.*décision automatique/.test(e.txt)) };
     S.pendingChainIncidents = [{ incidentId: 'mine_eboulement', triggerAt: S.meta.gameMin }];
     st.tickOnce({ silent: false });
     const live = { pending: S.pendingDecisions.map(d => d.refId) };
     S.pendingDecisions.length = 0;
-    return { silent, live };
+    return { silent, minor, live };
   });
-  check(chain.silent.pending === 0 && chain.silent.chain === 0 && chain.silent.logged, 'en silencieux : incident en chaîne résolu automatiquement');
+  check(chain.silent.pending.includes('mine_eboulement') && chain.silent.chain === 0 && !chain.silent.logged, 'en silencieux : incident en chaîne sérieux gardé pour le retour du joueur');
+  check(chain.minor.pending === 0 && chain.minor.logged, 'en silencieux : incident en chaîne mineur résolu automatiquement');
   check(chain.live.pending.includes('mine_eboulement'), 'en direct : incident en chaîne mis en file');
   await page.evaluate(() => document.querySelector('#modalBg').classList.remove('show'));
 
