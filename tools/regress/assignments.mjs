@@ -213,6 +213,30 @@ try {
     const staffed = app.staffOf('commandement').length;
     return { ok, before: before === 1, after: after === 0, staffConsistent: staffed === after };
   });
+
+  // Réparation au démarrage réel : sauvegarde abîmée enregistrée puis page rechargée
+  await page.evaluate(() => {
+    const { st, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 3 };
+    const doc = mk({ id: 'm_doc', statut: 'libre', skills: { medecine: 3, pilotage: 2 } });   // « libéré » par l'ancien diagnostic
+    S.assignments['commandement:0'] = doc.id;
+    const pat = mk({ id: 'm_pat', statut: 'infirmerie' });
+    pat.statuts = [{ key: 'infection', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    S.treatments = [{ id: 'tr_old', memberId: pat.id, statusIdx: 1, statutKey: 'infection', doctorId: doc.id, totalMin: 600, doneMin: 0, cost: {} }];
+    S.meta.lastTickRealMs = Date.now();
+    st.save();
+  });
+  await prepare();
+  await scenario('Réparation d\'une sauvegarde au chargement de la page', () => {
+    const { st } = window.__t;
+    const S = st.S;
+    const doc = S.crew.find(m => m.id === 'm_doc');
+    return {
+      doctorWorking: doc?.statut === 'travail',
+      treatmentIdx: S.treatments.length === 1 && S.treatments[0].statusIdx === 0
+    };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {
