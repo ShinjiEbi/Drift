@@ -4157,7 +4157,13 @@ export function launchExpedition(args) {
 }
 
 // Avance toutes les expéditions d'un tick
+let _chronRecruitsCheckedFor = null;
 export function tickExpeditions() {
+  // Répare une fois par partie chargée les colons de chronique créés par les versions ≤ 0.32
+  if (_chronRecruitsCheckedFor !== S) {
+    _chronRecruitsCheckedFor = S;
+    normalizeChronicleRecruits(S);
+  }
   if (S.expeditions.length === 0) return;
   const completed = [];
   for (const exp of [...S.expeditions]) {
@@ -4331,27 +4337,77 @@ function onReturn(exp) {
   
   // 0.24 — Recruter les PNJ ramenés des chroniques planétaires
   if (exp.pendingChronicleRecruits && exp.pendingChronicleRecruits.length > 0) {
-    for (const recruit of exp.pendingChronicleRecruits) {
-      const def = recruit.characterDef;
-      // Construit un colon spécial à partir du characterDef
-      const member = {
-        id: 'chronchar_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
-        name: def.name,
-        age: def.age,
-        origine: 'humaine',
-        sante: 80,
-        moral: 60,
-        loyaute: 55,
-        statut: 'libre',
-        statuts: [],
-        traits: ['chronique_' + recruit.characterId], // marqueur unique
-        stats: { vigueur: 4, dexterite: 4, intellect: 6, sangfroid: 6, charisme: 5 },
-        skills: { combat: 1, science: def.role === 'Biologiste' ? 3 : 1, ingenierie: def.role === 'Mécanicien' ? 3 : 1, medecine: 1, pilotage: 1, linguistique: 2, survie: 2 },
-        birthGameMin: S.meta.gameMin - (def.age * YEAR_IN_GAME_MIN),
-        chronicleOrigin: recruit.chronicleId
-      };
-      S.crew.push(member);
-      log('success', `<em>${member.name}</em> rejoint l'avant-poste.`);
+    for (const recruit of exp.pendingChronicleRecruits) recruitChronicleCharacter(recruit);
+  }
+}
+
+// ---- PNJ de chronique ramenés à l'avant-poste ----
+// Le PNJ est construit comme un candidat ordinaire (genCandidate) dont on
+// surcharge l'identité, puis accepté via acceptCandidate (même conversion
+// candidat → membre que le recrutement normal). Habitat plein : il reste
+// dans la liste des candidats jusqu'à ce qu'une place se libère.
+function chronicleOriginOf(chronicleId, def) {
+  return { id: 'chronique', label: CHRONICLES[chronicleId]?.nom || 'Chronique planétaire', notes: def?.role && def.role !== '?' ? def.role : 'Rencontré·e lors d\'une chronique' };
+}
+
+function recruitChronicleCharacter({ characterId, chronicleId, characterDef }) {
+  const def = CHRONICLES[chronicleId]?.characters?.[characterId] || characterDef;
+  if (!def) return;
+  const already = [...S.crew, ...S.candidates].some(p => p.chronicleOrigin === chronicleId && p.chronicleCharacter === characterId);
+  if (already) return;
+  const c = genCandidate();
+  c.name = def.name;
+  if (typeof def.age === 'number' && def.age > 0) c.age = def.age;
+  c.origin = chronicleOriginOf(chronicleId, def);
+  if (def.stats) Object.assign(c.stats, def.stats);
+  if (def.skills) Object.assign(c.skills, def.skills);
+  if (Array.isArray(def.traits)) c.traits = def.traits.filter(t => TRAITS[t]);
+  c.salary = Math.max(1, 1 + Math.max(...Object.values(c.skills)));
+  c.chronicleOrigin = chronicleId;
+  c.chronicleCharacter = characterId;
+  S.candidates.push(c);
+  const cap = crewUsage();
+  if (cap.used < cap.total) {
+    acceptCandidate(c.id);
+  } else {
+    log('warn', `<em>${c.name}</em> est arrivé·e à l'avant-poste, mais l'habitat est plein : sa candidature attend une place libre.`);
+  }
+}
+
+// Sauvegardes ≤ 0.32 : les PNJ de chronique étaient créés sans `origin`
+// (champ `origine: 'humaine'`), sans séquelles ni salaire, avec un faux trait
+// « chronique_xxx ». On les remet au format d'un colon normal.
+// state : l'état à réparer (S par défaut ; load() peut l'appeler sur la sauvegarde brute).
+export function normalizeChronicleRecruits(state = S) {
+  if (!state) return;
+  const crew = state.crew || [];
+  const people = [...crew, ...(state.candidates || [])];
+  for (const p of people) {
+    if (!p || typeof p !== 'object') continue;
+    if (Array.isArray(p.traits)) {
+      const isFake = t => typeof t === 'string' && t.startsWith('chronique_') && !TRAITS[t];
+      const fake = p.traits.find(isFake);
+      if (fake) {
+        if (!p.chronicleCharacter) p.chronicleCharacter = fake.slice('chronique_'.length);
+        p.traits = p.traits.filter(t => !isFake(t));
+      }
+    } else {
+      p.traits = [];
+    }
+    if (!p.origin || typeof p.origin !== 'object' || !p.origin.label) {
+      const chronId = p.chronicleOrigin;
+      const def = chronId ? CHRONICLES[chronId]?.characters?.[p.chronicleCharacter] : null;
+      p.origin = chronId ? chronicleOriginOf(chronId, def) : { id: 'inconnue', label: 'Origine inconnue', notes: '' };
+      delete p.origine;
+    }
+    if (!p.stats) p.stats = { vigueur: 5, dexterite: 5, intellect: 5, sangfroid: 5, charisme: 5 };
+    if (!p.skills) p.skills = {};
+    if (typeof p.salary !== 'number') p.salary = Math.max(1, 1 + Math.max(0, ...Object.values(p.skills).filter(v => typeof v === 'number')));
+    if (crew.includes(p)) {
+      if (!Array.isArray(p.statuts)) p.statuts = [];
+      if (!Array.isArray(p.sequels)) p.sequels = [];
+      if (!Array.isArray(p.blessures)) p.blessures = [];
+      if (typeof p.joinedAt !== 'number') p.joinedAt = state.meta?.gameMin || 0;
     }
   }
 }

@@ -186,6 +186,11 @@ for (const [id, c] of Object.entries(CHRONICLES)) {
   for (const [k, table] of [['biome', BIOMES], ['atmosphere', ATMOSPHERES], ['ruines', RUINES]]) {
     for (const v of [].concat(r[k] ?? [])) if (!table[v]) err(`CHRONICLES.${id}.requires.${k}`, `valeur jamais générée « ${v} »`);
   }
+  for (const [cid, ch] of Object.entries(c.characters || {})) {
+    for (const k of Object.keys(ch.skills || {})) if (!SKILLS.has(k)) err(`CHRONICLES.${id}.characters.${cid}`, `compétence inconnue « ${k} »`);
+    for (const k of Object.keys(ch.stats || {})) if (!STATS.has(k)) err(`CHRONICLES.${id}.characters.${cid}`, `caractéristique inconnue « ${k} »`);
+    for (const t of ch.traits || []) if (!TRAITS[t]) err(`CHRONICLES.${id}.characters.${cid}`, `trait inconnu « ${t} »`);
+  }
 }
 
 // ---- Arcs ----

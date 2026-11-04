@@ -26,9 +26,11 @@ export const CHRONICLES = {
     
     // Personnages persistants
     characters: {
-      adele:  { name: 'Adèle Voronine', age: 47, role: 'Biologiste',  voice: 'sèche, ironique' },
+      adele:  { name: 'Adèle Voronine', age: 47, role: 'Biologiste',  voice: 'sèche, ironique',
+                skills: { science: 3, medecine: 2, survie: 2 }, traits: ['cynique', 'survivant'] },
       tomas:  { name: 'Tomas Renaud',   age: 31, role: 'Mécanicien',  voice: 'naïf, dépendant' },
-      soeur:  { name: 'Mira Voronine',  age: 52, role: '?',            voice: 'rare, étrange' }
+      soeur:  { name: 'Mira Voronine',  age: 52, role: '?',            voice: 'rare, étrange',
+                skills: { linguistique: 4, science: 2 }, traits: ['voix_murmurent', 'distant'] }
     },
     
     // Flags trackés tout au long de la chronique
@@ -246,7 +248,8 @@ export const CHRONICLES = {
     spawnChance: 0.30,
     
     characters: {
-      elie:   { name: 'Dr. Élie Calvet', age: 39, role: 'Physicienne théoricienne', voice: 'précise, inquiète' }
+      elie:   { name: 'Dr. Élie Calvet', age: 39, role: 'Physicienne théoricienne', voice: 'précise, inquiète',
+                skills: { science: 4, ingenierie: 2 }, traits: ['savant_eclaire', 'insomniaque'] }
     },
     
     initialFlags: {
@@ -320,7 +323,8 @@ export const CHRONICLES = {
     
     characters: {
       eyla:    { name: 'Eyla',      age: 73, role: 'Première Veilleuse',  voice: 'douce, écoute plus qu\'elle ne parle' },
-      karn:    { name: 'Karn',      age: 24, role: 'Jeune Veilleur',      voice: 'méfiant, curieux' },
+      karn:    { name: 'Karn',      age: 24, role: 'Jeune Veilleur',      voice: 'méfiant, curieux',
+                 skills: { linguistique: 3, survie: 3 }, traits: ['curieux'] },
       pretre:  { name: 'Le Prêtre', age: 56, role: 'Gardien des Présents', voice: 'rituelle, hostile' }
     },
     
@@ -398,7 +402,8 @@ export const CHRONICLES = {
     characters: {
       kherda:    { name: 'Khêr-Da',    age: 134, role: 'Marchand hybride',     voice: 'calme, précise, ironique' },
       tisseuse:  { name: 'La Tisseuse', age: 0,   role: 'Marchande de promesses', voice: 'multiple, comme un chœur' },
-      voln:      { name: 'Voln',       age: 38,  role: 'Naufragé rabatteur',    voice: 'rauque, désespérée' }
+      voln:      { name: 'Voln',       age: 38,  role: 'Naufragé rabatteur',    voice: 'rauque, désespérée',
+                   skills: { linguistique: 3, pilotage: 2, survie: 2 }, traits: ['survivant'] }
     },
     
     initialFlags: {
