@@ -1980,15 +1980,20 @@ export function finishTreatment(treatment) {
 // Mort d'un membre
 function memberDies(member, cause = 'cause inconnue') {
   if (member.statut === 'mort') return;
-  // Libère le poste s'il en avait un
+  // Libère le poste s'il en avait un (archive la carrière), puis toute
+  // affectation résiduelle qui pointerait encore vers lui
   unassignMember(member.id);
+  for (const k of Object.keys(S.assignments || {})) {
+    if (S.assignments[k] === member.id) delete S.assignments[k];
+  }
   member.statut = 'mort';
   member.diedAt = S.meta.gameMin;
   // Retire les traitements en cours
-  S.treatments = S.treatments.filter(t => t.memberId !== member.id);
-  // Retire les sessions de formation
-  const tIdx = S.training.findIndex(t => t.memberId === member.id);
-  if (tIdx >= 0) S.training.splice(tIdx, 1);
+  S.treatments = (S.treatments || []).filter(t => t.memberId !== member.id);
+  // Retire ses sessions de formation (en place : la boucle de tick garde la référence)
+  for (let i = (S.training || []).length - 1; i >= 0; i--) {
+    if (S.training[i].memberId === member.id) S.training.splice(i, 1);
+  }
   // Impact moral collectif
   for (const m of S.crew) {
     if (m.id !== member.id && m.statut !== 'mort') {
@@ -2515,6 +2520,9 @@ export function maxHealthOf(member) {
 export function tickRelations() {
   ensureCrewIntegrity();   // répare une fois les sauvegardes chargées (cf. repairCrewState)
   if (!S.crew || S.crew.length < 2) return;
+  // Les morts ne tissent plus de liens
+  const living = new Set();
+  for (const m of S.crew) if (m.statut !== 'mort') living.add(m.id);
   // Même bâtiment
   for (const modKey in MODULE_JOBS) {
     const staff = staffOf(modKey);
@@ -2527,15 +2535,17 @@ export function tickRelations() {
   }
   // Même expédition
   for (const exp of S.expeditions || []) {
-    if (exp.crewIds.length < 2) continue;
-    for (let i = 0; i < exp.crewIds.length; i++) {
-      for (let j = i+1; j < exp.crewIds.length; j++) {
-        adjustAffinity(exp.crewIds[i], exp.crewIds[j], 0.06 * MIN_PER_TICK);
+    const ids = (exp.crewIds || []).filter(id => living.has(id));
+    if (ids.length < 2) continue;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i+1; j < ids.length; j++) {
+        adjustAffinity(ids[i], ids[j], 0.06 * MIN_PER_TICK);
       }
     }
   }
   // Soin : patient ↔ médecin staff
   for (const t of S.treatments || []) {
+    if (!living.has(t.memberId)) continue;
     const doc = bestAvailableDoctor();
     if (doc && doc.id !== t.memberId) {
       adjustAffinity(doc.id, t.memberId, 0.10 * MIN_PER_TICK);
@@ -2543,6 +2553,7 @@ export function tickRelations() {
   }
   // Formation : élève ↔ instructeur
   for (const tr of S.training || []) {
+    if (!living.has(tr.memberId) || !living.has(tr.instructorId)) continue;
     if (tr.instructorId && tr.instructorId !== tr.memberId) {
       adjustAffinity(tr.instructorId, tr.memberId, 0.05 * MIN_PER_TICK);
     }
@@ -2561,7 +2572,7 @@ export function tickRelationMoraleEffects() {
         if (Math.abs(aff) < REL_FRIEND) continue;
         const m1 = S.crew.find(c => c.id === exp.crewIds[i]);
         const m2 = S.crew.find(c => c.id === exp.crewIds[j]);
-        if (!m1 || !m2) continue;
+        if (!m1 || !m2 || m1.statut === 'mort' || m2.statut === 'mort') continue;
         // Effet par tick : très petit, mais cumulatif
         const moralDelta = aff > 0 ? 0.005 : -0.008;
         const factor = MIN_PER_TICK;
@@ -2586,11 +2597,8 @@ export function tickAging() {
       const yearlyDeathProb = (age - 70) * 0.01 + 0.01;  // 1% à 70, 2% à 71...
       const tickProb = yearlyDeathProb * MIN_PER_TICK / YEAR_IN_GAME_MIN;
       if (Math.random() < tickProb) {
-        // Mort de cause naturelle
-        memberDies(m, "vieillesse");
-        log('warn', `<em>${m.name}</em> s'est éteint(e) paisiblement, à ${age} ans.`);
-        // Trauma sur les amis proches
-        triggerGriefOnFriends(m);
+        // Mort de cause naturelle (memberDies journalise et déclenche le deuil des proches)
+        memberDies(m, `Mort naturelle, paisible, à ${age} ans.`);
       }
     }
   }
@@ -2625,7 +2633,8 @@ export function significantRelations(memberId) {
   if (!S.relations) return { friends: [], rivals: [] };
   const out = [];
   for (const m of (S.crew || [])) {
-    if (m.id === memberId) continue;
+    // Les défunts ne « réagissent » plus aux événements et ne sont plus listés
+    if (m.id === memberId || m.statut === 'mort') continue;
     const aff = affinityBetween(memberId, m.id);
     if (Math.abs(aff) >= REL_FRIEND) {
       out.push({ memberId: m.id, member: m, affinity: aff });
