@@ -1194,7 +1194,7 @@ export const TECH_TREE = {
   tech_blindage:           { branch:'ingenierie', tier:3, nom:"Blindage stratifié",
     cost:{ datacubes:200, time: 960 }, prereq:{ tech:['tech_efficience_solaire','tech_automatisation'] },
     effects:{ vesselFuelMult: 0.85, expeditionThreatBonus: -1 },
-    desc:"Coques renforcées. Carburant -15% sur les expéditions, menace effective réduite." },
+    desc:"Coques renforcées. Carburant -15% sur les expéditions ; en combat, +4% d'esquive (menace -1)." },
 
   // ============ BRANCHE BIO-SCIENCES ============
   tech_hydroponie_avancee: { branch:'bio', tier:1, nom:"Hydroponie avancée",
@@ -1322,13 +1322,13 @@ export const TECH_TREE = {
     cost:{ datacubes:140, time: 720 },
     prereq:{ tech:['tech_diplomatie_cosmopolite'] },
     effects:{ unlockTradeRoutes: true, diplomaticBonus: 1.20 },
-    desc:"Conventions de transit, escortes croisées. Prérequis aux routes commerciales (Ambassade niv 4). +20% gains rep." },
+    desc:"Conventions de transit, escortes croisées. Requise pour ouvrir une route commerciale (réputation 40+). +20% gains rep." },
 
   tech_traites_formels: { branch:'bio', tier:4, nom:"Traités formels",
     cost:{ datacubes:180, time: 900 },
     prereq:{ tech:['tech_commerce_interstellaire'] },
     effects:{ unlockAlliances: true, diplomaticBonus: 1.30 },
-    desc:"Droit interstellaire, jurisprudence multi-espèces. Permet de nouer des alliances formelles (Ambassade niv 5). +30% gains rep." },
+    desc:"Droit interstellaire, jurisprudence multi-espèces. Requise pour sceller une alliance formelle (réputation 75+, dons automatiques). +30% gains rep." },
 
   // ============ 0.30 — NOUVELLES TECHS ============
 
@@ -1355,7 +1355,7 @@ export const TECH_TREE = {
     cost:{ datacubes:140, time: 780 },
     prereq:{ tech:['tech_blindage'] },
     effects:{ expeditionThreatBonus: -1, expeditionBiomasseMult: 0.85 },
-    desc:"Revêtements multicouches actifs. Menace expéditions -1, vivres -15% (équipe plus discrète)." },
+    desc:"Revêtements multicouches actifs. Vivres -15% (équipe plus discrète) ; en combat, +4% d'esquive (menace -1)." },
 
   // — Bio-sciences —
   tech_toxicologie: { branch:'bio', tier:2, nom:"Toxicologie avancée",
@@ -1381,7 +1381,7 @@ export const TECH_TREE = {
     cost:{ datacubes:180, datacubes_alien:18, time: 900 },
     prereq:{ tech:['tech_resonance_armee', 'tech_membrane_adaptive'] },
     effects:{ expeditionThreatBonus: -2, vesselFuelMult: 0.85 },
-    desc:"Alliage triple : métal humain, cristal alien-A, membrane alien-B. Menace expéditions -2, carburant -15%." }
+    desc:"Alliage triple : métal humain, cristal alien-A, membrane alien-B. Carburant -15% ; en combat, +8% d'esquive et +1 armure (menace -2)." }
 };
 
 
