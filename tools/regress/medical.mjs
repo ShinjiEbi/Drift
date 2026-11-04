@@ -203,6 +203,30 @@ try {
     } finally { Math.random = orig; }
     return r;
   });
+
+  // Mutation : apparaît après revealAfter, pas immédiatement
+  await scenario('Mutation : révélation différée', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    const m = mk();
+    app.inflictStatus(m, 'mutation', 'test');
+    const hiddenFirst = m.statuts[0]?.revealed === false && m.statuts[0]?.diagnosed === false;
+    S.meta.gameMin += 24 * 60;
+    app.progressMemberStatuts(m);
+    return { hiddenFirst, revealedLater: m.statuts[0]?.revealed === true && m.statuts[0]?.diagnosed === true };
+  });
+
+  // Éclosion : l'instinct du Survivant n'efface pas un parasite qui éclot
+  await scenario('Éclosion : le parasite devient un pathogène même chez un Survivant', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    const m = mk({ traits: ['survivant'] });
+    m.statuts = [{ key: 'parasite', since: S.meta.gameMin - 60 * 24 * 7 - 1, revealed: true, diagnosed: true, statMod: {} }];
+    const orig = Math.random;
+    Math.random = () => 0;                      // le Survivant « esquiverait » à coup sûr une exposition
+    try { app.progressMemberStatuts(m); } finally { Math.random = orig; }
+    return { noParasite: !m.statuts.some(s => s.key === 'parasite'), pathogen: m.statuts.some(s => s.key === 'pathogene_alien') };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

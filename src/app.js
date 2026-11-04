@@ -1794,31 +1794,37 @@ export function infirmaryBonuses() {
 const EXPEDITION_CONTAMINANTS = ['pathogene_alien', 'infection', 'parasite'];
 
 // Inflige un statut à un membre. Si caché, pose "Anomalie suspecte" jusqu'au diagnostic.
-export function inflictStatus(member, statutKey, source = '') {
+// opts.internal : évolution d'un mal déjà présent (ex. éclosion d'un parasite),
+// et non une exposition : ni l'instinct du Survivant ni les membranes ne l'évitent.
+export function inflictStatus(member, statutKey, source = '', opts = {}) {
   if (!member || member.statut === 'mort') return;
   const def = STATUTS[statutKey];
   if (!def) return;
+  if (!Array.isArray(member.statuts)) member.statuts = [];
   // Évite les doublons exacts
   if (member.statuts.some(s => s.key === statutKey)) return;
   // Membranes adaptives (expeditionToxicImmune) : l'équipe d'expédition est
   // immunisée contre les contaminations biologiques du terrain
-  if (EXPEDITION_CONTAMINANTS.includes(statutKey)
+  if (!opts.internal && EXPEDITION_CONTAMINANTS.includes(statutKey)
       && (member.statut === 'expedition' || /^exp[ée]dition/i.test(source))
       && techEffectsAccumulated().expeditionToxicImmune) {
     log('neutral', `La membrane adaptive de <em>${member.name}</em> bloque la contamination.`);
     return;
   }
   // Survivant résiste 50% du temps
-  if (member.traits.includes('survivant') && Math.random() < 0.5) {
+  if (!opts.internal && (member.traits || []).includes('survivant') && Math.random() < 0.5) {
     log('neutral', `<em>${member.name}</em> évite ${def.nom.toLowerCase()} grâce à son instinct.`);
     return;
   }
+  // Un statut à révélation différée (revealAfter, ex. mutation) reste une
+  // « anomalie » jusqu'à son apparition (progressMemberStatuts) ou un diagnostic
+  const visible = !def.hidden && !def.revealAfter;
   const status = {
     key: statutKey,
     since: S.meta.gameMin,
-    revealed: !def.hidden,        // visible direct si pas hidden
+    revealed: visible,
     revealAt: def.revealAfter ? S.meta.gameMin + def.revealAfter : null,
-    diagnosed: !def.hidden,
+    diagnosed: visible,
     statMod: def.statMod || {}
   };
   // Cas mutation : déterminer le mod (50/50 positif / négatif)
@@ -1833,7 +1839,7 @@ export function inflictStatus(member, statutKey, source = '') {
   }
   member.statuts.push(status);
   member.sante = Math.max(0, member.sante - def.severity * 5);
-  const noun = def.hidden ? "un état suspect" : `<em>${def.nom}</em>`;
+  const noun = visible ? `<em>${def.nom}</em>` : "un état suspect";
   log('warn', `<em>${member.name}</em> présente ${noun}${source ? ' — ' + source : ''}.`);
 }
 
@@ -2126,7 +2132,7 @@ export function progressMemberStatuts(member) {
       if (become === 'eclosion') {
         // Convertit en pathogene_alien
         member.statuts.splice(i, 1);
-        inflictStatus(member, 'pathogene_alien', "éclosion parasitaire");
+        inflictStatus(member, 'pathogene_alien', "éclosion parasitaire", { internal: true });
         syncTreatmentIndexes(member);
       }
     }
