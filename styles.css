@@ -706,10 +706,14 @@ input, textarea, select { font-size: max(16px, 1em); }
   gap: 10px;
   justify-content: flex-end;
   position: sticky;
-  bottom: 0;
+  /* Collée au bord bas de la modale (padding compris) : le contenu qui
+     défile ne réapparaît pas sous les boutons */
+  bottom: -22px;
   background: var(--surface);
   padding-top: 14px;
+  padding-bottom: 22px;
   margin-top: 8px;
+  margin-bottom: -22px;
 }
 .modal button {
   background: transparent;
@@ -4465,4 +4469,58 @@ nav.subtabs button:disabled {
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* ============================================================
+   Cibles tactiles (jeu surtout joué au doigt)
+   44 px de haut pour les actions principales ; les petits boutons
+   secondaires gardent leur allure mais reçoivent une zone de toucher
+   étendue (pseudo-élément) d'au moins 44 px.
+   ============================================================ */
+footer.actions button,
+.module button.build,
+.person .actions-row button,
+.modal button,
+.cta-btn,
+.back-btn,
+.gift-btn,
+.dt-btn,
+.sb-btn,
+.assign-toolbar .quick-action,
+.statut-actions button,
+.patient-actions button,
+.diplo-launch-btn,
+.training-card button.cancel,
+.vmodel-card button,
+.scene-actions button,
+.syn-do,
+.cbt-action,
+.cbt-end-turn,
+.cbt-retreat,
+.tpicker-item,
+.crew-picker-item,
+.assign-pick-item,
+.diplo-pick,
+.alert-row {
+  min-height: 44px;
+}
+/* Éléments de liste dans un conteneur flex en colonne à hauteur limitée :
+   sans cela, min-height remplace min-height:auto et ils s'écrasent */
+.tpicker-item, .crew-picker-item, .assign-pick-item, .diplo-pick, .alert-row { flex-shrink: 0; }
+.assign-toolbar .toggle { min-height: 44px; }
+footer.actions button { padding: 10px 14px; }
+.equip-row .er-btn { width: 40px; height: 40px; font-size: 18px; }
+/* Petits boutons insérés dans un en-tête de carte : zone de toucher étendue */
+.staff-panel .sp-link,
+.research-active .ra-cancel,
+.fab-active .fa-cancel {
+  position: relative;
+  min-height: 30px;
+}
+.staff-panel .sp-link::after,
+.research-active .ra-cancel::after,
+.fab-active .fa-cancel::after {
+  content: '';
+  position: absolute;
+  inset: -8px -4px;   /* depuis la boîte intérieure : 28 + 16 = 44 px */
 }
