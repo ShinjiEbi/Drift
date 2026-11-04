@@ -240,7 +240,7 @@ export const CHRONICLES = {
     teaser: "Un cercle parfait, immobile, qui change de place quand on ne le regarde pas.",
     
     requires: {
-      atmosphere: ['anormale', 'exotique'],
+      atmosphere: ['anormale'],  // (« exotique » n'est pas une atmosphère générée)
       biome: ['desert', 'glace', 'volcanique', 'exotique', 'asteroide', 'jungle']
     },
     spawnChance: 0.30,
@@ -313,7 +313,8 @@ export const CHRONICLES = {
     
     requires: {
       ruines: 'humaines',
-      biome: ['terrestre', 'tropical', 'jungle', 'toundra', 'desert']
+      // « terrestre » et « tropical » n'existent pas : océan et jungle en sont les plus proches
+      biome: ['ocean', 'jungle', 'toundra', 'desert']
     },
     spawnChance: 0.30,
     
@@ -388,8 +389,9 @@ export const CHRONICLES = {
     teaser: "Un bazar de fortune où humains, cristallins et symbiotes s'échangent ce qu'aucun n'avoue convoiter.",
     
     requires: {
-      ruines: ['mixtes', 'humaines', 'alien_a', 'alien_b'],
-      biome: ['terrestre', 'tropical', 'desert', 'jungle', 'asteroide', 'volcanique']
+      // « mixtes » → « fusion » (ruines humaines et alien mêlées) ; « terrestre »/« tropical » → toundra/jungle
+      ruines: ['fusion', 'humaines', 'alien_a', 'alien_b'],
+      biome: ['toundra', 'desert', 'jungle', 'asteroide', 'volcanique']
     },
     spawnChance: 0.30,
     

@@ -984,7 +984,10 @@ export function inventoryCount() {
 // Vérifie si une planète remplit les conditions d'une chronique
 function bodyMatchesChronicleReqs(body, requires) {
   if (!requires) return true;
-  if (requires.ruines && body.ruines !== requires.ruines) return false;
+  if (requires.ruines) {
+    const allowed = Array.isArray(requires.ruines) ? requires.ruines : [requires.ruines];
+    if (!allowed.includes(body.ruines)) return false;
+  }
   if (requires.biome) {
     const allowed = Array.isArray(requires.biome) ? requires.biome : [requires.biome];
     if (!allowed.includes(body.biome)) return false;
@@ -1010,14 +1013,24 @@ function tryAssignChronicle(body) {
   if (body.chronicleChecked) return; // déjà vérifiée, pas la peine de rejouer la roulette
   body.chronicleChecked = true;
   
+  // Une chronique est une saga unique : on exclut celles déjà attribuées à un autre corps
+  const taken = new Set();
+  for (const sys of S.galaxy?.systems || []) {
+    for (const b of sys.bodies || []) if (b !== body && b.chronicle?.id) taken.add(b.chronicle.id);
+  }
   const candidates = [];
   for (const id in CHRONICLES) {
     const c = CHRONICLES[id];
-    if (bodyMatchesChronicleReqs(body, c.requires)) {
+    if (!taken.has(c.id) && bodyMatchesChronicleReqs(body, c.requires)) {
       candidates.push(c);
     }
   }
   if (candidates.length === 0) return;
+  // Ordre aléatoire : sinon la première chronique compatible est toujours favorisée
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
   
   // Tirage avec la spawnChance de chaque chronique
   for (const c of candidates) {
