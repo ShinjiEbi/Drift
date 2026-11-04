@@ -1209,18 +1209,6 @@ export function chronicleEpisodeIntro(body) {
   return ep.defaultIntro || ep.intro || '';
 }
 
-// Vérifie qu'un req de scène est satisfait pour la chronique
-function checkChronicleReq(req, body, exp) {
-  if (!req) return true;
-  if (req.flag) {
-    const flags = body.chronicle?.flags || {};
-    const v = flags[req.flag.key];
-    if (req.flag.equals !== undefined && v !== req.flag.equals) return false;
-    if (req.flag.min !== undefined && (v == null || v < req.flag.min)) return false;
-    if (req.flag.max !== undefined && (v == null || v > req.flag.max)) return false;
-  }
-  return true;
-}
 
 // Applique setFlags : valeur directe OU "+1"/"-1" pour incrément
 function applyFlagChanges(body, changes) {
@@ -1243,13 +1231,6 @@ function findChronicleScene(id) {
   return CHRONICLE_SCENES.find(s => s.id === id) || null;
 }
 
-// Récupère le texte d'une scène de chronique (peut être fonction)
-export function resolveChronicleText(scene, body) {
-  if (typeof scene.text === 'function') {
-    return scene.text(body.chronicle?.flags || {});
-  }
-  return scene.text || '';
-}
 
 // Marque l'épisode courant comme terminé et passe au suivant.
 // exp (optionnel) : l'expédition qui a joué l'épisode — évite de sauter un épisode
@@ -6047,118 +6028,6 @@ export function abandonExpedition(expId) {
   render();
 }
 
-// Résolution procédurale d'une expédition : phase 2b simule sans scènes.
-// Génère récompenses (ressources + items éventuels), blessures, casualties.
-// La phase 2c remplacera ça par des scènes interactives.
-function resolveExpedition(exp, body, sys) {
-  const rng = rngFor(`${S.meta.seed}|exp${exp.id}`);
-  const def = VESSELS[S.fleet.find(v => v.id === exp.vesselId)?.type] || VESSELS.vedette;
-  const threat = bodyThreatLevel(body);
-  const reward = bodyRewardLevel(body);
-
-  // --- Récompenses de base ---
-  const rewards = {};
-  // Ressources brutes selon biome
-  if (body.biome === 'asteroide' || body.type === 'asteroide_g') {
-    rewards.metal = Math.round((40 + rng() * 60) * (1 + reward * 0.3));
-    rewards.cristal = Math.round((20 + rng() * 30) * (1 + reward * 0.3));
-  } else if (body.biome === 'volcanique' || body.biome === 'irradie') {
-    rewards.metal = Math.round((20 + rng() * 50) * (1 + reward * 0.2));
-    rewards.cristal = Math.round((30 + rng() * 60) * (1 + reward * 0.3));
-  } else if (body.biome === 'glace' || body.biome === 'toundra') {
-    rewards.cristal = Math.round((30 + rng() * 50) * (1 + reward * 0.2));
-    rewards.biomasse = Math.round((10 + rng() * 30));
-  } else {
-    rewards.metal = Math.round(20 + rng() * 40);
-    rewards.cristal = Math.round(15 + rng() * 30);
-  }
-  if (['microbienne','flore_agressive','faune'].includes(body.vie)) {
-    rewards.biomasse = (rewards.biomasse || 0) + Math.round(20 + rng() * 50);
-  }
-  // Datacubes selon ruines / signaux
-  let dc = 0;
-  if (body.ruines !== 'aucune') dc += Math.round(5 + rng() * 15);
-  if (['alien_a','alien_b','fusion'].includes(body.ruines)) dc += Math.round(10 + rng() * 20);
-  if (body.signal !== 'aucun') dc += Math.round(2 + rng() * 8);
-  if (['echo_temporel','bruit_blanc','crypte'].includes(body.signal)) dc += Math.round(5 + rng() * 15);
-  if (dc > 0) rewards.datacubes = dc;
-
-  // Cap par cargo
-  const cargoCap = def.cargo;
-  let totalLoot = Object.values(rewards).reduce((s,v) => s+v, 0);
-  if (totalLoot > cargoCap) {
-    const ratio = cargoCap / totalLoot;
-    for (const k in rewards) rewards[k] = Math.floor(rewards[k] * ratio);
-  }
-
-  // --- Casualties / statuts ---
-  const statuses = [];
-  const casualties = [];
-  // Calcul d'un score de "résistance" de l'équipe contre la menace
-  const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(Boolean);
-  const teamCombat = team.reduce((s,m) => s + (m.skills.combat || 0), 0);
-  const teamSurvie = team.reduce((s,m) => s + (m.skills.survie || 0), 0);
-  const teamMed    = team.reduce((s,m) => s + (m.skills.medecine || 0), 0);
-  const teamScore  = teamCombat + teamSurvie + teamMed * 0.5 + team.length * 1.5;
-
-  // Probabilité d'incident proportionnelle à threat / teamScore
-  const incidentProb = Math.min(0.95, (threat * 0.18) / Math.max(1, teamScore / 5));
-
-  for (const member of team) {
-    if (rng() < incidentProb) {
-      // Choix du type d'incident selon danger principal
-      let pool;
-      if (body.danger === 'predateurs')      pool = ['blessure_legere','blessure_legere','blessure_grave'];
-      else if (body.danger === 'pathogene')  pool = ['infection','infection','pathogene_alien'];
-      else if (body.danger === 'tempetes')   pool = ['blessure_legere','blessure_grave'];
-      else if (body.danger === 'faille')     pool = ['blessure_grave','trauma_psy'];
-      else if (body.danger === 'ia_hostile') pool = ['blessure_grave','blessure_grave','trauma_psy'];
-      else if (body.danger === 'anomalie')   pool = ['trauma_psy','pathogene_alien','mutation'];
-      else                                   pool = ['blessure_legere'];
-      const k = pool[Math.floor(rng() * pool.length)];
-      // Combattant aguerri / Survivant : 50% de réduction de gravité
-      const lucky = member.traits.includes('combattant_aguerri') || member.traits.includes('survivant');
-      const finalKey = (lucky && k === 'blessure_grave') ? 'blessure_legere' : k;
-      // Mort directe rare : seulement si threat 5 et incident très mauvais
-      if (threat >= 4 && rng() < 0.06 && !lucky) {
-        casualties.push(member.id);
-        memberDies(member, `Disparu(e) en mission sur ${body.name}.`);
-      } else {
-        statuses.push({ memberId: member.id, statutKey: finalKey });
-      }
-    }
-  }
-
-  // --- Items ---
-  const items = [];
-  if (body.ruines !== 'aucune' && rng() < 0.25 + reward * 0.05) {
-    const itemNames = ['fragment_cristallin','disque_memoire','outil_etrange','plaque_gravee','lentille_noire','bobine_filaments','anneau_scelle'];
-    items.push(itemNames[Math.floor(rng() * itemNames.length)]);
-  }
-
-  // --- Outcome global ---
-  const survivorCount = team.length - casualties.length;
-  let outcomeKind = 'success';
-  if (casualties.length > 0) outcomeKind = 'warn';
-  else if (statuses.length === 0 && Object.keys(rewards).length > 0) outcomeKind = 'success';
-
-  // Résumé narratif
-  const lootSummary = Object.entries(rewards).map(([k,v]) => `${v} ${RES_LABELS[k]}`).join(', ');
-  const summary = casualties.length > 0
-    ? `Pertes : ${casualties.length}. Récupéré : ${lootSummary || 'rien'}.`
-    : statuses.length > 0
-      ? `${statuses.length} blessé(s). Récupéré : ${lootSummary || 'rien'}.`
-      : `Aucun incident. Récupéré : ${lootSummary || 'rien'}.`;
-
-  const returnSummary = items.length > 0
-    ? `Cargaison : ${lootSummary || 'rien'}${items.length > 0 ? ` + items : ${items.join(', ')}` : ''}.`
-    : `Cargaison : ${lootSummary || 'rien'}.`;
-
-  return {
-    rewards, items, statuses, casualties,
-    outcomeKind, summary, returnSummary
-  };
-}
 
 // ============================================================
 // 8. UI — rendu DOM

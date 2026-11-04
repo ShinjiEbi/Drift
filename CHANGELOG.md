@@ -80,7 +80,7 @@ d'elles-mêmes.
 ### Outillage
 
 - `npm test` : ESLint, vérification des données, cohérence du cache
-  hors-ligne, test de fumée dans Chromium et 16 tests de non-régression.
+  hors-ligne, test de fumée dans Chromium et 27 tests de non-régression.
   CI GitHub Actions à chaque push.
 - Sauvegarde : numéro de schéma, migrations ordonnées, copies de secours.
 
