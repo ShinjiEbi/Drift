@@ -27,7 +27,7 @@ import {
 } from './state.js';
 // Imports croisés depuis app.js — résolus au runtime grâce aux live bindings
 import {
-  staffRoleCount, moduleEfficiency, globalCommandBonus,
+  SEQUELS, staffRoleCount, moduleEfficiency, globalCommandBonus,
   techEffectsAccumulated, permanentBonusesAccumulated,
   laboratoryBonuses, workshopBonuses, workshopSlots,
   infirmaryBonuses,

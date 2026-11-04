@@ -64,3 +64,16 @@ export function rInt(min, max, rng = Math.random) {
 
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+// Échappe une chaîne pour l'insérer dans du HTML (texte ou attribut).
+// À utiliser pour toute donnée venant de la sauvegarde : noms de colons,
+// de factions, de systèmes, de vaisseaux…
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c]);
+
+// Identifiant unique : préfixe + horodatage + compteur + aléa.
+// Le compteur évite les collisions quand plusieurs objets sont créés
+// dans la même milliseconde.
+let _uidCounter = 0;
+export const uid = prefix =>
+  `${prefix}_${Date.now().toString(36)}_${(_uidCounter++).toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;

@@ -1,0 +1,28 @@
+{
+  "root": true,
+  "parserOptions": { "ecmaVersion": 2022, "sourceType": "module" },
+  "env": { "browser": true, "es2022": true },
+  "rules": {
+    "no-undef": "error",
+    "no-dupe-keys": "error",
+    "no-redeclare": "error",
+    "no-unreachable": "error",
+    "no-dupe-else-if": "error",
+    "no-duplicate-case": "error",
+    "no-self-assign": "error",
+    "no-cond-assign": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error",
+    "no-import-assign": "error",
+    "no-const-assign": "error",
+    "no-func-assign": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unsafe-finally": "error",
+    "no-loss-of-precision": "error",
+    "no-unused-vars": ["warn", { "args": "none" }]
+  },
+  "overrides": [
+    { "files": ["sw.js"], "env": { "browser": false, "serviceworker": true }, "parserOptions": { "sourceType": "script" } },
+    { "files": ["tools/**"], "env": { "browser": false, "node": true } }
+  ]
+}

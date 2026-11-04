@@ -1385,7 +1385,7 @@ export const STATUTS = {
 
 
 // Catalogue des séquelles permanentes (traits négatifs ou ambigus)
-const SEQUELS = {
+export const SEQUELS = {
   boiteux:        { nom:'Boiteux',          desc:"Démarche entravée, -2 Dextérité." },
   cicatrice:      { nom:'Marqué',           desc:"Cicatrice visible, -1 Charisme." },
   cicatrice_xeno: { nom:'Cicatrice xeno',   desc:"-1 Charisme, +1 résistance pathogène alien." },
