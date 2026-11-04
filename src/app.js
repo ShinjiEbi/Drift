@@ -4008,7 +4008,8 @@ function genVesselName(typeKey) {
     vedette:  ['Furet','Faucon','Aiguille','Gypaète','Effraie','Saiga','Vif'],
     navette:  ['Bouvreuil','Mousson','Cabestan','Rhéa','Albatros','Truite'],
     cargo:    ['Ourse','Mastodon','Kraken','Charrette','Bourdon','Wapiti'],
-    cuirasse: ['Sentinelle','Hégémon','Lance','Meute','Chambellan']
+    cuirasse: ['Sentinelle','Hégémon','Lance','Meute','Chambellan'],
+    emissaire: ['Héraut','Colombe','Concorde','Messager','Iris','Passerelle']
   };
   const list = prefixes[typeKey] || ['Vaisseau'];
   const num = Math.floor(Math.random() * 89) + 11; // 11–99
@@ -4069,7 +4070,7 @@ export function finishVesselBuild() {
   if (!b) return;
   const def = VESSELS[b.type];
   const vessel = {
-    id: 'v_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
+    id: makeUid('v'),
     type: b.type,
     name: genVesselName(b.type),
     available: true   // false quand affecté à une expé en cours
@@ -4103,11 +4104,13 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
   if (!Array.isArray(crewIds) || crewIds.length === 0) return { ok:false, why:'Aucun équipage sélectionné' };
   if (crewIds.length > def.places) return { ok:false, why:`Max ${def.places} membres pour ce vaisseau` };
 
-  // Tous les membres doivent être libres et vivants
+  // Tous les membres doivent être disponibles et vivants : libres, ou en poste
+  // (0.22 — le poste reste réservé pendant l'expédition, cf. launchExpedition ;
+  // c'est aussi ce que propose l'écran de lancement).
   for (const id of crewIds) {
     const m = S.crew.find(c => c.id === id);
     if (!m) return { ok:false, why:'Membre introuvable' };
-    if (m.statut !== 'libre') return { ok:false, why:`${m.name} : ${m.statut}` };
+    if (m.statut !== 'libre' && m.statut !== 'travail') return { ok:false, why:`${m.name} : ${m.statut}` };
   }
 
   // Calcul coûts (avec bonus Hangar et tech)
