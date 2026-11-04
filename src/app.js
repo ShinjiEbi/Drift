@@ -5738,6 +5738,109 @@ function safeTick() {
   try { pumpDecisions(); } catch (err) { reportTickError('décisions', err); }
 }
 
+// ---- Verrou d'onglet : une seule partie active par navigateur ----
+// Deux onglets ouverts s'écraseraient mutuellement la sauvegarde. Le premier
+// prend un verrou (Web Locks) ; les suivants affichent une modale et ne
+// simulent ni ne sauvegardent, jusqu'à « Utiliser cet onglet » : l'onglet actif
+// sauvegarde, se met en pause et rend le verrou. Repli sans Web Locks :
+// BroadcastChannel (ping/pong). Filet de sécurité : l'événement « storage ».
+const TAB_LOCK_NAME = 'drift_tab_lock';
+let _tabRole = 'unknown';      // 'primary' | 'yielded' | 'secondary'
+let _tabChannel = null;
+let _releaseTabLock = null;
+
+function tabChannel() {
+  if (_tabChannel || typeof BroadcastChannel === 'undefined') return _tabChannel;
+  try {
+    _tabChannel = new BroadcastChannel('drift_tabs');
+    _tabChannel.addEventListener('message', e => {
+      if (_tabRole !== 'primary') return;
+      const type = e.data?.type;
+      if (type === 'ping') _tabChannel.postMessage({ type: 'pong' });
+      else if (type === 'takeover') yieldToOtherTab(true);
+    });
+  } catch (e) {
+    _tabChannel = null;
+  }
+  return _tabChannel;
+}
+
+// Résout true si cet onglet obtient la main (attente max waitMs ; steal :
+// reprend de force un verrou tenu par un onglet qui ne répond plus).
+function acquireTabLock(waitMs = 1500, steal = false) {
+  tabChannel();
+  if (navigator.locks?.request) {
+    return new Promise(resolve => {
+      const ctrl = new AbortController();
+      const timer = steal ? null : setTimeout(() => ctrl.abort(), waitMs);
+      let granted = false;
+      navigator.locks.request(TAB_LOCK_NAME, steal ? { steal: true } : { signal: ctrl.signal }, () => {
+        granted = true;
+        clearTimeout(timer);
+        _tabRole = 'primary';
+        resolve(true);
+        return new Promise(release => { _releaseTabLock = release; });   // verrou gardé jusqu'à release
+      }).catch(() => {
+        clearTimeout(timer);
+        if (!granted) resolve(false);                          // délai dépassé : un autre onglet a la main
+        else if (_tabRole === 'primary') yieldToOtherTab(false);  // verrou repris de force ailleurs
+      });
+    });
+  }
+  const ch = _tabChannel;
+  if (!ch) { _tabRole = 'primary'; return Promise.resolve(true); }
+  return new Promise(resolve => {
+    let answered = false;
+    const onMsg = e => { if (e.data?.type === 'pong') answered = true; };
+    ch.addEventListener('message', onMsg);
+    ch.postMessage({ type: 'ping' });
+    setTimeout(() => {
+      ch.removeEventListener('message', onMsg);
+      if (!answered) _tabRole = 'primary';
+      resolve(!answered);
+    }, 400);
+  });
+}
+
+// Un autre onglet prend la main : on sauvegarde (si on nous l'a demandé
+// poliment), on se met en pause et on rend le verrou.
+function yieldToOtherTab(saveFirst) {
+  if (_tabRole !== 'primary') return;
+  _tabRole = 'yielded';
+  if (saveFirst) { try { save(); } catch (e) { /* stockage inaccessible */ } }
+  lockSaves('autre-onglet');
+  setSimPaused(true);
+  if (_releaseTabLock) { _releaseTabLock(); _releaseTabLock = null; }
+  showOtherTabModal(true);
+}
+
+function showOtherTabModal(yielded) {
+  $('#modal').className = 'modal';
+  showModal({
+    title: 'DRIFT est déjà ouvert dans un autre onglet',
+    body: (yielded
+      ? "La partie a été reprise dans un autre onglet. "
+      : "La partie tourne déjà dans un autre onglet. ")
+      + "Pour éviter que les deux onglets ne s'écrasent mutuellement la sauvegarde, celui-ci reste en pause.",
+    hideCancel: true,
+    primaryLabel: 'Utiliser cet onglet',
+    onPrimary: () => takeOverTab(yielded)
+  });
+}
+
+function takeOverTab(reloadAfter) {
+  toast('Reprise de la partie dans cet onglet…');
+  tabChannel()?.postMessage({ type: 'takeover' });
+  acquireTabLock(4000)
+    .then(ok => ok || acquireTabLock(0, true))
+    .then(ok => {
+      if (!ok) { showOtherTabModal(reloadAfter); return; }
+      // Onglet mis en pause : son état en mémoire est périmé → rechargement
+      if (reloadAfter) { location.reload(); return; }
+      startSession();
+    });
+}
+
 // ---- Sauvegarde illisible ----
 // Rien n'est écrasé tant que le joueur n'a pas choisi : la chaîne brute est
 // copiée sous une clé de secours, et on propose de l'exporter, d'importer
@@ -5786,7 +5889,16 @@ function showCorruptSaveModal(res) {
 // ---- Démarrage ----
 function boot() {
   try { setupHandlers(); } catch (err) { console.error('[BOOT] Erreur setupHandlers :', err); }
-  startSession();
+  acquireTabLock()
+    .then(ok => {
+      if (ok) startSession();
+      else { _tabRole = 'secondary'; showOtherTabModal(false); }
+    })
+    .catch(err => {
+      console.error('[BOOT] Verrou d\'onglet :', err);
+      _tabRole = 'primary';
+      startSession();
+    });
 }
 
 // Charge la sauvegarde (ou crée une partie) puis lance la boucle de jeu.
@@ -5877,6 +5989,11 @@ function startGameLoop() {
     if (S?.meta) { try { save(); } catch (e) { /* rien */ } }
   });
 
+  // Filet de sécurité multi-onglets : un autre onglet écrit la sauvegarde
+  // alors que celui-ci se croit seul → on se met en pause sans écraser.
+  window.addEventListener('storage', e => {
+    if (e.key === SAVE_KEY && e.newValue !== null && _tabRole === 'primary') yieldToOtherTab(false);
+  });
 
   console.log('[BOOT] DRIFT démarré, version', VERSION);
 }
