@@ -3470,6 +3470,10 @@ export function applyColonyEventChoice(eventId, choice, actors) {
   return { ok: true, narrative, effects, positive: ev.positive };
 }
 
+// Identifiants uniques (factions, missions, vaisseaux) — import local et aliasé
+// pour ne pas entrer en conflit avec l'import principal de util.js.
+import { uid as makeUid } from './util.js';
+
 // ============================================================
 //   ARCS NARRATIFS (0.20)
 // ============================================================
@@ -3643,7 +3647,7 @@ function genFactionName(type, rng = Math.random) {
 function createFaction(type, body) {
   const ft = FACTION_TYPES[type];
   if (!ft) return null;
-  const id = 'fac_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 9999).toString(36);
+  const id = makeUid('fac');
   const faction = {
     id,
     type,
@@ -3688,12 +3692,35 @@ export function adjustReputation(factionId, delta) {
   f.reputation = Math.max(-100, Math.min(100, f.reputation + delta));
   const newStatus = factionStatus(f.reputation).key;
   if (oldStatus !== newStatus) {
-    const ft = FACTION_TYPES[f.type];
     log(delta > 0 ? 'success' : 'warn',
       `<em>${f.name}</em> est désormais <b>${factionStatus(f.reputation).label}</b>.`);
     // 0.26.1 : notification dédiée
     notif.reputationSeuil(f.name, factionStatus(f.reputation).label.toLowerCase());
   }
+}
+
+// 0.32.1 — Les technologies diplomatiques conditionnent le commerce et l'alliance.
+// Les seuils de réputation sont inchangés ; la technologie est requise EN PLUS.
+// Compatibilité : une route déjà ouverte ou une alliance déjà nouée (lastAllianceGift
+// posé) dans une sauvegarde antérieure reste active (droits acquis).
+const TRADE_REP_MIN = 40, ALLIANCE_REP_MIN = 75;
+const TRADE_TECH = 'tech_commerce_interstellaire', ALLIANCE_TECH = 'tech_traites_formels';
+const techLabel = id => TECH_TREE[id]?.nom || id;
+
+// Peut-on ouvrir une route commerciale avec cette faction ? → { ok, why }
+export function tradeRequirement(f) {
+  if (!f) return { ok: false, why: 'Faction inconnue.' };
+  if (f.reputation < TRADE_REP_MIN) return { ok: false, why: `Réputation trop faible (${TRADE_REP_MIN}+ requis).` };
+  if (!isTechCompleted(TRADE_TECH)) return { ok: false, why: `Requiert la technologie ${techLabel(TRADE_TECH)}.` };
+  return { ok: true, why: '' };
+}
+
+// L'alliance (dons automatiques) est-elle active avec cette faction ? → { ok, why }
+export function allianceRequirement(f) {
+  if (!f) return { ok: false, why: 'Faction inconnue.' };
+  if (f.reputation < ALLIANCE_REP_MIN) return { ok: false, why: `Réputation ${ALLIANCE_REP_MIN}+ requise.` };
+  if (!isTechCompleted(ALLIANCE_TECH) && !f.lastAllianceGift) return { ok: false, why: `Requiert la technologie ${techLabel(ALLIANCE_TECH)}.` };
+  return { ok: true, why: '' };
 }
 
 // Détermine si une faction proposera une caravane à ce tick
@@ -3702,14 +3729,20 @@ export function tickFactions() {
   for (const id in S.factions) {
     const f = S.factions[id];
     const ft = FACTION_TYPES[f.type];
-    // Commerce auto (rep ≥ 40 et activé par le joueur)
-    if (f.reputation >= 40 && f.tradeActive) {
+    // Commerce auto (rep ≥ 40 et activé par le joueur — l'activation exige la tech,
+    // cf. toggleFactionTrade ; une route ouverte avant 0.32.1 reste active)
+    if (f.reputation >= TRADE_REP_MIN && f.tradeActive) {
       const cycle = 15 * 24 * 60;
       if (!f.lastCaravan) f.lastCaravan = f.metAt;
       if (S.meta.gameMin - f.lastCaravan >= cycle) triggerCaravan(f);
     }
-    // 0.30 — Don d'alliance (rep ≥ 75, automatique)
-    if (f.reputation >= 75 && ft?.allianceGift) {
+    // 0.30 — Don d'alliance (rep ≥ 75, automatique) — 0.32.1 : requiert Traités formels
+    if (f.reputation >= ALLIANCE_REP_MIN && ft?.allianceGift && !allianceRequirement(f).ok) {
+      if (!f.allianceTechWarned) {
+        f.allianceTechWarned = true;
+        log('neutral', `<em>${f.name}</em> serait prête à sceller une alliance formelle. ${allianceRequirement(f).why}`);
+      }
+    } else if (f.reputation >= ALLIANCE_REP_MIN && ft?.allianceGift) {
       const ag = ft.allianceGift;
       if (!f.lastAllianceGift) f.lastAllianceGift = f.metAt || S.meta.gameMin;
       if (S.meta.gameMin - f.lastAllianceGift >= ag.interval) {
@@ -3750,9 +3783,10 @@ function triggerCaravan(faction) {
 export function toggleFactionTrade(factionId) {
   const f = S.factions?.[factionId];
   if (!f) return;
-  if (f.reputation < 40 && !f.tradeActive) {
-    toast("Réputation trop faible (40+ requis).");
-    return;
+  // Suspendre est toujours possible ; ouvrir exige réputation + technologie.
+  if (!f.tradeActive) {
+    const req = tradeRequirement(f);
+    if (!req.ok) { toast(req.why); return; }
   }
   f.tradeActive = !f.tradeActive;
   if (f.tradeActive) {
@@ -3786,8 +3820,16 @@ export function launchDiplomaticMission(factionId, memberId) {
     toast(`${SKILL_LABELS[reqSkill]} ${reqMin}+${altLabel} requis pour cette faction.`);
     return;
   }
-  if (m.statut !== 'libre') {
+  // Seul un colon libre ou en poste peut partir (son poste lui reste réservé,
+  // comme pour une expédition) — jamais un colon déjà en mission, en expédition,
+  // en formation, à l'infirmerie, ni mort.
+  if ((m.statut !== 'libre' && m.statut !== 'travail') ||
+      (S.diplomaticMissions || []).some(d => d.memberId === m.id)) {
     toast(`${m.name} n'est pas disponible.`);
+    return;
+  }
+  if ((S.diplomaticMissions || []).some(d => d.factionId === factionId)) {
+    toast(`Une mission est déjà en cours auprès de ${f.name}.`);
     return;
   }
   const ambassadeLvl = S.modules?.ambassade?.level || 0;
@@ -3808,14 +3850,20 @@ export function launchDiplomaticMission(factionId, memberId) {
   m.statut = 'diplomatie';
   if (!S.diplomaticMissions) S.diplomaticMissions = [];
   const duration = 24 * 60 + Math.floor(Math.random() * 24 * 60);
+  // 0.29 — Un Émissaire disponible (à quai) porte la délégation : bonus de réputation.
+  // Le vaisseau n'est pas immobilisé : il reste utilisable pour les expéditions.
+  const envoy = (S.fleet || []).find(v => v.type === 'emissaire' && v.available);
   S.diplomaticMissions.push({
-    id: 'dipl_' + Date.now().toString(36),
+    id: makeUid('dipl'),
     factionId,
     memberId,
     startedAt: S.meta.gameMin,
-    duration
+    duration,
+    vesselType: envoy ? 'emissaire' : null,
+    vesselId: envoy ? envoy.id : null
   });
-  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>. Retour dans ${fmtMin(duration)}.`);
+  const envoyNote = envoy ? ` à bord de l'Émissaire <em>${envoy.name}</em> (réputation ×${VESSELS.emissaire.diplomaticBonus || 1.5})` : '';
+  log('neutral', `<em>${m.name}</em> est parti(e) en mission diplomatique vers <em>${f.name}</em>${envoyNote}. Retour dans ${fmtMin(duration)}.`);
   render();
 }
 
@@ -3824,18 +3872,29 @@ export function tickDiplomaticMissions() {
   if (!S.diplomaticMissions || S.diplomaticMissions.length === 0) return;
   const finished = [];
   for (const mis of S.diplomaticMissions) {
-    if (S.meta.gameMin - mis.startedAt >= mis.duration) finished.push(mis);
+    const member = S.crew.find(c => c.id === mis.memberId);
+    // Un diplomate mort ou disparu met fin à la mission sans attendre son terme
+    const lost = !member || member.statut === 'mort';
+    if (lost || S.meta.gameMin - mis.startedAt >= mis.duration) finished.push(mis);
   }
   for (const mis of finished) {
     completeDiplomaticMission(mis);
   }
 }
 
+// Succès critiques nécessaires pour gagner +1 dans la compétence de mission
+const DIPLO_CRITS_PER_SKILL = 5;
+
 function completeDiplomaticMission(mis) {
   const member = S.crew.find(c => c.id === mis.memberId);
   const faction = S.factions?.[mis.factionId];
   S.diplomaticMissions = S.diplomaticMissions.filter(m => m.id !== mis.id);
-  if (!member) return;
+  // Diplomate mort ou absent : la mission échoue, sans récompense
+  if (!member || member.statut === 'mort') {
+    const who = member ? `<em>${member.name}</em>` : 'Le diplomate';
+    log('warn', `Mission diplomatique vers <em>${faction?.name || 'une faction'}</em> perdue : ${who} n'en reviendra pas.`);
+    return;
+  }
   if (member.statut === 'diplomatie') returnToBase(member);
   if (!faction) return;
 
@@ -3843,6 +3902,19 @@ function completeDiplomaticMission(mis) {
 
   // 0.30 — Jet sur compétence primaire de la faction + linguistique en soutien
   const primarySkill = ft.missionSkill || 'linguistique';
+  // 0.32.1 — Les compétences sont entières. Une ancienne version ajoutait +0.1 par
+  // succès critique : on ramène la valeur à l'entier inférieur et on convertit
+  // la fraction en succès critiques déjà acquis (0.1 = 1 succès).
+  const rawSkill = Number(member.skills[primarySkill]) || 0;
+  if (!Number.isInteger(rawSkill)) {
+    member.skills[primarySkill] = Math.floor(rawSkill);
+    member.diploCrits = (member.diploCrits || 0) + Math.round((rawSkill - Math.floor(rawSkill)) * 10);
+    while (member.diploCrits >= DIPLO_CRITS_PER_SKILL && member.skills[primarySkill] < 5) {
+      member.diploCrits -= DIPLO_CRITS_PER_SKILL;
+      member.skills[primarySkill]++;
+    }
+  }
+  if (!Number.isInteger(member.skills.linguistique || 0)) member.skills.linguistique = Math.round(member.skills.linguistique);
   const primaryScore = member.skills[primarySkill] || 0;
   const lingScore = primarySkill !== 'linguistique' ? (member.skills.linguistique || 0) : 0;
   const charisme = member.stats?.charisme || 5;
@@ -3857,7 +3929,7 @@ function completeDiplomaticMission(mis) {
   if (ambassadeLvl >= 2) diploMult += (ambassadeLvl - 1) * 0.10;
   const tech = techEffectsAccumulated();
   if (tech.diplomaticBonus) diploMult *= tech.diplomaticBonus;
-  if (mis.vesselType === 'emissaire') diploMult *= 1.5;
+  if (mis.vesselType && VESSELS[mis.vesselType]?.diplomaticBonus) diploMult *= VESSELS[mis.vesselType].diplomaticBonus;
 
   if (total >= dc) {
     const isCrit = total >= critDc;
@@ -3887,9 +3959,15 @@ function completeDiplomaticMission(mis) {
     const critLabel = isCrit ? ' ★ Succès exceptionnel.' : '';
     log('success', `<em>${member.name}</em> revient de mission diplomatique.${critLabel} <em>${faction.name}</em> : réputation +${gain}${multLabel}.${extraLog}`);
     member.moral = Math.min(100, member.moral + (isCrit ? 10 : 5));
-    // Progression compétence : légère montée si critique
+    // Progression compétence : chaque succès critique compte ; +1 (entier) au bout
+    // de DIPLO_CRITS_PER_SKILL succès critiques.
     if (isCrit && primaryScore < 5) {
-      member.skills[primarySkill] = Math.min(5, primaryScore + 0.1);
+      member.diploCrits = (member.diploCrits || 0) + 1;
+      if (member.diploCrits >= DIPLO_CRITS_PER_SKILL) {
+        member.diploCrits -= DIPLO_CRITS_PER_SKILL;
+        member.skills[primarySkill] = Math.min(5, primaryScore + 1);
+        log('success', `<em>${member.name}</em> progresse : ${SKILL_LABELS[primarySkill] || primarySkill} ${member.skills[primarySkill]}.`);
+      }
     }
   } else {
     const malus = roll <= 2 ? -10 : (roll <= 4 ? -5 : 0);
