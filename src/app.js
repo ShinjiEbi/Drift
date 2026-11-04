@@ -4557,15 +4557,25 @@ export function playChoice(expId, choiceIdx) {
   // Clé de scène pour les tirages (les scènes de chronique gardent toutes sceneIdx = 0)
   const sceneKey = exp.chronicleSceneId || `sc${exp.sceneIdx}`;
   if (choice.risky) {
-    // Jet : 1d10 + meilleur stat dans l'équipe ≥ dc
+    // Jet : 1d10 + bonus de la meilleure caractéristique de l'équipe ≥ dc
     const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
-    const bestStat = Math.max(...team.map(m => m.stats[choice.risky.stat] || 5));
-    const rng = rngFor(`${exp.seed}|sc${exp.sceneIdx}|${choiceIdx}|${S.meta.gameMin}`);
+    const key = choice.risky.stat;
+    let bonus, label;
+    if (!STAT_LABELS[key] && SKILL_LABELS[key]) {
+      // Donnée erronée (compétence à la place d'une caractéristique) : on utilise la compétence
+      bonus = Math.floor(Math.max(0, ...team.map(m => m.skills?.[key] || 0)) / 2);
+      label = SKILL_LABELS[key];
+    } else {
+      const bestStat = Math.max(...team.map(m => m.stats?.[key] || 5));
+      bonus = Math.floor((bestStat - 5) / 2);
+      label = STAT_LABELS[key] || key;
+    }
+    const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|${S.meta.gameMin}`);
     const roll = 1 + Math.floor(rng() * 10);
-    const total = roll + Math.floor((bestStat - 5) / 2);
+    const total = roll + bonus;
     const success = total >= choice.risky.dc;
     outcome = success ? choice.risky.success : choice.risky.fail;
-    exp.accumulatedLog.push(`Jet ${STAT_LABELS[choice.risky.stat]} : ${roll}+${Math.floor((bestStat-5)/2)} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
+    exp.accumulatedLog.push(`Jet ${label} : ${roll}${bonus >= 0 ? '+' : ''}${bonus} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
   }
 
   // Applique l'outcome

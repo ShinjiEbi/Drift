@@ -2521,7 +2521,7 @@ export const SCENES = [
       { label: "Tenter de comprendre leur monnaie", req: { skill: { key: 'linguistique', min: 2 } },
         outcome: { loot: { datacubes: 12 }, reputation: +3, log: "Système d'échange compris. Connaissance précieuse." } },
       { label: "Décliner poliment", outcome: { log: "L'équipe se retire avec respect." } },
-      { label: "Saisir leurs offrandes par la force", risky: { stat: 'combat', dc: 5,
+      { label: "Saisir leurs offrandes par la force", risky: { stat: 'vigueur', dc: 5,
           success: { loot: { biomasse: 30, datacubes: 8 }, reputation: -25, log: "Les offrandes sont prises. Les regards aussi.", morale: -2 },
           fail:    { status: 'blessure_grave', target: 'random', reputation: -35, log: "Le groupe ripostait mieux qu'attendu." } } }
     ]
@@ -2534,7 +2534,7 @@ export const SCENES = [
     choices: [
       { label: "Mener la négociation", req: { skill: { key: 'linguistique', min: 2 } },
         risky: { stat: 'charisme', dc: 7,
-          success: { blueprint: ['humain', 'mixte'], loot: { datacubes: 20 }, reputation: +15, log: "Accord conclu. Échange de plans techniques en signe de paix." },
+          success: { blueprint: ['humain', 'fusion'], loot: { datacubes: 20 }, reputation: +15, log: "Accord conclu. Échange de plans techniques en signe de paix." },
           fail:    { threat: 1, reputation: -10, log: "Malentendu culturel. La délégation se retire, vexée." } } },
       { label: "Offrir un sérum xeno comme cadeau", req: { item: 'serum_xeno' }, consume: { item: 'serum_xeno' },
         outcome: { item: 'plaque_gravee', loot: { datacubes: 18 }, reputation: +20, log: "Le sérum impressionne. La délégation offre un cadeau réciproque." } },
@@ -2548,7 +2548,7 @@ export const SCENES = [
     text: "Une silhouette ancienne, dernière représentante d'une civilisation effondrée. Elle attend dans l'embrasure d'un sanctuaire.",
     choices: [
       { label: "Écouter sa parole", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { blueprint: ['humain', 'mixte'], loot: { datacubes: 18 }, morale: +2, reputation: +10, log: "Mémoire d'une civilisation transmise. Geste sacré." } },
+        outcome: { blueprint: ['humain', 'fusion'], loot: { datacubes: 18 }, morale: +2, reputation: +10, log: "Mémoire d'une civilisation transmise. Geste sacré." } },
       { label: "Lui apporter du réconfort", req: { trait: 'charisma' },
         outcome: { item: 'plaque_gravee', loot: { datacubes: 10 }, morale: +1, reputation: +5, log: "L'oracle remet un objet en signe de gratitude." } },
       { label: "S'en aller respectueusement", outcome: { morale: +1, log: "L'oracle hoche la tête. Une dernière fois." } }
@@ -2603,7 +2603,7 @@ export const SCENES = [
     text: "Au cœur de la ruine cristalline, une chose s'éveille. Trois mètres de haut. Faite de la même matière que les murs. Elle nous regarde.",
     choices: [
       { label: "Combattre à l'arme à résonance", req: { item: 'arme_resonance' },
-        risky: { stat: 'combat', dc: 7,
+        risky: { stat: 'dexterite', dc: 7,
           success: { blueprint: 'alien_a', loot: { datacubes: 50, cristal: 60 }, log: "Le Gardien s'effondre en éclats lumineux. Trésor inouï." },
           fail:    { status: 'blessure_grave', target: 'random', threat: 3, retreat: true, log: "Le combat est trop déséquilibré. Repli en urgence." } } },
       { label: "Tenter une négociation rituelle", req: { skill: { key: 'linguistique', min: 4 } },
@@ -2701,7 +2701,7 @@ export const SCENES = [
     weight: 8,
     text: "L'équipe est encerclée. Pas de surprise — ils nous attendaient. Notre dernière visite ici n'avait pas été oubliée.",
     choices: [
-      { label: "Combattre", risky: { stat: 'combat', dc: 7,
+      { label: "Combattre", risky: { stat: 'dexterite', dc: 7,
           success: { loot: { biomasse: 20, datacubes: 5 }, reputation: -5, log: "L'embuscade est repoussée. Mais le souvenir s'aggrave." },
           fail:    { status: 'blessure_grave', target: 'random', threat: 2, retreat: true, log: "Repli forcé. Plusieurs blessés." } } },
       { label: "Négocier en urgence", req: { skill: { key: 'linguistique', min: 3 } },
