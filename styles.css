@@ -4393,3 +4393,16 @@ nav.subtabs button:disabled {
   vertical-align: middle;
 }
 .cbt-cover-icon { font-size: 0.8em; margin-left: 3px; }
+
+/* Message affiché dans une vue dont le rendu a échoué (les autres vues continuent) */
+.render-error {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--rust);
+  border-left-width: 3px;
+  background: rgba(168,73,59,0.08);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}

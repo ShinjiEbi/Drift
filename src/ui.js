@@ -1,7 +1,7 @@
 // ui.js — rendu DOM et UI complète
 // Extrait depuis app.js lors de la modularisation (étape R4)
 
-import { $, $$, fmt, fmtMin } from './util.js';
+import { $, $$, fmt, fmtMin, esc } from './util.js';
 import {
   VERSION, MIN_PER_TICK, BUILD_TIME_MULT, PROD_MULT,
   RES_LABELS, RESOURCES, CAP, SKILL_LIST, SKILL_LABELS, STAT_LABELS,
@@ -58,27 +58,202 @@ import {
 } from './app.js';
 
 
+// ============================================================
+//   RENDU — seule la vue visible est reconstruite
+// ============================================================
+// render() est appelée à chaque tick (1 s) et après chaque action de jeu.
+// Elle met à jour l'en-tête (horloge, ressources, alertes) et les badges
+// d'onglets, puis UNIQUEMENT la vue active (onglet + sous-onglet). Les vues
+// cachées sont rendues au moment où on les affiche (selectTab/selectSubtab).
+// Chaque sous-rendu est isolé par guard() : une exception dans une vue
+// n'empêche plus les autres de se mettre à jour.
+// Les conteneurs sont mis à jour par setHTML() : si le HTML n'a pas changé on
+// ne touche à rien, sinon on corrige le DOM existant sur place (morph) au lieu
+// de le recréer — les clics, le focus, la sélection et les animations en
+// cours survivent au tick. Corollaire : aucun écouteur n'est attaché aux
+// éléments produits par les vues, tout passe par la délégation (VIEW_ACTIONS).
+
+// Onglet → sous-onglet → fonctions de rendu ('' = onglet sans sous-onglets)
+const VIEWS = {
+  overview: { '': [renderResources, renderCrewSummary, renderBuildSlot] },
+  modules:  { construction: [renderModules], assignments: [renderAssignments] },
+  crew:     { personnel: [renderCrew], recruit: [renderRecruit], formation: [renderFormation], soins: [renderSoins] },
+  galaxy:   { cartographie: [renderGalaxy], fleet: [renderFleet], expeditions: [renderExpeditions], diplomatie: [renderDiplomacy] },
+  stocks:   { inventory: [renderInventory], library: [renderLibrary], research: [renderResearch], workshop: [renderWorkshop] },
+  arcs:     { '': [renderArcs] },
+  journal:  { '': [renderJournal] },
+};
+const DEFAULT_SUB = { modules: 'construction', crew: 'personnel', galaxy: 'cartographie', stocks: 'inventory' };
+const NAV_KEY = 'drift_ui_nav';
+const _nav = { tab: 'overview', sub: { ...DEFAULT_SUB } };
+let _navRestored = false;
+let _renderPending = false;
+
 export function render() {
-  renderHeader();
-  renderResources();
-  renderCrewSummary();
-  renderBuildSlot();
-  renderModules();
-  renderAssignments();
-  renderCrew();
-  renderFormation();
-  renderSoins();
-  renderRecruit();
-  renderGalaxy();
-  renderFleet();
-  renderExpeditions();
-  renderInventory();
-  renderLibrary();
-  renderResearch();
-  renderWorkshop();
-  renderArcs();
-  renderDiplomacy();
-  renderJournal();
+  if (!S) return;
+  // Onglet en arrière-plan : on ne calcule rien, on rendra au retour.
+  if (document.hidden) { _renderPending = true; return; }
+  _renderPending = false;
+  guard('renderHeader', renderHeader);
+  guard('renderBadges', renderBadges);
+  if (!_navRestored) { _navRestored = true; restoreNav(); }
+  renderActiveView();
+}
+
+// Rend la vue visible (et seulement elle)
+function renderActiveView() {
+  if (!S) return;
+  const tab = VIEWS[_nav.tab] ? _nav.tab : 'overview';
+  const subs = VIEWS[tab];
+  let sub = '';
+  if (!subs['']) {
+    sub = subs[_nav.sub[tab]] ? _nav.sub[tab] : DEFAULT_SUB[tab];
+    // Sous-onglet devenu indisponible (ex. après « Recommencer ») → premier sous-onglet
+    if (subtabButton(tab, sub)?.disabled) { selectSubtab(tab, DEFAULT_SUB[tab]); return; }
+  }
+  const host = sub ? '#subview-' + sub : '#view-' + tab;
+  for (const fn of subs[sub]) guard(fn.name, fn, host);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && _renderPending) render();
+  });
+}
+
+// ---- Isolation des erreurs de rendu ----
+const _loggedRenderErrors = new Set();
+function guard(name, fn, hostSel) {
+  try {
+    fn();
+    if (hostSel) clearRenderError(hostSel, name);
+  } catch (err) {
+    // Journalise une seule fois par vue et par message (pas à chaque tick)
+    const key = name + '|' + (err && err.message);
+    if (!_loggedRenderErrors.has(key)) {
+      _loggedRenderErrors.add(key);
+      console.error(`[render] ${name} :`, err);
+    }
+    if (hostSel) showRenderError(hostSel, name);
+  }
+}
+function showRenderError(hostSel, name) {
+  const host = $(hostSel);
+  if (!host || host.querySelector(`:scope > .render-error[data-view="${name}"]`)) return;
+  const box = document.createElement('div');
+  box.className = 'render-error';
+  box.dataset.view = name;
+  box.setAttribute('role', 'alert');
+  box.textContent = "Cette section n'a pas pu s'afficher (erreur interne, détails dans la console). Le reste du jeu continue de tourner.";
+  host.prepend(box);
+}
+function clearRenderError(hostSel, name) {
+  $(hostSel)?.querySelector(`:scope > .render-error[data-view="${name}"]`)?.remove();
+}
+
+// ---- Mise à jour du DOM sur place ----
+const _lastHTML = new WeakMap();
+// Remplace le contenu de el par html, sans rien recréer si rien n'a changé
+// et en conservant les nœuds existants quand seule une partie a changé.
+function setHTML(el, html) {
+  if (!el) return;
+  if (_lastHTML.get(el) === html) return;
+  _lastHTML.set(el, html);
+  if (!el.firstChild) { el.innerHTML = html; return; }
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  morphChildren(el, tpl.content);
+}
+function morphChildren(cur, next) {
+  const curKids = Array.from(cur.childNodes);
+  const nextKids = Array.from(next.childNodes);
+  for (let i = 0; i < nextKids.length; i++) {
+    const nk = nextKids[i];
+    const ck = curKids[i];
+    if (!ck) { cur.appendChild(nk); continue; }
+    if (ck.nodeType !== nk.nodeType || ck.nodeName !== nk.nodeName ||
+        (ck.nodeType === 1 && ck.getAttribute('data-id') !== nk.getAttribute('data-id'))) {
+      // Nature différente, ou autre objet (data-id) : on remplace le nœud
+      cur.replaceChild(nk, ck);
+      continue;
+    }
+    if (ck.nodeType === 1) {
+      morphAttrs(ck, nk);
+      morphChildren(ck, nk);
+    } else if (ck.nodeValue !== nk.nodeValue) {
+      ck.nodeValue = nk.nodeValue;
+    }
+  }
+  for (let i = nextKids.length; i < curKids.length; i++) curKids[i].remove();
+}
+function morphAttrs(cur, next) {
+  for (const { name, value } of Array.from(next.attributes)) {
+    if (cur.getAttribute(name) !== value) cur.setAttribute(name, value);
+  }
+  for (const { name } of Array.from(cur.attributes)) {
+    if (!next.hasAttribute(name)) cur.removeAttribute(name);
+  }
+}
+
+// ---- Accès tolérants aux données inattendues (sauvegarde ancienne ou modifiée) ----
+// Nom d'une entrée de catalogue, déjà échappé ; à défaut la clé elle-même.
+const nomOf = (table, key) => esc(table?.[key]?.nom ?? key ?? '?');
+// Définition de vaisseau, avec des valeurs neutres si le type est inconnu
+const vesselDef = type => VESSELS[type] || { nom: String(type ?? '?'), flavor: '', places: 0, cargo: 0, speed: 1, fuelPerPc: 0, equipSlots: 0 };
+
+// ---- Badges d'onglets et sous-onglets activables (toujours à jour) ----
+function setBadge(sel, n) {
+  const b = $(sel);
+  if (!b) return;
+  if (n > 0) {
+    const txt = String(n);
+    if (b.textContent !== txt) b.textContent = txt;
+    b.classList.add('show');
+  } else {
+    b.classList.remove('show');
+  }
+}
+function renderBadges() {
+  // Modules › Affectations : postes vacants pourvoyables (colons libres)
+  let totalSlots = 0, filledSlots = 0;
+  for (const modKey in MODULE_JOBS) {
+    if (!S.modules[modKey]) continue;
+    const jobs = jobsForModule(modKey);
+    totalSlots += jobs.length;
+    for (let i = 0; i < jobs.length; i++) {
+      const occ = S.assignments[jobKey(modKey, i)];
+      if (occ && S.crew.find(c => c.id === occ)?.statut === 'travail') filledSlots++;
+    }
+  }
+  const freeCrew = S.crew.filter(m => m.statut === 'libre').length;
+  setBadge('#assignBadge', freeCrew > 0 ? Math.min(totalSlots - filledSlots, freeCrew) : 0);
+  // Équipage : candidats en attente
+  const nCand = (S.candidates || []).length;
+  setBadge('#recruitBadge', nCand);
+  setBadge('#crewBadge', nCand);
+  // Galaxie : expéditions et missions diplomatiques
+  const nExp = (S.expeditions || []).length;
+  setBadge('#expBadge', nExp);
+  setBadge('#galaxyBadge', nExp);
+  setBadge('#diploBadge', (S.diplomaticMissions || []).length);
+  // Stocks : schémas connus, recherches et fabrications en cours
+  setBadge('#libBadge', Object.keys(BLUEPRINTS).filter(id => S.discoveries?.[id]).length);
+  setBadge('#researchBadge', (S.research || []).length);
+  setBadge('#workshopBadge', (S.fabrication || []).length);
+  // Chroniques : arcs ouverts en cours de progression
+  let arcsInProgress = 0;
+  for (const arcId in ARCS) {
+    const st = getArcState(arcId);
+    if (st.unlocked && !st.rewardClaimed && st.completedSteps.length > 0 &&
+        st.completedSteps.length < ARCS[arcId].steps.length) arcsInProgress++;
+  }
+  setBadge('#arcsBadge', arcsInProgress);
+  // Sous-onglets disponibles selon les bâtiments
+  const setDisabled = (sel, off) => { const b = $(sel); if (b && b.disabled !== off) b.disabled = off; };
+  setDisabled('#subtab-formation', !S.modules.formation);
+  setDisabled('#subtab-soins', !S.modules.infirmerie);
+  setDisabled('#subtab-fleet', !S.modules.hangar);
+  setDisabled('#subtab-expeditions', !S.modules.hangar);
 }
 
 function renderHeader() {
@@ -118,11 +293,7 @@ function renderResBar() {
     const cap = capOf(k);
     const over = (S.overflow && S.overflow[k]) || 0;  // 0.28
     // Affichage : valeur normale + suffixe "+X" si overflow
-    if (over > 0) {
-      val.innerHTML = `${fmt(cur)}<span class="rb-overflow">+${fmt(over)}</span>`;
-    } else {
-      val.textContent = fmt(cur);
-    }
+    setHTML(val, over > 0 ? `${fmt(cur)}<span class="rb-overflow">+${fmt(over)}</span>` : fmt(cur));
     cell.classList.remove('low', 'full', 'overflow');
     if (over > 0) cell.classList.add('overflow');
     else if (cur >= cap * 0.95) cell.classList.add('full');
@@ -155,14 +326,12 @@ function renderAlertBar() {
   }
   bar.style.display = '';
   bar.classList.toggle('critical', alerts.some(a => a.critical));
-  // Premier message + nombre total si plus d'un
+  // Premier message + nombre total si plus d'un (le clic est branché une fois pour toutes)
   const first = alerts[0];
-  if (alerts.length === 1) {
-    txt.textContent = first.text;
-  } else {
-    txt.textContent = `${first.text} · +${alerts.length - 1} autre${alerts.length > 2 ? 's' : ''}`;
-  }
-  bar.onclick = () => showAlertsModal(alerts);
+  const label = alerts.length === 1
+    ? first.text
+    : `${first.text} · +${alerts.length - 1} autre${alerts.length > 2 ? 's' : ''}`;
+  if (txt.textContent !== label) txt.textContent = label;
 }
 
 // Collecte les alertes à afficher
@@ -347,7 +516,7 @@ function refreshPushButton() {
 function renderResources() {
   const grid = $('#resourcesGrid');
   const rate = computeRates();
-  grid.innerHTML = RESOURCES.map(k => {
+  setHTML(grid, RESOURCES.map(k => {
     const r = rate[k];
     const cls = r > 0 ? 'pos' : r < 0 ? 'neg' : '';
     const sign = r > 0 ? '+' : '';
@@ -356,37 +525,37 @@ function renderResources() {
       <div class="val">${fmt(S.res[k])}<span style="color:var(--text-mute);font-size:13px">/${fmt(capOf(k))}</span></div>
       <div class="rate ${cls}">${r === 0 ? '— stable' : sign + r.toFixed(1) + '/min'}</div>
     </div>`;
-  }).join('');
+  }).join(''));
 }
 
 function renderBuildSlot() {
   const slot = $('#buildSlot');
   if (!S.build) {
-    slot.className = 'empty';
-    slot.textContent = "Aucun chantier ouvert.";
+    if (slot.className !== 'empty') slot.className = 'empty';
+    setHTML(slot, "Aucun chantier ouvert.");
     return;
   }
   const b = S.build;
-  const def = MODULES[b.id];
-  const pct = Math.min(100, (b.doneMin / b.totalMin) * 100);
+  const def = MODULES[b.id] || { nom: b.id, desc: '' };
+  const pct = Math.min(100, (b.doneMin / b.totalMin) * 100) || 0;
   const remaining = b.totalMin - b.doneMin;
-  slot.className = 'module';
-  slot.innerHTML = `
+  if (slot.className !== 'module') slot.className = 'module';
+  setHTML(slot, `
     <div class="title-row">
       <div class="name">${def.nom}</div>
       <div class="level">→ NIV ${b.targetLevel}</div>
     </div>
     <div class="desc">${def.desc}</div>
-    <div class="progress-wrap">
+    <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}">
       <div class="bar" style="width:${pct}%"></div>
       <div class="label-prog">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
     </div>
-  `;
+  `);
 }
 
 function renderModules() {
   const list = $('#modulesList');
-  list.innerHTML = Object.keys(MODULES).map(id => {
+  setHTML(list, Object.keys(MODULES).map(id => {
     const def = MODULES[id];
     const cur = S.modules[id]?.level || 0;
     const next = cur + 1;
@@ -456,11 +625,7 @@ function renderModules() {
       ${costHTML}
       ${actionHTML}
     </div>`;
-  }).join('');
-
-  list.querySelectorAll('button.build[data-id]').forEach(btn => {
-    btn.addEventListener('click', () => startBuild(btn.dataset.id));
-  });
+  }).join(''));
 
   // 0.26.1 : bandeau synthétiseur si module construit
   renderSynthesisBanner();
@@ -494,12 +659,10 @@ function renderSynthesisBanner() {
   banner.hidden = false;
   const lvl = m.level;
   const available = SYNTHESIS_RECIPES.filter(r => r.lvl <= lvl).length;
-  banner.querySelector('.sb-sub').textContent = `${available} conversion(s) disponible(s) au niveau ${lvl}.`;
-  const btn = $('#openSynthesis');
-  if (btn && !btn._wired) {
-    btn._wired = true;
-    btn.addEventListener('click', openSynthesisModal);
-  }
+  const txt = `${available} conversion(s) disponible(s) au niveau ${lvl}.`;
+  const subEl = banner.querySelector('.sb-sub');
+  if (subEl.textContent !== txt) subEl.textContent = txt;
+  // Le bouton « Convertir » est géré par VIEW_ACTIONS (#openSynthesis)
 }
 
 function openSynthesisModal() {
@@ -586,7 +749,6 @@ function renderAssignments() {
   const sub = $('#assignSub');
   const controls = $('#assignControls');
   const list = $('#assignList');
-  const badge = $('#assignBadge');
 
   // Compte total des postes ouverts et pourvus
   let totalSlots = 0;
@@ -605,55 +767,32 @@ function renderAssignments() {
   }
   const freeCrew = S.crew.filter(m => m.statut === 'libre').length;
 
-  // Badge sur le sous-onglet : postes vacants assignables (= libre + au moins un poste libre)
-  const vacant = totalSlots - filledSlots;
-  if (vacant > 0 && freeCrew > 0) {
-    badge.textContent = Math.min(vacant, freeCrew);
-    badge.classList.add('show');
-  } else {
-    badge.classList.remove('show');
-  }
-
   if (totalSlots === 0) {
-    sub.innerHTML = "Aucun poste ouvert. Construis et améliore tes bâtiments pour ouvrir des postes.";
-    controls.innerHTML = '';
-    list.innerHTML = '<div class="empty">Pas encore de postes à pourvoir.</div>';
+    setHTML(sub, "Aucun poste ouvert. Construis et améliore tes bâtiments pour ouvrir des postes.");
+    setHTML(controls, '');
+    setHTML(list, '<div class="empty">Pas encore de postes à pourvoir.</div>');
     return;
   }
 
-  sub.innerHTML = `Assigne ton équipage aux postes des bâtiments. <em>Cliquer sur un poste pour ouvrir le sélecteur.</em>`;
+  setHTML(sub, `Assigne ton équipage aux postes des bâtiments. <em>Touche un poste pour ouvrir le sélecteur.</em>`);
 
-  // Toolbar : auto-assign toggle + bouton optimiser
+  // Toolbar : auto-assign toggle + bouton optimiser (clics : VIEW_ACTIONS)
   const onCls = S.autoAssign ? 'on' : '';
-  controls.innerHTML = `
+  setHTML(controls, `
     <div class="assign-toolbar">
-      <label class="toggle ${onCls}" id="autoAssignToggle">
-        <span class="switch"></span>
+      <span class="toggle ${onCls}" id="autoAssignToggle" role="switch" tabindex="0" aria-checked="${S.autoAssign ? 'true' : 'false'}">
+        <span class="switch" aria-hidden="true"></span>
         Auto-affectation
-      </label>
+      </span>
       <button class="quick-action" id="optimizeAssignBtn">Réoptimiser</button>
       <button class="quick-action" id="clearAllAssignBtn">Tout libérer</button>
     </div>
     <div class="assign-stats">
       Postes pourvus : <b>${filledSlots}/${totalSlots}</b> · Libres : <b>${freeCrew}</b>
     </div>
-  `;
-  $('#autoAssignToggle')?.addEventListener('click', () => {
-    S.autoAssign = !S.autoAssign;
-    if (S.autoAssign) autoAssignAllFreeMembers();
-    render();
-  });
-  $('#optimizeAssignBtn')?.addEventListener('click', () => {
-    optimizeAssignments();
-    render();
-  });
-  $('#clearAllAssignBtn')?.addEventListener('click', () => {
-    if (!confirm("Libérer tous les colons de leurs postes ?")) return;
-    clearAllAssignments();
-    render();
-  });
+  `);
 
-  // Liste des bâtiments avec leurs postes
+  // Liste des bâtiments avec leurs postes (clic sur un poste : VIEW_ACTIONS)
   const cards = [];
   for (const modKey in MODULE_JOBS) {
     if (!S.modules[modKey]) continue;
@@ -661,14 +800,7 @@ function renderAssignments() {
     if (jobs.length === 0) continue;
     cards.push(renderAssignCard(modKey, jobs));
   }
-  list.innerHTML = cards.join('') || '<div class="empty">Aucun bâtiment avec des postes ouverts.</div>';
-
-  // Hooks sur les rangées de poste
-  list.querySelectorAll('.slot-row').forEach(row => {
-    row.addEventListener('click', () => {
-      openAssignPicker(row.dataset.mod, parseInt(row.dataset.slot, 10));
-    });
-  });
+  setHTML(list, cards.join('') || '<div class="empty">Aucun bâtiment avec des postes ouverts.</div>');
 }
 
 function renderAssignCard(modKey, jobs) {
@@ -683,7 +815,7 @@ function renderAssignCard(modKey, jobs) {
   // Lignes de poste
   const slotsHTML = jobs.map((job, i) => renderSlotRow(modKey, i, job)).join('');
 
-  return `<div class="module-assign-card">
+  return `<div class="module-assign-card" data-mod="${esc(modKey)}">
     <div class="mac-head">
       <div class="mac-name">${def.nom}</div>
       <div class="mac-fill">postes <span class="v ${fillCls}">${eff.jobsFilled}/${eff.jobsTotal}</span></div>
@@ -759,7 +891,7 @@ function renderSlotRow(modKey, slotIdx, job) {
     occHTML = `<div class="slot-occupant empty">vacant</div>`;
   }
 
-  return `<div class="slot-row ${occMember ? '' : 'empty'} ${occMember && !isReallyOnPost ? 'away' : ''}" data-mod="${modKey}" data-slot="${slotIdx}">
+  return `<div class="slot-row ${occMember ? '' : 'empty'} ${occMember && !isReallyOnPost ? 'away' : ''}" data-mod="${esc(modKey)}" data-slot="${slotIdx}" role="button" tabindex="0">
     <div class="slot-role" style="background:${role.color}"></div>
     <div class="slot-info">
       <div class="slot-label">${job.label}</div>
@@ -827,7 +959,7 @@ function renderAssignPickerContent() {
       const a = memberAssignment(m.id);
       if (a) {
         const otherJob = jobsForModule(a.modKey)[a.slotIdx];
-        busy = `${MODULES[a.modKey].nom} · ${otherJob.label}`;
+        busy = `${MODULES[a.modKey]?.nom || '?'} · ${otherJob?.label || '?'}`;
       } else busy = 'travail';
     }
     // Score / statistique pertinente
@@ -921,25 +1053,19 @@ function hookAssignPicker() {
 function renderDiplomacy() {
   const sub = $('#diploSub');
   const content = $('#diploContent');
-  const badge = $('#diploBadge');
   if (!content) return;
 
   const factions = Object.values(S.factions || {});
   const activeMissions = (S.diplomaticMissions || []).length;
-
-  // Badge : nombre de factions Allié + missions en cours
   const allies = factions.filter(f => f.reputation >= 60).length;
-  const totalAlerts = activeMissions;
-  if (totalAlerts > 0) { badge.textContent = totalAlerts; badge.classList.add('show'); }
-  else badge.classList.remove('show');
 
   if (factions.length === 0) {
-    sub.innerHTML = "Aucune faction connue. Rencontre des civilisations en expédition pour ouvrir cet onglet.";
-    content.innerHTML = '<div class="empty">L\'avant-poste n\'a pas encore noué de liens connus.</div>';
+    setHTML(sub, "Aucune faction connue. Rencontre des civilisations en expédition pour ouvrir cet onglet.");
+    setHTML(content, '<div class="empty">L\'avant-poste n\'a pas encore noué de liens connus.</div>');
     return;
   }
 
-  sub.innerHTML = `<b>${factions.length}</b> faction${factions.length > 1 ? 's' : ''} connue${factions.length > 1 ? 's' : ''} · <b>${allies}</b> allié${allies > 1 ? 's' : ''} · <b>${activeMissions}</b> mission${activeMissions > 1 ? 's' : ''} en cours`;
+  setHTML(sub, `<b>${factions.length}</b> faction${factions.length > 1 ? 's' : ''} connue${factions.length > 1 ? 's' : ''} · <b>${allies}</b> allié${allies > 1 ? 's' : ''} · <b>${activeMissions}</b> mission${activeMissions > 1 ? 's' : ''} en cours`);
 
   // Missions actives
   let html = '';
@@ -967,25 +1093,13 @@ function renderDiplomacy() {
 
   html += '<h3 class="section-h">Factions connues</h3>';
   html += factions.map(f => renderFactionCard(f)).join('');
-  content.innerHTML = html;
-
-  // Hooks
-  content.querySelectorAll('button[data-trade]').forEach(btn => {
-    btn.addEventListener('click', () => { toggleFactionTrade(btn.dataset.trade); render(); });
-  });
-  content.querySelectorAll('button[data-diplo-launch]').forEach(btn => {
-    btn.addEventListener('click', () => openDiploLaunchModal(btn.dataset.diploLaunch));
-  });
-  content.querySelectorAll('button[data-gift-faction]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      offerGift(btn.dataset.giftFaction, parseInt(btn.dataset.giftIdx, 10));
-    });
-  });
+  // Boutons commerce / mission / cadeau : VIEW_ACTIONS
+  setHTML(content, html);
 }
 
 // 0.30 — Probabilité de succès d'une mission pour un colon donné et un type de faction
 function missionSuccessChance(member, factionType) {
-  const ft = FACTION_TYPES[factionType];
+  const ft = FACTION_TYPES[factionType] || {};
   const pSkill = ft.missionSkill || 'linguistique';
   const pScore = member.skills[pSkill] || 0;
   const lScore = pSkill !== 'linguistique' ? (member.skills.linguistique || 0) : 0;
@@ -1001,6 +1115,11 @@ function missionSuccessChance(member, factionType) {
 
 function renderFactionCard(f) {
   const ft = FACTION_TYPES[f.type];
+  if (!ft) {
+    // Type de faction inconnu (sauvegarde d'une autre version) : carte minimale
+    return `<div class="diplo-card"><div class="dc-head"><div class="dc-name">${esc(f.name)}</div></div>
+      <div class="dc-desc">Faction d'un type inconnu de cette version du jeu.</div></div>`;
+  }
   const status = factionStatus(f.reputation);
   // Barre de réputation : -100 → 0% à gauche, 0 → 50%, +100 → 100%
   const repPct = Math.max(0, Math.min(100, (f.reputation + 100) / 2));
@@ -1146,6 +1265,7 @@ function openDiploLaunchModal(factionId) {
   const f = S.factions?.[factionId];
   if (!f) return;
   const ft = FACTION_TYPES[f.type];
+  if (!ft) return;
   const reqSkill = ft.missionReqSkill || 'linguistique';
   const reqMin   = ft.missionReqMin   || 3;
   const reqAlt   = ft.missionReqAlt;
@@ -1222,26 +1342,13 @@ function hookDiploLaunchModal() {
 function renderArcs() {
   const sub = $('#arcsSub');
   const content = $('#arcsContent');
-  const badge = $('#arcsBadge');
   if (!content) return;
 
-  // Compte les arcs en cours qui ont avancé récemment (badge)
-  let recentProgress = 0;
-  for (const arcId in ARCS) {
-    const state = getArcState(arcId);
-    if (state.unlocked && !state.rewardClaimed) {
-      const arc = ARCS[arcId];
-      if (state.completedSteps.length > 0 && state.completedSteps.length < arc.steps.length) recentProgress++;
-    }
-  }
-  if (recentProgress > 0) { badge.textContent = recentProgress; badge.classList.add('show'); }
-  else badge.classList.remove('show');
-
-  // Statistiques globales
+  // Statistiques globales (le badge d'onglet est calculé par renderBadges)
   const totalArcs = Object.keys(ARCS).length;
   const unlockedArcs = Object.values(S.arcs || {}).filter(a => a.unlocked).length;
   const completedArcs = Object.values(S.arcs || {}).filter(a => a.rewardClaimed).length;
-  sub.innerHTML = `<b>${unlockedArcs}/${totalArcs}</b> chronique${unlockedArcs > 1 ? 's' : ''} ouverte${unlockedArcs > 1 ? 's' : ''} · <b>${completedArcs}</b> achevée${completedArcs > 1 ? 's' : ''}`;
+  setHTML(sub, `<b>${unlockedArcs}/${totalArcs}</b> chronique${unlockedArcs > 1 ? 's' : ''} ouverte${unlockedArcs > 1 ? 's' : ''} · <b>${completedArcs}</b> achevée${completedArcs > 1 ? 's' : ''}`);
 
   // Rendu des arcs
   let html = '';
@@ -1250,7 +1357,7 @@ function renderArcs() {
     const state = getArcState(arcId);
     html += renderArcCard(arcId, arc, state);
   }
-  content.innerHTML = html;
+  setHTML(content, html);
 }
 
 function renderArcCard(arcId, arc, state) {
@@ -1322,22 +1429,29 @@ function renderArcCard(arcId, arc, state) {
   </div>`;
 }
 
+// Types d'entrée de journal connus (sert de classe CSS : liste fermée)
+const JOURNAL_KINDS = new Set(['neutral', 'success', 'warn']);
+
 function renderJournal() {
   const list = $('#journalList');
-  if (S.journal.length === 0) {
-    list.innerHTML = '<li class="empty">Aucune entrée. La station écoute.</li>';
+  if (!Array.isArray(S.journal) || S.journal.length === 0) {
+    setHTML(list, '<li class="empty">Aucune entrée. La station écoute.</li>');
     return;
   }
-  list.innerHTML = S.journal.slice().reverse().map(e => {
-    const d = Math.floor(e.t / (24*60)) + 1;
-    const h = Math.floor((e.t % (24*60)) / 60);
-    const m = Math.floor(e.t % 60);
+  setHTML(list, S.journal.slice().reverse().map(e => {
+    const t = Number(e.t) || 0;
+    const d = Math.floor(t / (24*60)) + 1;
+    const h = Math.floor((t % (24*60)) / 60);
+    const m = Math.floor(t % 60);
     const stamp = `J${d} · ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-    return `<li class="entry ${e.kind}">
+    const kind = JOURNAL_KINDS.has(e.kind) ? e.kind : 'neutral';
+    // e.txt est du HTML produit par le jeu (<em>…) : volontairement non échappé.
+    // Les sauvegardes importées sont assainies au chargement (liste blanche).
+    return `<li class="entry ${kind}">
       <div class="meta">${stamp}</div>
       <div class="body">${e.txt}</div>
     </li>`;
-  }).join('');
+  }).join(''));
 }
 
 // ============================================================
@@ -1353,12 +1467,12 @@ function renderInventory() {
   const distinct = Object.keys(inv).filter(k => inv[k] > 0).length;
 
   if (total === 0) {
-    sub.innerHTML = "Aucun item récupéré pour l'instant. Lance des expéditions pour ramener des artefacts.";
-    content.innerHTML = '<div class="empty">Inventaire vide.</div>';
+    setHTML(sub, "Aucun item récupéré pour l'instant. Lance des expéditions pour ramener des artefacts.");
+    setHTML(content, '<div class="empty">Inventaire vide.</div>');
     return;
   }
 
-  sub.innerHTML = `<b>${total}</b> item(s) au total · ${distinct} type(s) distinct(s)`;
+  setHTML(sub, `<b>${total}</b> item(s) au total · ${distinct} type(s) distinct(s)`);
 
   // Résumé par origine
   const byOrigin = {};
@@ -1386,7 +1500,7 @@ function renderInventory() {
     html += `<div class="inv-section">
       <div class="inv-section-head">
         <div class="ish-title">${typeDef.nom}</div>
-        <div class="ish-desc">${typeDef.desc}</div>
+        <div class="ish-desc">${cleanTypeDesc(typeDef.desc)}</div>
         <div class="ish-count">${typeTotal} item(s)</div>
       </div>
       <div class="inv-grid">`;
@@ -1412,7 +1526,12 @@ function renderInventory() {
     }
     html += `</div></div>`;
   }
-  content.innerHTML = html;
+  setHTML(content, html);
+}
+
+// Retire les mentions de développement « (à venir : phase 0.13) » des descriptions de types
+function cleanTypeDesc(desc) {
+  return String(desc || '').replace(/\s*\(à venir[^)]*\)/g, '');
 }
 
 // ============================================================
@@ -1421,7 +1540,6 @@ function renderInventory() {
 function renderLibrary() {
   const sub = $('#libSub');
   const content = $('#libContent');
-  const badge = $('#libBadge');
   if (!sub || !content) return;
 
   const discoveries = S.discoveries || {};
@@ -1429,14 +1547,10 @@ function renderLibrary() {
   const found = allBpIds.filter(id => discoveries[id]).length;
   const total = allBpIds.length;
 
-  // Badge : nombre de schémas connus
-  if (found > 0) { badge.textContent = found; badge.classList.add('show'); }
-  else badge.classList.remove('show');
-
   if (found === 0) {
-    sub.innerHTML = "Aucun schéma découvert. Explore les <em>ruines</em> en expédition pour en trouver.";
+    setHTML(sub, "Aucun schéma découvert. Explore les <em>ruines</em> en expédition pour en trouver.");
   } else {
-    sub.innerHTML = `<b>${found}</b> schéma(s) connu(s) sur <b>${total}</b> au total.`;
+    setHTML(sub, `<b>${found}</b> schéma(s) connu(s) sur <b>${total}</b> au total.`);
   }
 
   // Header avec barre de progression
@@ -1515,7 +1629,7 @@ function renderLibrary() {
     }
     html += `</div>`;
   }
-  content.innerHTML = html;
+  setHTML(content, html);
 }
 
 // ============================================================
@@ -1524,7 +1638,6 @@ function renderLibrary() {
 function renderResearch() {
   const sub = $('#researchSub');
   const content = $('#researchContent');
-  const badge = $('#researchBadge');
   if (!sub || !content) return;
 
   const labLvl = S.modules.laboratoire?.level || 0;
@@ -1532,19 +1645,15 @@ function renderResearch() {
   const completed = allTechs.filter(id => isTechCompleted(id)).length;
   const ongoing = (S.research || []).length;
 
-  // Badge : recherches en cours
-  if (ongoing > 0) { badge.textContent = ongoing; badge.classList.add('show'); }
-  else badge.classList.remove('show');
-
   if (labLvl === 0) {
-    sub.innerHTML = "Construis un <em>Laboratoire</em> pour engager des recherches.";
-    content.innerHTML = '<div class="empty">Aucun laboratoire opérationnel.</div>';
+    setHTML(sub, "Construis un <em>Laboratoire</em> pour engager des recherches.");
+    setHTML(content, '<div class="empty">Aucun laboratoire opérationnel.</div>');
     return;
   }
 
   const slots = Math.max(1, Math.ceil(labLvl / 2));
   const lb = laboratoryBonuses();
-  sub.innerHTML = `Laboratoire niv ${labLvl} · <b>${ongoing}/${slots}</b> recherche(s) en cours · <b>${completed}/${allTechs.length}</b> technologies maîtrisées`;
+  setHTML(sub, `Laboratoire niv ${labLvl} · <b>${ongoing}/${slots}</b> recherche(s) en cours · <b>${completed}/${allTechs.length}</b> technologies maîtrisées`);
 
   // Résumé global avec datacubes / datacubes alien
   let html = `<div class="research-summary">
@@ -1554,7 +1663,8 @@ function renderResearch() {
     <div class="stat"><span class="lbl">Vitesse</span><span class="v">${lb.activeProd ? Math.round(100/lb.speedMult) + '%' : '30% (auto)'}</span></div>
   </div>`;
 
-  // Recherches actives
+  // Recherches actives (conteneur stable : la liste en dessous ne se décale pas)
+  html += '<div class="research-actives">';
   if (S.research && S.research.length > 0) {
     html += S.research.map(r => {
       const tech = TECH_TREE[r.techId];
@@ -1573,6 +1683,7 @@ function renderResearch() {
       </div>`;
     }).join('');
   }
+  html += '</div>';
 
   // Tech tree groupé par branche
   for (const branchKey of Object.keys(TECH_BRANCHES)) {
@@ -1609,19 +1720,8 @@ function renderResearch() {
     html += `</div>`;
   }
 
-  content.innerHTML = html;
-
-  // Hooks
-  content.querySelectorAll('button[data-cancel-research]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (confirm("Annuler cette recherche ? 50% des ressources seront récupérées.")) {
-        cancelResearch(btn.dataset.cancelResearch);
-      }
-    });
-  });
-  content.querySelectorAll('.tech-card.available[data-tech]').forEach(card => {
-    card.addEventListener('click', () => openResearchModal(card.dataset.tech));
-  });
+  // Annuler / ouvrir une technologie : VIEW_ACTIONS
+  setHTML(content, html);
 }
 
 function renderTechCard(techId, branchColor) {
@@ -1674,7 +1774,7 @@ function renderTechCard(techId, branchColor) {
     prereqStr = `<div class="tc-prereq">Suite de : ${sat.join(' · ')}</div>`;
   }
 
-  return `<div class="tech-card ${cls}" data-tech="${techId}" style="${cls === 'available' ? `border-left-color:${branchColor}` : ''}">
+  return `<div class="tech-card ${cls}" data-tech="${techId}"${cls === 'available' ? ' role="button" tabindex="0"' : ''} style="${cls === 'available' ? `border-left-color:${branchColor}` : ''}">
     <div class="tc-head">
       <div class="tc-name">${tech.nom}</div>
       ${statusHTML}
@@ -1768,26 +1868,21 @@ function renderWorkshop() {
   const sub = $('#workshopSub');
   const status = $('#workshopStatus');
   const content = $('#workshopContent');
-  const badge = $('#workshopBadge');
   if (!sub || !content) return;
 
   const lvl = S.modules.atelier?.level || 0;
   const inQueue = (S.fabrication || []).length;
   const slots = workshopSlots();
 
-  // Badge
-  if (inQueue > 0) { badge.textContent = inQueue; badge.classList.add('show'); }
-  else badge.classList.remove('show');
-
   if (lvl === 0) {
-    sub.innerHTML = "Construis un <em>Atelier</em> pour fabriquer de l'équipement.";
-    status.innerHTML = '';
-    content.innerHTML = '<div class="empty">Aucun atelier opérationnel.</div>';
+    setHTML(sub, "Construis un <em>Atelier</em> pour fabriquer de l'équipement.");
+    setHTML(status, '');
+    setHTML(content, '<div class="empty">Aucun atelier opérationnel.</div>');
     return;
   }
 
   const bonuses = workshopBonuses();
-  sub.innerHTML = `Atelier niv ${lvl} · <b>${inQueue}/${slots}</b> en cours`;
+  setHTML(sub, `Atelier niv ${lvl} · <b>${inQueue}/${slots}</b> en cours`);
 
   // Encart staff de l'atelier
   const wBonusParts = [];
@@ -1798,10 +1893,10 @@ function renderWorkshop() {
     ? wBonusParts.join(' · ')
     : `<span class="none">Aucun bonus actif. Affecte un Artisan.</span>`;
   const staffHTML = renderStaffPanel('atelier', { title: 'Équipe atelier', bonusText: wBonusText });
-  status.innerHTML = staffHTML;
+  setHTML(status, staffHTML);
 
-  // File en cours
-  let html = '';
+  // File en cours (conteneur stable : le catalogue en dessous ne se décale pas)
+  let html = '<div class="fab-actives">';
   if (S.fabrication && S.fabrication.length > 0) {
     html += S.fabrication.map(f => {
       const fab = FABRICATIONS[f.fabId];
@@ -1819,6 +1914,7 @@ function renderWorkshop() {
       </div>`;
     }).join('');
   }
+  html += '</div>';
 
   // Catalogue de fabrications, regroupé par type d'item produit
   const groups = {
@@ -1841,7 +1937,7 @@ function renderWorkshop() {
     html += `<div class="inv-section">
       <div class="inv-section-head">
         <div class="ish-title">${typeDef.nom}</div>
-        <div class="ish-desc">${typeDef.desc.replace(/ \(à venir.*\)/, '')}</div>
+        <div class="ish-desc">${cleanTypeDesc(typeDef.desc)}</div>
       </div>`;
 
     // Tri : disponibles d'abord, puis verrouillées par niveau croissant
@@ -1858,20 +1954,8 @@ function renderWorkshop() {
     html += `</div>`;
   }
 
-  content.innerHTML = html;
-
-  // Hooks
-  content.querySelectorAll('button[data-cancel-fab]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (confirm("Annuler cette fabrication ? 50% des ressources seront récupérées.")) {
-        cancelFabrication(btn.dataset.cancelFab);
-      }
-    });
-  });
-  content.querySelectorAll('.fab-card.available[data-fab]').forEach(card => {
-    card.addEventListener('click', () => openFabModal(card.dataset.fab));
-  });
-  hookStaffLinks($('#subview-workshop'));
+  // Annuler / ouvrir une fabrication, « Gérer → » : VIEW_ACTIONS
+  setHTML(content, html);
 }
 
 function renderFabCard(fabId) {
@@ -1929,7 +2013,7 @@ function renderFabCard(fabId) {
   const stock = (S.inventory || {})[fab.produces] || 0;
   const stockHTML = stock > 0 ? `<span class="fc-tag" style="color:var(--moss)">stock: ${stock}</span>` : '';
 
-  return `<div class="fab-card ${cls}" data-fab="${fabId}" ${cls === 'available' ? `style="border-left-color:${ori.color}"` : ''}>
+  return `<div class="fab-card ${cls}" data-fab="${fabId}"${cls === 'available' ? ' role="button" tabindex="0"' : ''} ${cls === 'available' ? `style="border-left-color:${ori.color}"` : ''}>
     <div class="fc-head">
       <div class="fc-name">${fab.nom}</div>
       <div class="fc-tags">
@@ -2015,13 +2099,13 @@ function renderGalaxy() {
   const host = $('#galaxyContent');
   const view = S.ui?.galaxyView || 'list';
   if (view === 'body' && S.ui.currentBodyId) {
-    host.innerHTML = renderGalaxyBody();
+    setHTML(host, renderGalaxyBody());
   } else if (view === 'system' && S.ui.currentSystemId) {
-    host.innerHTML = renderGalaxySystem();
+    setHTML(host, renderGalaxySystem());
   } else {
-    host.innerHTML = renderGalaxyList();
+    setHTML(host, renderGalaxyList());
   }
-  hookGalaxyClicks();
+  // Clics sur systèmes, corps et boutons : VIEW_ACTIONS
 }
 
 function renderGalaxyList() {
@@ -2081,7 +2165,7 @@ function renderGalaxySystem() {
       data-body-id="${b.id}" data-type="${b.type}">
       <div class="bcard-head">
         <div class="bname">${b.name}</div>
-        <div class="btype">${BODY_TYPES[b.type].nom}</div>
+        <div class="btype">${nomOf(BODY_TYPES, b.type)}</div>
       </div>
       <div class="bsummary">${summary}</div>
       <div class="threat-reward">
@@ -2114,7 +2198,7 @@ function renderGalaxyBody() {
 
   // Tableau d'analyse
   const dataRows = [
-    ['Type',        BODY_TYPES[body.type].nom, ''],
+    ['Type',        nomOf(BODY_TYPES, body.type), ''],
     ['Biome',       BIOMES[body.biome]?.nom || '—', ''],
     ['Atmosphère',  ATMOSPHERES[body.atmosphere]?.nom || '—', ''],
     ['Gravité',     GRAVITES[body.gravite]?.nom || '—', ''],
@@ -2156,7 +2240,7 @@ function renderGalaxyBody() {
     <button class="back-btn" data-galaxy-action="system">${sys.name}</button>
     <div class="body-detail-header">
       <div class="bname-big">${body.name}</div>
-      <div class="bsystem">Système ${sys.name} · ${sys.distance.toFixed(2)} pc · ${BODY_TYPES[body.type].nom}</div>
+      <div class="bsystem">Système ${sys.name} · ${sys.distance.toFixed(2)} pc · ${nomOf(BODY_TYPES, body.type)}</div>
     </div>
     <div class="body-data-grid">${dataHTML}</div>
     <div style="display:flex;gap:14px;font-family:var(--mono);font-size:11px;color:var(--text-mute);margin-bottom:18px;">
@@ -2166,40 +2250,6 @@ function renderGalaxyBody() {
     <div class="body-narrative">${narrative}</div>
     ${actionHTML}
   `;
-}
-
-function hookGalaxyClicks() {
-  $('#galaxyContent').querySelectorAll('[data-system-id]').forEach(el => {
-    el.addEventListener('click', () => {
-      S.ui.galaxyView = 'system';
-      S.ui.currentSystemId = el.dataset.systemId;
-      renderGalaxy();
-    });
-  });
-  $('#galaxyContent').querySelectorAll('[data-body-id]').forEach(el => {
-    el.addEventListener('click', () => {
-      S.ui.galaxyView = 'body';
-      S.ui.currentBodyId = el.dataset.bodyId;
-      renderGalaxy();
-    });
-  });
-  $('#galaxyContent').querySelectorAll('[data-galaxy-action]').forEach(el => {
-    el.addEventListener('click', () => {
-      const act = el.dataset.galaxyAction;
-      if (act === 'list') {
-        S.ui.galaxyView = 'list';
-        S.ui.currentSystemId = null;
-        S.ui.currentBodyId = null;
-        renderGalaxy();
-      } else if (act === 'system') {
-        S.ui.galaxyView = 'system';
-        S.ui.currentBodyId = null;
-        renderGalaxy();
-      } else if (act === 'launch') {
-        showLaunchModal(el.dataset.bodyId);
-      }
-    });
-  });
 }
 
 // ============================================================
@@ -2256,37 +2306,7 @@ function renderStaffPanel(modKey, opts = {}) {
   </div>`;
 }
 
-// Hook commun pour les liens "Gérer →" (va sur Modules › Affectations et scrolle vers le bâtiment)
-function hookStaffLinks(scope) {
-  const root = scope || document;
-  root.querySelectorAll('button[data-goto-assign]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      // Active l'onglet Modules
-      const modulesBtn = document.querySelector('nav.tabs button[data-tab="modules"]');
-      if (modulesBtn) modulesBtn.click();
-      // Active le sous-onglet Affectations
-      const assignSub = document.querySelector('nav.subtabs button[data-subtab-mod="assignments"]');
-      if (assignSub) assignSub.click();
-      // Scrolle vers le bâtiment correspondant (au tick suivant pour laisser le DOM se mettre à jour)
-      setTimeout(() => {
-        const cards = document.querySelectorAll('#assignList .module-assign-card');
-        // Match par nom de bâtiment dans le DOM
-        const targetName = MODULES[btn.dataset.gotoAssign]?.nom;
-        for (const card of cards) {
-          const nameEl = card.querySelector('.mac-name');
-          if (nameEl && nameEl.textContent.trim() === targetName) {
-            card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            // Mise en surbrillance brève
-            card.style.transition = 'border-color 0.4s';
-            card.style.borderColor = 'var(--amber)';
-            setTimeout(() => { card.style.borderColor = ''; }, 1500);
-            break;
-          }
-        }
-      }, 50);
-    });
-  });
-}
+// Les liens « Gérer → » (data-goto-assign) sont gérés par VIEW_ACTIONS → gotoAssignments()
 
 function renderFleet() {
   const sub = $('#fleetSub');
@@ -2296,21 +2316,19 @@ function renderFleet() {
   const catalog = $('#fleetCatalog');
 
   const hangar = S.modules.hangar;
-  const fleetTab = $('#subtab-fleet');
-  if (fleetTab) fleetTab.disabled = !hangar;
 
   if (!hangar) {
-    sub.innerHTML = "Construis un <em>Hangar</em> pour entreposer des vaisseaux. Prérequis : Atelier niv 1.";
-    status.innerHTML = '';
-    list.innerHTML = '<div class="empty">Aucun hangar.</div>';
-    catalogHead.style.display = 'none';
-    catalog.innerHTML = '';
+    setHTML(sub, "Construis un <em>Hangar</em> pour entreposer des vaisseaux. Prérequis : Atelier niv 1.");
+    setHTML(status, '');
+    setHTML(list, '<div class="empty">Aucun hangar.</div>');
+    catalogHead.hidden = true;
+    setHTML(catalog, '');
     return;
   }
 
   const cap = hangar.level;
   const cur = S.fleet.length + (S.vesselBuild ? 1 : 0);
-  sub.innerHTML = `Hangar niv ${cap} · capacité ${cur}/${cap} vaisseau(x)`;
+  setHTML(sub, `Hangar niv ${cap} · capacité ${cur}/${cap} vaisseau(x)`);
 
   // Encart staff hangar
   const hb = hangarBonuses();
@@ -2325,16 +2343,16 @@ function renderFleet() {
     : `<span class="none">Aucun bonus actif. Affecte un Mécano de bord ou un Chef pilote pour améliorer.</span>`;
   const hStaffHTML = renderStaffPanel('hangar', { title: 'Équipe sol', bonusText: hBonusText });
 
-  status.innerHTML = hStaffHTML + `<div class="fleet-status">
-    Stationnés : <b>${S.fleet.filter(v=>v.available).length}</b> · 
+  setHTML(status, hStaffHTML + `<div class="fleet-status">
+    Stationnés : <b>${S.fleet.filter(v=>v.available).length}</b> ·
     En mission : <b>${S.fleet.filter(v=>!v.available).length}</b>
     ${S.vesselBuild ? ` · Chantier en cours` : ''}
-  </div>`;
+  </div>`);
 
   // Vaisseaux possédés
   let listHTML = '';
   if (S.vesselBuild) {
-    const def = VESSELS[S.vesselBuild.type];
+    const def = vesselDef(S.vesselBuild.type);
     const pct = Math.min(100, S.vesselBuild.doneMin / S.vesselBuild.totalMin * 100);
     const remaining = S.vesselBuild.totalMin - S.vesselBuild.doneMin;
     listHTML += `<div class="vessel-buildslot">
@@ -2350,7 +2368,7 @@ function renderFleet() {
     listHTML += '<div class="empty">Aucun vaisseau dans le hangar.</div>';
   } else {
     listHTML += S.fleet.map(v => {
-      const def = VESSELS[v.type];
+      const def = vesselDef(v.type);
       const busy = !v.available;
       let busyInfo = '';
       if (busy) {
@@ -2379,13 +2397,13 @@ function renderFleet() {
       </div>`;
     }).join('');
   }
-  list.innerHTML = listHTML;
+  setHTML(list, listHTML);
 
   // Catalogue : modèles dispo selon Hangar
   const eligible = Object.entries(VESSELS).filter(([k,d]) => d.hangarReq <= cap);
   if (eligible.length > 0 && cur < cap && !S.vesselBuild) {
-    catalogHead.style.display = '';
-    catalog.innerHTML = eligible.map(([key, def]) => {
+    catalogHead.hidden = false;
+    setHTML(catalog, eligible.map(([key, def]) => {
       const r = canBuildVessel(key);
       const costStr = Object.entries(def.cost).map(([k,v]) => {
         const ko = (S.res[k] || 0) < v;
@@ -2405,16 +2423,12 @@ function renderFleet() {
           ${r.ok ? 'Mettre sur cale' : r.why}
         </button>
       </div>`;
-    }).join('');
-
-    catalog.querySelectorAll('button[data-build-vessel]').forEach(btn => {
-      btn.addEventListener('click', () => startVesselBuild(btn.dataset.buildVessel));
-    });
+    }).join(''));
   } else {
-    catalogHead.style.display = 'none';
-    catalog.innerHTML = '';
+    catalogHead.hidden = true;
+    setHTML(catalog, '');
   }
-  hookStaffLinks($('#subview-fleet'));
+  // « Mettre sur cale » et « Gérer → » : VIEW_ACTIONS
 }
 
 // ============================================================
@@ -2425,26 +2439,15 @@ function renderExpeditions() {
   const active = $('#expActiveList');
   const histHead = $('#expHistoryHead');
   const hist = $('#expHistoryList');
-  const expTab = $('#subtab-expeditions');
-  const expBadge = $('#expBadge');
-  const galaxyBadge = $('#galaxyBadge');
 
   const n = S.expeditions.length;
-  // Badge sur le sous-onglet et sur l'onglet principal Galaxie
-  for (const b of [expBadge, galaxyBadge]) {
-    if (!b) continue;
-    if (n > 0) { b.textContent = n; b.classList.add('show'); }
-    else b.classList.remove('show');
-  }
-
-  if (expTab) expTab.disabled = !S.modules.hangar;
 
   if (n === 0) {
-    sub.innerHTML = "Aucune expédition active. Va dans <em>Cartographie</em>, choisis une planète, lance une mission.";
-    active.innerHTML = '<div class="empty">Aucune mission en cours.</div>';
+    setHTML(sub, "Aucune expédition active. Va dans <em>Cartographie</em>, choisis une planète, lance une mission.");
+    setHTML(active, '<div class="empty">Aucune mission en cours.</div>');
   } else {
-    sub.innerHTML = `${n} expédition${n>1?'s':''} en cours`;
-    active.innerHTML = S.expeditions.map(exp => {
+    setHTML(sub, `${n} expédition${n>1?'s':''} en cours`);
+    setHTML(active, S.expeditions.map(exp => {
       const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
       const body = sys?.bodies.find(b => b.id === exp.bodyId);
       const vessel = S.fleet.find(v => v.id === exp.vesselId);
@@ -2494,33 +2497,27 @@ function renderExpeditions() {
         <div class="ecrew">${crewNames}</div>
         ${actionBtn}
       </div>`;
-    }).join('');
-
-    // Hook les boutons "Reprendre"
-    setTimeout(() => {
-      $('#expActiveList')?.querySelectorAll('button[data-resume-exp]').forEach(btn => {
-        btn.addEventListener('click', () => openSceneOverlay(btn.dataset.resumeExp));
-      });
-    }, 0);
+    }).join(''));
+    // Boutons « Reprendre » : VIEW_ACTIONS (un seul écouteur, délégué)
   }
 
   // Historique
   if (S.expHistory.length > 0) {
-    histHead.style.display = '';
-    hist.innerHTML = S.expHistory.slice(0, 8).map(h => {
+    histHead.hidden = false;
+    setHTML(hist, S.expHistory.slice(0, 8).map(h => {
       const d = Math.floor(h.finishedAt / (24*60)) + 1;
-      const cls = h.result.outcomeKind === 'warn' ? 'warn' : '';
+      const cls = h.result?.outcomeKind === 'warn' ? 'warn' : '';
       return `<div class="exphistory-row ${cls}">
         <div class="h-head">
           <div class="h-dest">${h.bodyName}</div>
           <div>J${d}</div>
         </div>
-        <div class="h-summary">${h.vesselName} · ${h.crewCount} membre${h.crewCount>1?'s':''} · ${h.result.summary}</div>
+        <div class="h-summary">${h.vesselName} · ${h.crewCount} membre${h.crewCount>1?'s':''} · ${h.result?.summary || ''}</div>
       </div>`;
-    }).join('');
+    }).join(''));
   } else {
-    histHead.style.display = 'none';
-    hist.innerHTML = '';
+    histHead.hidden = true;
+    setHTML(hist, '');
   }
 }
 
@@ -2803,7 +2800,7 @@ function renderSceneOverlay() {
     const evalRes = evaluateChoice(exp, ch);
     let extraHTML = '';
     if (ch.req?.trait) {
-      const has = exp.crewIds.some(id => S.crew.find(c => c.id === id)?.traits.includes(ch.req.trait));
+      const has = exp.crewIds.some(id => S.crew.find(c => c.id === id)?.traits?.includes(ch.req.trait));
       extraHTML += `<span class="req ${has ? '' : 'locked'}">REQUIERT TRAIT : ${TRAITS[ch.req.trait]?.nom || ch.req.trait}</span>`;
     }
     if (ch.req?.skill) {
@@ -2852,7 +2849,7 @@ function renderSceneOverlay() {
       .slice(0, 2)
       .map(x => `${SKILL_LABELS[x.s].slice(0,3)}${x.v}`)
       .join(' ') || '—';
-    const traits = m.traits.slice(0, 2).map(t => TRAITS[t]?.nom || t).join(', ') || '—';
+    const traits = (m.traits || []).slice(0, 2).map(t => TRAITS[t]?.nom || t).join(', ') || '—';
     const healthCls = m.sante < 40 ? 'warn' : '';
     return `<div class="scene-team-row ${dead ? 'dead' : ''}">
       <span>${m.name}</span>
@@ -2976,7 +2973,7 @@ function renderLaunchModal() {
     vesselHTML = '<div class="empty" style="padding:14px">Aucun vaisseau disponible. Construis-en un.</div>';
   } else {
     vesselHTML = `<div class="tpicker">${avail.map(v => {
-      const def = VESSELS[v.type];
+      const def = vesselDef(v.type);
       const sel = v.id === _launchPick.vesselId ? 'selected' : '';
       return `<div class="tpicker-item ${sel}" data-pick-vessel="${v.id}">
         <div class="pi-name">${v.name}</div>
@@ -2991,7 +2988,7 @@ function renderLaunchModal() {
   // Indispos : tous les autres sauf 'mort'
   const unavailable = S.crew.filter(c => c.statut !== 'libre' && c.statut !== 'travail' && c.statut !== 'mort');
   const vessel = avail.find(v => v.id === _launchPick.vesselId);
-  const placesMax = vessel ? VESSELS[vessel.type].places : 0;
+  const placesMax = vessel ? vesselDef(vessel.type).places : 0;
 
   // Fonction helper : ETA approximative selon le statut
   function eta(c) {
@@ -3088,7 +3085,7 @@ function renderLaunchModal() {
   // Section équipement (0.15)
   let equipPickerHTML = '';
   if (vessel) {
-    const def = VESSELS[vessel.type];
+    const def = vesselDef(vessel.type);
     const slots = def.equipSlots || 0;
     const used = Object.values(_launchPick.equipment).reduce((s, n) => s + n, 0);
     const fieldItems = Object.entries(S.inventory || {})
@@ -3119,7 +3116,7 @@ function renderLaunchModal() {
       equipPickerHTML = `<div class="equip-picker">${itemsList}</div>`;
     }
   }
-  const equipSlots = vessel ? (VESSELS[vessel.type].equipSlots || 0) : 0;
+  const equipSlots = vessel ? (vesselDef(vessel.type).equipSlots || 0) : 0;
   const equipUsed = Object.values(_launchPick.equipment).reduce((s, n) => s + n, 0);
 
   // Estimation
@@ -3155,7 +3152,7 @@ function renderLaunchModal() {
     <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">Destination</p>
     <div class="estimate" style="margin-bottom:12px">
       <div style="font-family:var(--serif);font-style:italic;color:var(--text);font-size:15px">${body.name}</div>
-      <div style="color:var(--text-mute);font-size:11px;margin-top:2px">${sys.name} · ${BIOMES[body.biome]?.nom || ''} · ${BODY_TYPES[body.type].nom}</div>
+      <div style="color:var(--text-mute);font-size:11px;margin-top:2px">${sys.name} · ${BIOMES[body.biome]?.nom || ''} · ${nomOf(BODY_TYPES, body.type)}</div>
     </div>
     <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">Vaisseau</p>
     ${vesselHTML}
@@ -3181,7 +3178,7 @@ function hookLaunchModal() {
       _launchPick.vesselId = el.dataset.pickVessel;
       // Reset équipage si dépassait la capacité du nouveau vaisseau
       const vessel = S.fleet.find(v => v.id === _launchPick.vesselId);
-      const cap = VESSELS[vessel.type].places;
+      const cap = vesselDef(vessel.type).places;
       while (_launchPick.crewIds.size > cap) {
         const last = Array.from(_launchPick.crewIds).pop();
         _launchPick.crewIds.delete(last);
@@ -3242,16 +3239,16 @@ function hookLaunchModal() {
 // ---- Rendu personne (mutualisé entre équipage et candidat) ----
 function renderPersonCard(p, opts = {}) {
   // opts: { isCandidate: bool, fresh: bool }
-  const statsHTML = Object.entries(p.stats).map(([k,v]) => {
+  const statsHTML = Object.entries(p.stats || {}).map(([k,v]) => {
     const cls = v >= 8 ? 'high' : v <= 3 ? 'low' : '';
     return `<div class="stat ${cls}">
-      <span class="lbl">${STAT_LABELS[k].slice(0,3).toUpperCase()}</span>
+      <span class="lbl">${esc(String(STAT_LABELS[k] ?? k).slice(0,3).toUpperCase())}</span>
       <span class="v">${v}</span>
     </div>`;
   }).join('');
 
   const skillsHTML = SKILL_LIST.map(s => {
-    const v = p.skills[s] || 0;
+    const v = p.skills?.[s] || 0;
     const cls = v === 0 ? 'zero' : v >= 3 ? 'notable' : '';
     return `<div class="skill ${cls}">
       <span class="lbl">${SKILL_LABELS[s].slice(0,3)}</span>
@@ -3259,7 +3256,7 @@ function renderPersonCard(p, opts = {}) {
     </div>`;
   }).join('');
 
-  const traitsHTML = p.traits.map(tid => {
+  const traitsHTML = (p.traits || []).map(tid => {
     const t = TRAITS[tid];
     if (!t) return '';
     return `<span class="trait-chip ${t.kind}" title="${t.desc.replace(/"/g,'&quot;')}">${t.nom}</span>`;
@@ -3347,7 +3344,7 @@ function renderPersonCard(p, opts = {}) {
       <div class="pname">${p.name}</div>
       <div class="pmeta">${displayAge} ans</div>
     </div>
-    <div class="origin">${p.origin.label}<small>${p.origin.notes}</small></div>
+    <div class="origin">${esc(p.origin?.label ?? '')}<small>${esc(p.origin?.notes ?? '')}</small></div>
     <div class="stats-row">${statsHTML}</div>
     <div class="skills-row">${skillsHTML}</div>
     ${traitsHTML ? `<div class="traits">${traitsHTML}</div>` : ''}
@@ -3373,7 +3370,7 @@ function renderCrewSummary() {
   const cap = crewUsage();
   const cls = (cap.total > 0 && cap.used >= cap.total) ? 'warn' : '';
   const candCount = S.candidates.length;
-  host.innerHTML = `
+  setHTML(host, `
     <div>
       <div class="lbl">Équipage</div>
       <div class="v ${cls}">${cap.used} / ${cap.total || '—'}</div>
@@ -3382,7 +3379,7 @@ function renderCrewSummary() {
       <div class="lbl">Candidats en attente</div>
       <div class="v" style="color:${candCount > 0 ? 'var(--amber)' : 'var(--text-mute)'}">${candCount}</div>
     </div>
-  `;
+  `);
 }
 
 function renderCrew() {
@@ -3393,9 +3390,9 @@ function renderCrew() {
   const dead = S.crew.filter(m => m.statut === 'mort');
 
   if (cap.total === 0) {
-    sub.innerHTML = "Construis un <em>Habitat</em> pour pouvoir loger un équipage.";
+    setHTML(sub, "Construis un <em>Habitat</em> pour pouvoir loger un équipage.");
   } else {
-    sub.innerHTML = `${cap.used} / ${cap.total} place(s) occupée(s)`;
+    setHTML(sub, `${cap.used} / ${cap.total} place(s) occupée(s)`);
   }
 
   let html = '';
@@ -3421,12 +3418,11 @@ function renderCrew() {
     }).join('');
   }
 
-  list.innerHTML = html;
+  setHTML(list, html);
 }
 
 // ---- Rendu Formation ----
 function renderFormation() {
-  const subtab = $('#subtab-formation');
   const sub = $('#formationSub');
   const status = $('#formationStatus');
   const list = $('#formationList');
@@ -3434,12 +3430,11 @@ function renderFormation() {
 
   const center = S.modules.formation;
   const hasCenter = !!center;
-  if (subtab) subtab.disabled = !hasCenter;
 
   if (!hasCenter) {
-    sub.innerHTML = "Construis un <em>Centre de formation</em> pour entraîner ton équipage.";
-    status.innerHTML = '';
-    list.innerHTML = '<div class="empty">Aucun centre actif.</div>';
+    setHTML(sub, "Construis un <em>Centre de formation</em> pour entraîner ton équipage.");
+    setHTML(status, '');
+    setHTML(list, '<div class="empty">Aucun centre actif.</div>');
     btn.style.display = 'none';
     return;
   }
@@ -3449,7 +3444,7 @@ function renderFormation() {
   const inUse = S.training.length;
   const skillCap = lvl + 1;
 
-  sub.innerHTML = `Centre niv ${lvl} · plafond skill enseignable : <em>${skillCap}</em>`;
+  setHTML(sub, `Centre niv ${lvl} · plafond skill enseignable : <em>${skillCap}</em>`);
 
   // Encart staff de la formation
   const fb = formationBonuses();
@@ -3461,15 +3456,15 @@ function renderFormation() {
     : `<span class="none">Aucun bonus actif. Affecte un Pédagogue ou un Assistant pour améliorer.</span>`;
   const formStaffHTML = renderStaffPanel('formation', { title: 'Équipe pédagogique', bonusText: fBonusText });
 
-  status.innerHTML = formStaffHTML + `<div class="formation-status">
+  setHTML(status, formStaffHTML + `<div class="formation-status">
     Places : <b>${inUse}/${cap}</b> · Membres libres : <b>${S.crew.filter(m => m.statut === 'libre').length}</b>
-  </div>`;
+  </div>`);
 
-  // Sessions en cours
+  // Sessions en cours (« Interrompre » : VIEW_ACTIONS)
   if (S.training.length === 0) {
-    list.innerHTML = '<div class="empty">Aucune formation en cours.</div>';
+    setHTML(list, '<div class="empty">Aucune formation en cours.</div>');
   } else {
-    list.innerHTML = S.training.map(t => {
+    setHTML(list, S.training.map(t => {
       const member = S.crew.find(m => m.id === t.memberId);
       if (!member) return '';
       const pct = Math.min(100, (t.doneMin / t.totalMin) * 100);
@@ -3480,7 +3475,7 @@ function renderFormation() {
       return `<div class="training-card" data-id="${t.id}">
         <div class="tcard-head">
           <div class="tname">${member.name}</div>
-          <div class="tlevel">${TRAINING_PROGRAMS[t.skill].nom.toUpperCase()} · ${cur}→${t.targetLvl}</div>
+          <div class="tlevel">${esc(String(TRAINING_PROGRAMS[t.skill]?.nom ?? t.skill).toUpperCase())} · ${cur}→${t.targetLvl}</div>
         </div>
         <div class="tprog">
           <div class="bar" style="width:${pct}%"></div>
@@ -3492,24 +3487,21 @@ function renderFormation() {
         </div>
         <button class="cancel" data-cancel="${t.id}">Interrompre (rembours. 50%)</button>
       </div>`;
-    }).join('');
-
-    list.querySelectorAll('button[data-cancel]').forEach(b => {
-      b.addEventListener('click', () => cancelTraining(b.dataset.cancel));
-    });
+    }).join(''));
   }
 
-  // Bouton "Lancer une formation"
+  // Bouton "Lancer une formation" (mis à jour sur place : pas de perte de focus)
   const placesAvail = cap - inUse;
   const freeCrew = S.crew.filter(m => m.statut === 'libre').length;
   btn.style.display = 'block';
-  btn.disabled = placesAvail <= 0 || freeCrew === 0;
-  btn.textContent = placesAvail <= 0
+  const off = placesAvail <= 0 || freeCrew === 0;
+  if (btn.disabled !== off) btn.disabled = off;
+  const label = placesAvail <= 0
     ? `Toutes les places occupées (${cap}/${cap})`
     : freeCrew === 0
       ? 'Aucun membre libre'
       : 'Lancer une formation';
-  hookStaffLinks($('#subview-formation'));
+  if (btn.textContent !== label) btn.textContent = label;
 }
 
 // État éphémère du sélecteur de formation
@@ -3529,7 +3521,7 @@ function renderTrainingModalContent() {
   const freeCrew = S.crew.filter(c => c.statut === 'libre');
   const memberOptions = freeCrew.map(c => {
     const sel = c.id === _trainPick.memberId ? 'selected' : '';
-    const traits = c.traits.map(traitNom).join(', ') || '—';
+    const traits = (c.traits || []).map(traitNom).join(', ') || '—';
     return `<div class="tpicker-item ${sel}" data-pick-member="${c.id}">
       <div class="pi-name">${c.name}</div>
       <div class="pi-detail">Traits : ${traits}</div>
@@ -3555,7 +3547,7 @@ function renderTrainingModalContent() {
       detail = "Choisis d'abord un colon";
     }
     return `<div class="tpicker-item ${sel} ${dis}" data-pick-skill="${s}">
-      <div class="pi-name">${TRAINING_PROGRAMS[s].nom}</div>
+      <div class="pi-name">${nomOf(TRAINING_PROGRAMS, s)}</div>
       <div class="pi-detail">${detail}</div>
     </div>`;
   }).join('');
@@ -3633,7 +3625,6 @@ function hookTrainingModal() {
 
 // ---- Rendu Soins (Infirmerie) ----
 function renderSoins() {
-  const subtab = $('#subtab-soins');
   const sub = $('#soinsSub');
   const status = $('#soinsStatus');
   const alert = $('#soinsAlert');
@@ -3642,14 +3633,13 @@ function renderSoins() {
 
   const inf = S.modules.infirmerie;
   const hasInf = !!inf;
-  if (subtab) subtab.disabled = !hasInf;
 
   if (!hasInf) {
-    sub.innerHTML = "Construis une <em>Infirmerie</em> pour soigner ton équipage.";
-    status.innerHTML = '';
-    alert.innerHTML = '';
-    patients.innerHTML = '<div class="empty">Aucun établissement médical.</div>';
-    attention.innerHTML = '';
+    setHTML(sub, "Construis une <em>Infirmerie</em> pour soigner ton équipage.");
+    setHTML(status, '');
+    setHTML(alert, '');
+    setHTML(patients, '<div class="empty">Aucun établissement médical.</div>');
+    setHTML(attention, '');
     return;
   }
 
@@ -3660,7 +3650,7 @@ function renderSoins() {
   const docInfo = doctor
     ? `<b>${doctor.name}</b> (Méd ${doctor.skills.medecine})`
     : `<span style="color:var(--rust)">aucun médecin disponible</span>`;
-  sub.innerHTML = `Infirmerie niv ${lvl} · paliers diag/traitement jusqu'à ${lvl}`;
+  setHTML(sub, `Infirmerie niv ${lvl} · paliers diag/traitement jusqu'à ${lvl}`);
 
   // Encart staff de l'infirmerie + bonus actuels
   const ib = infirmaryBonuses();
@@ -3673,9 +3663,9 @@ function renderSoins() {
     : `<span class="none">Aucun bonus actif. Affecte du personnel pour améliorer les soins.</span>`;
   const staffHTML = renderStaffPanel('infirmerie', { title: 'Équipe médicale', bonusText });
 
-  status.innerHTML = staffHTML + `<div class="soins-status ${used >= beds ? 'full' : ''}">
+  setHTML(status, staffHTML + `<div class="soins-status ${used >= beds ? 'full' : ''}">
     Lits : <b>${used}/${beds}</b> · Médecin : ${docInfo}
-  </div>`;
+  </div>`);
 
   // Alerte triage si lits pleins ET au moins un membre nécessite admission
   const needAdmission = S.crew.filter(m => m.statut === 'libre' && (m.statuts || []).some(s => {
@@ -3683,20 +3673,20 @@ function renderSoins() {
     return def && (def.severity >= 3 || def.untreated?.become === 'mort');
   }));
   if (used >= beds && needAdmission.length > 0) {
-    alert.innerHTML = `<div class="soins-alert">
+    setHTML(alert, `<div class="soins-alert">
       <b>Triage requis.</b> ${needAdmission.length} colon(s) en attente de soins critiques.
       Sortez un patient ou agrandissez l'infirmerie.
-    </div>`;
+    </div>`);
   } else {
-    alert.innerHTML = '';
+    setHTML(alert, '');
   }
 
   // ---- Patients admis ----
   const admitted = S.crew.filter(m => m.statut === 'infirmerie');
   if (admitted.length === 0) {
-    patients.innerHTML = '<div class="empty">Aucun patient admis.</div>';
+    setHTML(patients, '<div class="empty">Aucun patient admis.</div>');
   } else {
-    patients.innerHTML = admitted.map(m => renderPatientCard(m, true)).join('');
+    setHTML(patients, admitted.map(m => renderPatientCard(m, true)).join(''));
   }
 
   // ---- Membres nécessitant attention (statuts non admis) ----
@@ -3706,24 +3696,11 @@ function renderSoins() {
     ((m.statuts || []).length > 0 || (m.sequels || []).length > 0)
   );
   if (needAttention.length === 0) {
-    attention.innerHTML = '<div class="empty">Personne ne requiert de soin actif.</div>';
+    setHTML(attention, '<div class="empty">Personne ne requiert de soin actif.</div>');
   } else {
-    attention.innerHTML = needAttention.map(m => renderPatientCard(m, false)).join('');
+    setHTML(attention, needAttention.map(m => renderPatientCard(m, false)).join(''));
   }
-
-  // Hook tous les boutons d'action du sous-panneau Soins
-  $('#subview-soins').querySelectorAll('button[data-act]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const act = btn.dataset.act;
-      const mid = btn.dataset.mid;
-      const sIdx = btn.dataset.s !== undefined ? parseInt(btn.dataset.s, 10) : null;
-      if (act === 'admit')          admitToInfirmary(mid);
-      else if (act === 'discharge') dischargeMember(mid);
-      else if (act === 'diagnose')  startDiagnostic(mid, sIdx);
-      else if (act === 'treat')     startTreatment(mid, sIdx);
-    });
-  });
-  hookStaffLinks($('#subview-soins'));
+  // Boutons admettre / sortir / diagnostiquer / traiter et « Gérer → » : VIEW_ACTIONS
 }
 
 function renderPatientCard(member, admitted) {
@@ -3731,18 +3708,20 @@ function renderPatientCard(member, admitted) {
   const beds = infirmaryBeds();
   const used = bedsInUse();
   const canAdmit = used < beds;
+  const statuts = Array.isArray(member.statuts) ? member.statuts : [];
+  const sequels = Array.isArray(member.sequels) ? member.sequels : [];
 
   let statutsHTML = '';
-  if (member.statuts.length === 0) {
+  if (statuts.length === 0) {
     statutsHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text-mute);padding:6px 0;">Aucun statut actif.</div>';
   } else {
-    statutsHTML = member.statuts.map((s, idx) => renderStatusRow(member, s, idx, admitted)).join('');
+    statutsHTML = statuts.map((s, idx) => renderStatusRow(member, s, idx, admitted)).join('');
   }
 
   let sequelsHTML = '';
-  if (member.sequels.length > 0) {
+  if (sequels.length > 0) {
     sequelsHTML = `<div class="sequels-list">${
-      member.sequels.map(sq => {
+      sequels.map(sq => {
         const def = SEQUELS[sq.key];
         return def ? `<span class="sequel-chip" title="${def.desc.replace(/"/g,'&quot;')}">${def.nom}</span>` : '';
       }).join('')
@@ -3754,13 +3733,13 @@ function renderPatientCard(member, admitted) {
     patientActions = `<div class="patient-actions">
       <button class="discharge" data-act="discharge" data-mid="${member.id}">Faire sortir</button>
     </div>`;
-  } else if (member.statuts.length > 0 && member.statut === 'libre') {
+  } else if (statuts.length > 0 && member.statut === 'libre') {
     patientActions = `<div class="patient-actions">
       <button class="admit" data-act="admit" data-mid="${member.id}" ${canAdmit ? '' : 'disabled'}>
         ${canAdmit ? "Admettre à l'infirmerie" : 'Lits pleins'}
       </button>
     </div>`;
-  } else if (member.statut !== 'libre' && member.statuts.length > 0) {
+  } else if (member.statut !== 'libre' && statuts.length > 0) {
     patientActions = `<div class="patient-actions">
       <button disabled>Indisponible (${member.statut})</button>
     </div>`;
@@ -3778,7 +3757,8 @@ function renderPatientCard(member, admitted) {
 }
 
 function renderStatusRow(member, status, idx, admitted) {
-  const def = STATUTS[status.key];
+  // Statut inconnu du catalogue (sauvegarde d'une autre version) : affichage neutre
+  const def = STATUTS[status.key] || { nom: String(status.key ?? '?'), short: '', kind: 'inconnu', detect: 'auto' };
   const elapsed = S.meta.gameMin - status.since;
   const treatment = S.treatments.find(t => t.memberId === member.id && t.statusIdx === idx);
 
@@ -3863,21 +3843,11 @@ function renderStatusRow(member, status, idx, admitted) {
 function renderRecruit() {
   const list = $('#candidateList');
   const sub = $('#recruitSub');
-  const recBadge = $('#recruitBadge');
-  const crewBadge = $('#crewBadge');
   const hasBalise = !!(S.modules.balise_recrutement);
 
-  // Badge sur le sous-onglet recrut. ET sur l'onglet principal Équipage
-  const n = S.candidates.length;
-  for (const b of [recBadge, crewBadge]) {
-    if (!b) continue;
-    if (n > 0) { b.textContent = n; b.classList.add('show'); }
-    else b.classList.remove('show');
-  }
-
   if (!hasBalise) {
-    sub.innerHTML = "Construis une <em>Balise de recrutement</em> pour recevoir des candidats.";
-    list.innerHTML = '<div class="empty">Silence radio.</div>';
+    setHTML(sub, "Construis une <em>Balise de recrutement</em> pour recevoir des candidats.");
+    setHTML(list, '<div class="empty">Silence radio.</div>');
     return;
   }
 
@@ -3885,49 +3855,266 @@ function renderRecruit() {
   const intervalH = Math.round(24/lvl);
   const cap = crewUsage();
   const nextIn = Math.max(0, S.nextRecruitMin - S.meta.gameMin);
-  sub.innerHTML = `Balise niv ${lvl} · ~1 candidat / ${intervalH}h jeu · prochain dans ${fmtMin(nextIn)} · habitat ${cap.used}/${cap.total}`;
+  setHTML(sub, `Balise niv ${lvl} · ~1 candidat / ${intervalH}h jeu · prochain dans ${fmtMin(nextIn)} · habitat ${cap.used}/${cap.total}`);
 
   if (S.candidates.length === 0) {
-    list.innerHTML = '<div class="empty">Aucun candidat pour le moment.</div>';
+    setHTML(list, '<div class="empty">Aucun candidat pour le moment.</div>');
     return;
   }
-  list.innerHTML = S.candidates.map((c, i) =>
+  // Boutons Engager / Écarter : VIEW_ACTIONS
+  setHTML(list, S.candidates.map((c, i) =>
     renderPersonCard(c, { isCandidate: true, fresh: i === S.candidates.length - 1 })
-  ).join('');
-
-  // Hook les boutons accepter/refuser
-  list.querySelectorAll('button[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.id;
-      if (btn.dataset.action === 'accept') acceptCandidate(id);
-      else refuseCandidate(id);
-    });
-  });
+  ).join(''));
 }
 
-// Onglets
-$$('nav.tabs button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    $$('nav.tabs button').forEach(b => b.classList.remove('active'));
-    $$('section.view').forEach(v => v.classList.remove('active'));
-    btn.classList.add('active');
-    $('#view-' + btn.dataset.tab).classList.add('active');
-  });
+// ============================================================
+//   NAVIGATION — onglets et sous-onglets
+// ============================================================
+// Clé d'un bouton de sous-onglet : data-subtab (équipage), data-subtab-galaxy,
+// data-subtab-mod (modules), data-subtab-stocks
+const subtabKey = btn => btn.dataset.subtab || btn.dataset.subtabGalaxy || btn.dataset.subtabMod || btn.dataset.subtabStocks;
+function subtabButton(tab, key) {
+  return Array.from(document.querySelectorAll(`#view-${tab} nav.subtabs button`)).find(b => subtabKey(b) === key) || null;
+}
+
+// Affiche un onglet principal et rend sa vue
+export function selectTab(tab, { focus = false } = {}) {
+  const btn = document.querySelector(`nav.tabs button[data-tab="${tab}"]`);
+  if (!btn) return;
+  for (const b of $$('nav.tabs button')) {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+  }
+  for (const v of $$('section.view')) v.classList.toggle('active', v.id === 'view-' + tab);
+  _nav.tab = tab;
+  saveNav();
+  if (focus) btn.focus();
+  renderActiveView();
+}
+
+// Affiche un sous-onglet (même si son onglet n'est pas visible) et le rend si visible
+export function selectSubtab(tab, key, { focus = false } = {}) {
+  const btn = subtabButton(tab, key);
+  if (!btn || btn.disabled) return;
+  const view = $('#view-' + tab);
+  for (const b of view.querySelectorAll('nav.subtabs button')) {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+  }
+  for (const v of view.querySelectorAll('.subview')) v.classList.toggle('active', v.id === 'subview-' + key);
+  _nav.sub[tab] = key;
+  saveNav();
+  if (focus) btn.focus();
+  if (_nav.tab === tab) renderActiveView();
+}
+
+function saveNav() {
+  try { localStorage.setItem(NAV_KEY, JSON.stringify(_nav)); } catch { /* stockage indisponible : sans gravité */ }
+}
+// Restaure l'onglet et les sous-onglets mémorisés (appelée au premier render,
+// une fois les sous-onglets activés/désactivés selon la sauvegarde)
+function restoreNav() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(NAV_KEY) || 'null'); } catch { saved = null; }
+  if (!saved || typeof saved !== 'object') return;
+  for (const tab of Object.keys(DEFAULT_SUB)) {
+    const key = saved.sub?.[tab];
+    if (typeof key === 'string' && key !== _nav.sub[tab] && subtabButton(tab, key) && !subtabButton(tab, key).disabled) {
+      selectSubtab(tab, key);
+    }
+  }
+  if (typeof saved.tab === 'string' && VIEWS[saved.tab] && saved.tab !== _nav.tab) selectTab(saved.tab);
+}
+
+// Navigation clavier dans une liste d'onglets : flèches, Début, Fin
+function tablistKeydown(e, buttons, activate) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+  if (!keys.includes(e.key)) return;
+  const enabled = buttons.filter(b => !b.disabled);
+  const i = enabled.indexOf(document.activeElement);
+  if (i < 0) return;
+  e.preventDefault();
+  let j = i;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + enabled.length) % enabled.length;
+  else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % enabled.length;
+  else if (e.key === 'Home') j = 0;
+  else j = enabled.length - 1;
+  activate(enabled[j]);
+}
+
+// Branchement (le DOM est déjà analysé : les modules ES sont différés)
+{
+  const tabs = $$('nav.tabs button');
+  for (const b of tabs) b.addEventListener('click', () => selectTab(b.dataset.tab));
+  $('nav.tabs')?.addEventListener('keydown', e => tablistKeydown(e, tabs, b => selectTab(b.dataset.tab, { focus: true })));
+  for (const nav of $$('nav.subtabs')) {
+    const tab = nav.closest('section.view').id.replace('view-', '');
+    const btns = Array.from(nav.querySelectorAll('button'));
+    for (const b of btns) b.addEventListener('click', () => selectSubtab(tab, subtabKey(b)));
+    nav.addEventListener('keydown', e => tablistKeydown(e, btns, b => selectSubtab(tab, subtabKey(b), { focus: true })));
+  }
+  // État initial (onglet actif défini dans index.html)
+  _nav.tab = $('nav.tabs button.active')?.dataset.tab || 'overview';
+  for (const tab of Object.keys(DEFAULT_SUB)) {
+    const active = document.querySelector(`#view-${tab} nav.subtabs button.active`);
+    if (active) _nav.sub[tab] = subtabKey(active);
+  }
+}
+
+// ============================================================
+//   ACTIONS DES VUES — délégation d'événements
+// ============================================================
+// Un seul écouteur sur <main> route les clics selon le premier sélecteur
+// correspondant (du plus spécifique au plus général).
+const VIEW_ACTIONS = [
+  // Modules
+  ['button.build[data-id]', el => startBuild(el.dataset.id)],
+  ['#openSynthesis', () => openSynthesisModal()],
+  // Affectations
+  ['#autoAssignToggle', () => {
+    S.autoAssign = !S.autoAssign;
+    if (S.autoAssign) autoAssignAllFreeMembers();
+    render();
+  }],
+  ['#optimizeAssignBtn', () => { optimizeAssignments(); render(); }],
+  ['#clearAllAssignBtn', () => {
+    if (!confirm("Libérer tous les colons de leurs postes ?")) return;
+    clearAllAssignments();
+    render();
+  }],
+  ['.slot-row[data-mod]', el => openAssignPicker(el.dataset.mod, parseInt(el.dataset.slot, 10))],
+  // Lien « Gérer → » des encarts d'équipe
+  ['button[data-goto-assign]', el => gotoAssignments(el.dataset.gotoAssign)],
+  // Équipage
+  ['#candidateList button[data-action]', el => {
+    if (el.dataset.action === 'accept') acceptCandidate(el.dataset.id);
+    else refuseCandidate(el.dataset.id);
+  }],
+  ['#formationList button[data-cancel]', el => cancelTraining(el.dataset.cancel)],
+  ['#subview-soins button[data-act]', el => {
+    const act = el.dataset.act;
+    const mid = el.dataset.mid;
+    const sIdx = el.dataset.s !== undefined ? parseInt(el.dataset.s, 10) : null;
+    if (act === 'admit')          admitToInfirmary(mid);
+    else if (act === 'discharge') dischargeMember(mid);
+    else if (act === 'diagnose')  startDiagnostic(mid, sIdx);
+    else if (act === 'treat')     startTreatment(mid, sIdx);
+  }],
+  // Galaxie (le bouton de lancement porte aussi data-body-id : il passe en premier)
+  ['[data-galaxy-action]', el => {
+    const act = el.dataset.galaxyAction;
+    const ui = galaxyUI();
+    if (act === 'list') {
+      ui.galaxyView = 'list';
+      ui.currentSystemId = null;
+      ui.currentBodyId = null;
+      renderGalaxyAndFocus();
+    } else if (act === 'system') {
+      ui.galaxyView = 'system';
+      ui.currentBodyId = null;
+      renderGalaxyAndFocus();
+    } else if (act === 'launch') {
+      showLaunchModal(el.dataset.bodyId);
+    }
+  }],
+  ['[data-system-id]', el => {
+    const ui = galaxyUI();
+    ui.galaxyView = 'system';
+    ui.currentSystemId = el.dataset.systemId;
+    renderGalaxyAndFocus();
+  }],
+  ['[data-body-id]', el => {
+    const ui = galaxyUI();
+    ui.galaxyView = 'body';
+    ui.currentBodyId = el.dataset.bodyId;
+    renderGalaxyAndFocus();
+  }],
+  ['button[data-build-vessel]', el => startVesselBuild(el.dataset.buildVessel)],
+  ['button[data-resume-exp]', el => openSceneOverlay(el.dataset.resumeExp)],
+  // Diplomatie
+  ['button[data-trade]', el => { toggleFactionTrade(el.dataset.trade); render(); }],
+  ['button[data-diplo-launch]', el => openDiploLaunchModal(el.dataset.diploLaunch)],
+  ['button[data-gift-faction]', el => offerGift(el.dataset.giftFaction, parseInt(el.dataset.giftIdx, 10))],
+  // Recherche et atelier
+  ['button[data-cancel-research]', el => {
+    if (confirm("Annuler cette recherche ? 50% des ressources seront récupérées.")) {
+      cancelResearch(el.dataset.cancelResearch);
+    }
+  }],
+  ['.tech-card.available[data-tech]', el => openResearchModal(el.dataset.tech)],
+  ['button[data-cancel-fab]', el => {
+    if (confirm("Annuler cette fabrication ? 50% des ressources seront récupérées.")) {
+      cancelFabrication(el.dataset.cancelFab);
+    }
+  }],
+  ['.fab-card.available[data-fab]', el => openFabModal(el.dataset.fab)],
+];
+
+$('main')?.addEventListener('click', e => {
+  const root = e.currentTarget;
+  for (const [sel, fn] of VIEW_ACTIONS) {
+    const el = e.target.closest?.(sel);
+    if (!el || !root.contains(el)) continue;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return;
+    fn(el, e);
+    return;
+  }
 });
 
-// Sous-onglets (à l'intérieur de l'onglet Équipage)
-$$('nav.subtabs button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    if (btn.disabled) return;
-    const parent = btn.closest('section.view');
-    parent.querySelectorAll('nav.subtabs button').forEach(b => b.classList.remove('active'));
-    parent.querySelectorAll('.subview').forEach(v => v.classList.remove('active'));
-    btn.classList.add('active');
-    // Compatible avec data-subtab (équipage), data-subtab-galaxy (galaxie), data-subtab-mod (modules), data-subtab-stocks (stocks)
-    const key = btn.dataset.subtab || btn.dataset.subtabGalaxy || btn.dataset.subtabMod || btn.dataset.subtabStocks;
-    parent.querySelector('#subview-' + key).classList.add('active');
-  });
+// Activation clavier des éléments non-<button> marqués role="button"
+// (cartes et lignes cliquables) : Entrée ou Espace = clic.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target;
+  if (!(el instanceof HTMLElement) || el.isContentEditable) return;
+  if (/^(BUTTON|A|INPUT|TEXTAREA|SELECT|SUMMARY)$/.test(el.tagName)) return;
+  if (!/^(button|switch|checkbox)$/.test(el.getAttribute('role') || '')) return;
+  e.preventDefault();
+  if (el.getAttribute('aria-disabled') === 'true') return;
+  el.click();
 });
+
+// Barre de ressources : un clic mène à la vue d'ensemble (stocks et taux détaillés)
+$('#resBar')?.addEventListener('click', () => selectTab('overview'));
+// Bandeau d'alertes : ouvre le détail
+$('#alertBar')?.addEventListener('click', () => { if (S) showAlertsModal(collectAlerts()); });
+
+function galaxyUI() {
+  if (!S.ui || typeof S.ui !== 'object') S.ui = {};
+  return S.ui;
+}
+// Change de niveau dans la cartographie (liste → système → corps) : rend,
+// remonte en haut du contenu et garde le focus clavier dans la vue.
+function renderGalaxyAndFocus() {
+  const host = $('#galaxyContent');
+  const hadFocus = host?.contains(document.activeElement);
+  guard('renderGalaxy', renderGalaxy, '#subview-cartographie');
+  if (!host) return;
+  if (host.getBoundingClientRect().top < 0) host.scrollIntoView({ block: 'start' });
+  if (hadFocus && !host.contains(document.activeElement)) {
+    host.querySelector('.back-btn, [data-system-id], [data-body-id]')?.focus({ preventScroll: true });
+  }
+}
+
+// « Gérer → » : va sur Modules › Affectations et fait défiler jusqu'au bâtiment
+function gotoAssignments(modKey) {
+  selectTab('modules');
+  selectSubtab('modules', 'assignments');
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`#assignList .module-assign-card[data-mod="${CSS.escape(modKey || '')}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    // Surbrillance brève (Web Animations : insensible aux mises à jour du rendu)
+    card.animate?.([{ borderColor: 'var(--amber)' }, { borderColor: 'var(--border)' }], { duration: 1500, easing: 'ease-out' });
+  });
+}
+function prefersReducedMotion() {
+  return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
 
 // ============================================================
 // 9. PERSIST — save / load / export / import
