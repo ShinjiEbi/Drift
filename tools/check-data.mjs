@@ -166,6 +166,9 @@ function checkReq(req, ctx) {
 }
 function checkOutcome(o, ctx, inChron) {
   if (!o || o === 'next' || typeof o !== 'object') return;
+  // Les journaux d'expédition sont assainis au chargement (< > " neutralisés) :
+  // un guillemet droit y deviendrait « ” » après rechargement.
+  if (typeof o.log === 'string' && /[<>"]/.test(o.log)) err(ctx, 'log contient < > ou " (utiliser « » pour citer)');
   if (o.loot) checkRes(o.loot, `${ctx}.loot`);
   if (o.item !== undefined && (typeof o.item !== 'string' || !ALL_ITEMS.has(o.item))) err(ctx, `item inconnu « ${o.item} »`);
   if (o.status !== undefined && !STATUTS.has(o.status)) err(ctx, `statut inconnu « ${o.status} »`);

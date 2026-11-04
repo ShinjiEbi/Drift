@@ -98,7 +98,13 @@ export function render() {
   _renderPending = false;
   guard('renderHeader', renderHeader);
   guard('renderBadges', renderBadges);
-  if (!_navRestored) { _navRestored = true; restoreNav(); }
+  if (!_navRestored) {
+    _navRestored = true;
+    restoreNav();
+    // Le bouton des notifications a pu être initialisé avant le chargement de
+    // la partie (S encore nul) : on le remet d'aplomb au premier rendu.
+    guard('refreshPushButton', refreshPushButton);
+  }
   renderActiveView();
 }
 
@@ -971,25 +977,25 @@ function renderSlotRow(modKey, slotIdx, job) {
 }
 
 // Réoptimise toutes les affectations : libère tout puis ré-applique l'auto-affectation
-function optimizeAssignments() {
-  // Libère tous les colons en travail
-  for (const k in S.assignments) {
-    const id = S.assignments[k];
-    const m = S.crew.find(c => c.id === id);
+// Libère les postes des colons présents au travail. Les postes réservés aux
+// colons absents (expédition, mission, soins, formation) sont conservés.
+function releaseWorkingAssignments() {
+  for (const k of Object.keys(S.assignments)) {
+    const m = S.crew.find(c => c.id === S.assignments[k]);
+    if (m && m.statut !== 'mort' && m.statut !== 'travail') continue;
     if (m && m.statut === 'travail') m.statut = 'libre';
+    delete S.assignments[k];
   }
-  S.assignments = {};
+}
+
+function optimizeAssignments() {
+  releaseWorkingAssignments();
   autoAssignAllFreeMembers();
   toast("Affectations réoptimisées");
 }
 
 function clearAllAssignments() {
-  for (const k in S.assignments) {
-    const id = S.assignments[k];
-    const m = S.crew.find(c => c.id === id);
-    if (m && m.statut === 'travail') m.statut = 'libre';
-  }
-  S.assignments = {};
+  releaseWorkingAssignments();
   toast("Tous les postes libérés");
 }
 

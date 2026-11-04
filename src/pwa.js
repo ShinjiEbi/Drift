@@ -119,10 +119,9 @@ function showUpdateBanner(text = 'Nouvelle version disponible') {
 async function saveGame() {
   try {
     const st = await import('./state.js');
-    if (st.S && st.S.meta) {
-      st.S.meta.lastTickRealMs = Date.now();
-      st.save();
-    }
+    // Ne pas toucher à lastTickRealMs : avec l'accumulateur de temps, il marque
+    // le temps déjà simulé ; le temps restant sera rattrapé au redémarrage.
+    if (st.S && st.S.meta) st.save();
   } catch (e) {
     console.warn('[PWA] Sauvegarde avant mise à jour impossible :', e);
   }

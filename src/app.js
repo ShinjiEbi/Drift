@@ -2125,6 +2125,12 @@ function memberDies(member, cause = 'cause inconnue') {
 // Où se trouve physiquement un colon (pour la contagion) :
 // 'base', 'exp:<id>' pour l'équipage d'une même expédition, null s'il est isolé
 // (mission diplomatique) ou mort.
+// Un médecin qui assure un traitement en cours ne peut pas quitter la base :
+// le soin ne continue pas sans lui.
+export function isTreatingDoctor(memberId) {
+  return (S.treatments || []).some(t => t.doctorId === memberId);
+}
+
 function memberLocation(member) {
   switch (member.statut) {
     case 'libre': case 'travail': case 'infirmerie': case 'formation':
@@ -2960,8 +2966,9 @@ function pickIncidentVictim(inc) {
   if (staff.length) return rPick(staff);
   const free = aliveCrew().filter(m => m.statut === 'libre');
   if (free.length) return rPick(free);
-  const alive = aliveCrew();
-  return alive.length ? rPick(alive) : null;
+  // Dernier repli : n'importe quel colon présent à la base (jamais un absent)
+  const atBase = aliveCrew().filter(m => memberLocation(m) === 'base');
+  return atBase.length ? rPick(atBase) : null;
 }
 
 // Déclenche un incident : en direct, il rejoint la file des décisions du
@@ -3204,10 +3211,11 @@ function autoResolveDecision(dec) {
   }
 }
 
-// Victime d'un incident en attente, revalidée : morte entre-temps → un autre colon
+// Victime d'un incident en attente, revalidée : morte ou partie de la base
+// entre-temps (expédition, mission) → un autre colon présent
 function resolveIncidentVictim(dec) {
   const v = S.crew.find(m => m.id === dec.victimId);
-  if (v && v.statut !== 'mort') return v;
+  if (v && v.statut !== 'mort' && memberLocation(v) === 'base') return v;
   const inc = INCIDENTS[dec.refId];
   const nv = inc ? pickIncidentVictim(inc) : null;
   if (nv) dec.victimId = nv.id;
@@ -3226,7 +3234,9 @@ function resolveEventActors(dec) {
   const valid = role => {
     if (!ids[role]) return true;
     const m = get(role);
-    return !!m && (wasDead[role] || m.statut !== 'mort');
+    // Un acteur mort à la création reste valable (deuil…) ; sinon il doit
+    // être vivant et présent à la base au moment de la décision.
+    return !!m && (wasDead[role] || (m.statut !== 'mort' && memberLocation(m) === 'base'));
   };
   if (valid('primary') && valid('secondary')) return { primary: get('primary'), secondary: get('secondary') };
   try {
@@ -3370,8 +3380,7 @@ function hookIncidentModal(decId) {
       const dec = (S.pendingDecisions || []).find(d => d.id === decId);
       if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
       const inc = INCIDENTS[dec.refId];
-      const v = S.crew.find(c => c.id === dec.victimId);
-      const victim = v && v.statut !== 'mort' ? v : null;
+      const victim = resolveIncidentVictim(dec);
       const choice = inc.choices[parseInt(btn.dataset.incidentChoice, 10)];
       const ok = applyIncidentChoice(inc, choice, victim);
       if (ok === false) return;
@@ -4453,6 +4462,10 @@ export function launchDiplomaticMission(factionId, memberId) {
     toast(`${m.name} n'est pas disponible.`);
     return;
   }
+  if (isTreatingDoctor(m.id)) {
+    toast(`${m.name} assure un traitement en cours.`);
+    return;
+  }
   if ((S.diplomaticMissions || []).some(d => d.factionId === factionId)) {
     toast(`Une mission est déjà en cours auprès de ${f.name}.`);
     return;
@@ -4736,6 +4749,7 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
     const m = S.crew.find(c => c.id === id);
     if (!m) return { ok:false, why:'Membre introuvable' };
     if (m.statut !== 'libre' && m.statut !== 'travail') return { ok:false, why:`${m.name} : ${m.statut}` };
+    if (isTreatingDoctor(m.id)) return { ok:false, why:`${m.name} assure un traitement en cours` };
   }
 
   // Calcul coûts (avec bonus Hangar et tech)

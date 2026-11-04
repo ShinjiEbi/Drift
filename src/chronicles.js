@@ -1815,7 +1815,7 @@ export const CHRONICLE_SCENES = [
       {
         label: "Tenter de contraindre l'anneau (cage de Faraday improvisée)",
         outcome: {
-          log: "Vous tendez des câbles tout autour. L'anneau ne réagit pas. Mais au matin, votre installation a disparu. Pas démontée — disparue. Comme le projectile. Élie classe l'objet comme un \"verrou actif\".",
+          log: "Vous tendez des câbles tout autour. L'anneau ne réagit pas. Mais au matin, votre installation a disparu. Pas démontée — disparue. Comme le projectile. Élie classe l'objet comme un « verrou actif ».",
           setFlags: { observations: '+1', anneau_classifie: 'verrou', gardien_eveille: true },
           next: 'chron_anneau_ep1_motif'
         }
@@ -1839,7 +1839,7 @@ export const CHRONICLE_SCENES = [
       {
         label: "Partir avec les données. Revenir mieux préparés.",
         outcome: {
-          log: "Vous repartez. Élie passe les jours suivants à calculer. Elle te dit que ce qu'elle a vu \"change tout\".",
+          log: "Vous repartez. Élie passe les jours suivants à calculer. Elle te dit que ce qu'elle a vu « change tout ».",
           setFlags: { observations: '+1' },
           endChronicleEpisode: true
         }

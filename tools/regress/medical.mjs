@@ -227,6 +227,22 @@ try {
     try { app.progressMemberStatuts(m); } finally { Math.random = orig; }
     return { noParasite: !m.statuts.some(s => s.key === 'parasite'), pathogen: m.statuts.some(s => s.key === 'pathogene_alien') };
   });
+
+  // Un médecin qui assure un traitement ne quitte pas la base (expédition, mission)
+  await scenario('Médecin en plein traitement : départ en expédition refusé', () => {
+    const { app, fresh, mk } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 3 };
+    mk({ skills: { medecine: 3 } });
+    const pat = mk({ statut: 'infirmerie' });
+    pat.statuts = [{ key: 'infection', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    app.startTreatment(pat.id, 0);
+    const docId = S.treatments[0]?.doctorId;
+    const sys = S.galaxy.systems[0]; sys.scanned = true;
+    S.fleet.push({ id: 'v_med', type: 'vedette', name: 'Test', available: true });
+    const r = app.canLaunchExpedition({ vesselId: 'v_med', bodyId: sys.bodies[0].id, crewIds: [docId] });
+    return { treating: !!docId && app.isTreatingDoctor(docId), blocked: r.ok === false && /traitement/.test(r.why || '') ? true : r };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {
