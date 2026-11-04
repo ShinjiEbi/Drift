@@ -2774,7 +2774,10 @@ nav.subtabs button:disabled {
   cursor: pointer;
   transition: all 0.18s;
 }
-.dt-btn:hover { border-color: var(--amber); color: var(--amber); }
+.dt-btn:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+.dt-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Condition manquante (technologie, réputation) sous le bouton ou dans la section */
+.dt-why { margin-top: 6px; font-size: 12px; font-style: italic; color: var(--text-dim); }
 .dt-btn.active { background: var(--amber); color: var(--bg-deep); border-color: var(--amber); }
 .dt-eta { font-size: 11px; color: var(--text-mute); letter-spacing: 0.04em; }
 

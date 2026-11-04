@@ -55,7 +55,8 @@ import {
   startDiagnostic, startTreatment,
   memberCombatStats, combatAllyAction, combatEndTurn,
   ancienneteBonus,
-  pumpDecisions, canDiagnose, activeChronicle, currentChronicleEpisode
+  pumpDecisions, canDiagnose, activeChronicle, currentChronicleEpisode,
+  tradeRequirement, allianceRequirement
 } from './app.js';
 
 
@@ -1208,6 +1209,9 @@ function renderFactionCard(f) {
 
   // ── Commerce ──
   let tradeHTML = '';
+  const tradeReq = tradeRequirement(f);
+  // Suspendre une route est toujours possible ; l'ouvrir exige réputation et technologie
+  const tradeBlocked = !f.tradeActive && !tradeReq.ok;
   if (f.reputation >= 40) {
     const offerStr = Object.entries(ft.tradeOffer).map(([k,v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
     const askStr   = Object.entries(ft.tradeAsk).map(([k,v])   => `-${v} ${RES_LABELS[k]}`).join(', ');
@@ -1217,9 +1221,10 @@ function renderFactionCard(f) {
       <div class="dc-section-label">Commerce</div>
       <div class="dt-rates">${offerStr} contre ${askStr} · toutes les 15j</div>
       <div class="dt-row">
-        <button class="dt-btn ${f.tradeActive ? 'active' : ''}" data-trade="${esc(f.id)}">${f.tradeActive ? '◼ Désactiver' : '◻ Activer'} la route</button>
+        <button class="dt-btn ${f.tradeActive ? 'active' : ''}" data-trade="${esc(f.id)}" ${tradeBlocked ? 'disabled' : ''}>${f.tradeActive ? '◼ Désactiver' : '◻ Activer'} la route</button>
         ${f.tradeActive && nextCaravan !== null ? `<span class="dt-eta">Prochaine dans ${fmtMin(nextCaravan)}</span>` : ''}
       </div>
+      ${tradeBlocked ? `<div class="dt-why">${esc(tradeReq.why)}</div>` : ''}
     </div>`;
   } else {
     tradeHTML = `<div class="dc-section dc-section-locked">Commerce disponible à réputation 40+</div>`;
@@ -1230,7 +1235,15 @@ function renderFactionCard(f) {
 
   // ── Alliance ──
   let allianceHTML = '';
-  if (f.reputation >= 75 && ft.allianceGift) {
+  const allyReq = allianceRequirement(f);
+  if (f.reputation >= 75 && ft.allianceGift && !allyReq.ok) {
+    const ag = ft.allianceGift;
+    allianceHTML = `<div class="dc-section dc-section-locked">
+      <div class="dc-section-label">★ Alliance</div>
+      <div>Dons automatiques (+${ag.amount} ${RES_LABELS[ag.resource] || ''} / ${fmtMin(ag.interval)})</div>
+      <div class="dt-why">${esc(allyReq.why)}</div>
+    </div>`;
+  } else if (f.reputation >= 75 && ft.allianceGift) {
     const ag = ft.allianceGift;
     const nextAg = f.lastAllianceGift ? Math.max(0, ag.interval - (S.meta.gameMin - f.lastAllianceGift)) : 0;
     allianceHTML = `<div class="dc-section dc-alliance">
@@ -1272,7 +1285,7 @@ function renderFactionCard(f) {
   if (onMission) {
     missionHTML = `<div class="dc-section"><div class="diplo-mission-info">Mission en cours...</div></div>`;
   } else {
-    const candidates = aliveCrew().filter(m => m.statut === 'libre' && (
+    const candidates = aliveCrew().filter(m => (m.statut === 'libre' || m.statut === 'travail') && (
       (m.skills[reqSkill] || 0) >= reqMin ||
       (reqAlt && (m.skills[reqAlt.skill] || 0) >= reqAlt.min)
     ));
@@ -1335,7 +1348,7 @@ function openDiploLaunchModal(factionId) {
   const reqMin   = ft.missionReqMin   || 3;
   const reqAlt   = ft.missionReqAlt;
   const cost     = ft.missionCost ?? 25;
-  const candidates = aliveCrew().filter(m => m.statut === 'libre' && (
+  const candidates = aliveCrew().filter(m => (m.statut === 'libre' || m.statut === 'travail') && (
     (m.skills[reqSkill] || 0) >= reqMin ||
     (reqAlt && (m.skills[reqAlt.skill] || 0) >= reqAlt.min)
   ));
@@ -2815,7 +2828,7 @@ function hookCombatOverlay(expId) {
   inner.querySelector('[data-cbt-retreat]')?.addEventListener('click', () => {
     const exp = S.expeditions.find(e => e.id === expId);
     if (!exp?.combat) return;
-    if (confirm('Confirmer la retraite ? L\'équipe rentre immédiatement avec des pertes possibles.')) {
+    if (confirm('Confirmer la retraite ? L\'équipe rentre immédiatement avec des pertes possibles. Chaque ennemi encore actif porte une attaque d\'opportunité.')) {
       combatAllyAction(expId, exp.combat.selectedAllyId || exp.combat.allies[0]?.id, 'retreat', -1);
       closeSceneOverlay();
     }
