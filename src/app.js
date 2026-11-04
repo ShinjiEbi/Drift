@@ -578,9 +578,12 @@ export function addBlueprintToInventory(bpId, source) {
 // origins: 'humain' | 'alien_a' | 'alien_b' | 'fusion'
 // rng: PRNG seedé
 function rollBlueprint(originPool, rng = Math.random) {
+  const pool = [].concat(originPool || []);
+  // Les schémas légendaires et les récompenses d'arc ne tombent jamais au hasard
+  const arcRewards = new Set(Object.values(ARCS).filter(a => a.reward?.kind === 'blueprint').map(a => a.reward.value));
   const candidates = Object.keys(BLUEPRINTS).filter(id => {
     const bp = BLUEPRINTS[id];
-    return originPool.includes(bp.origin);
+    return pool.includes(bp.origin) && !bp.legendary && !arcRewards.has(id);
   });
   if (candidates.length === 0) return null;
   // Pondération par rareté inverse : commun = poids 4, peu commun = 3, rare = 2, très rare = 1
@@ -1103,7 +1106,10 @@ export function inventoryCount() {
 // Vérifie si une planète remplit les conditions d'une chronique
 function bodyMatchesChronicleReqs(body, requires) {
   if (!requires) return true;
-  if (requires.ruines && body.ruines !== requires.ruines) return false;
+  if (requires.ruines) {
+    const allowed = Array.isArray(requires.ruines) ? requires.ruines : [requires.ruines];
+    if (!allowed.includes(body.ruines)) return false;
+  }
   if (requires.biome) {
     const allowed = Array.isArray(requires.biome) ? requires.biome : [requires.biome];
     if (!allowed.includes(body.biome)) return false;
@@ -1129,14 +1135,24 @@ function tryAssignChronicle(body) {
   if (body.chronicleChecked) return; // déjà vérifiée, pas la peine de rejouer la roulette
   body.chronicleChecked = true;
   
+  // Une chronique est une saga unique : on exclut celles déjà attribuées à un autre corps
+  const taken = new Set();
+  for (const sys of S.galaxy?.systems || []) {
+    for (const b of sys.bodies || []) if (b !== body && b.chronicle?.id) taken.add(b.chronicle.id);
+  }
   const candidates = [];
   for (const id in CHRONICLES) {
     const c = CHRONICLES[id];
-    if (bodyMatchesChronicleReqs(body, c.requires)) {
+    if (!taken.has(c.id) && bodyMatchesChronicleReqs(body, c.requires)) {
       candidates.push(c);
     }
   }
   if (candidates.length === 0) return;
+  // Ordre aléatoire : sinon la première chronique compatible est toujours favorisée
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
   
   // Tirage avec la spawnChance de chaque chronique
   for (const c of candidates) {
@@ -1180,8 +1196,14 @@ export function chronicleEpisodeIntro(body) {
   if (ep.introByFlag) {
     for (const flagKey in ep.introByFlag) {
       const v = flags[flagKey];
-      if (v != null && ep.introByFlag[flagKey][v] != null) {
-        return ep.introByFlag[flagKey][v];
+      const table = ep.introByFlag[flagKey];
+      if (v != null && table[v] != null) {
+        return table[v];
+      }
+      // Flag numérique au-delà des paliers prévus (ex. tone_compris 5) : palier le plus proche en dessous
+      if (typeof v === 'number') {
+        const steps = Object.keys(table).map(Number).filter(n => Number.isFinite(n) && n <= v);
+        if (steps.length) return table[Math.max(...steps)];
       }
     }
   }
@@ -1230,9 +1252,13 @@ export function resolveChronicleText(scene, body) {
   return scene.text || '';
 }
 
-// Marque l'épisode courant comme terminé et passe au suivant
-function endChronicleEpisode(body) {
-  if (!body.chronicle) return;
+// Marque l'épisode courant comme terminé et passe au suivant.
+// exp (optionnel) : l'expédition qui a joué l'épisode — évite de sauter un épisode
+// si une autre expédition a déjà conclu le même entre-temps.
+function endChronicleEpisode(body, exp) {
+  if (!body.chronicle || body.chronicle.completed) return;
+  const playedIdx = exp?.chronicleRef?.episodeIdx;
+  if (typeof playedIdx === 'number' && playedIdx !== body.chronicle.episodeIdx) return;
   body.chronicle.episodeIdx++;
   body.chronicle.currentSceneId = null;
   const c = CHRONICLES[body.chronicle.id];
@@ -1253,8 +1279,9 @@ function endChronicleEpisode(body) {
 
 // Marque la chronique comme terminée avec une fin spécifique
 function endChronicleWith(body, endingId) {
-  if (!body.chronicle) return;
+  if (!body.chronicle || body.chronicle.completed) return;
   body.chronicle.completed = true;
+  body.chronicle.currentSceneId = null;
   body.chronicle.ending = endingId;
   const c = CHRONICLES[body.chronicle.id];
   if (c) {
@@ -1265,39 +1292,54 @@ function endChronicleWith(body, endingId) {
   }
 }
 
-// Construit la séquence de scènes pour l'épisode courant d'une chronique.
-// La séquence démarre par une scène-intro synthétique, puis pose la première
-// scène de l'épisode. Les scènes suivantes seront résolues dynamiquement par
-// le moteur d'expédition via les outcome.next.
-function buildChronicleEpisodeScenes(body, episode) {
-  const introText = chronicleEpisodeIntro(body);
-  // Scène-intro synthétique (générée à la volée)
-  const introScene = {
-    id: '__chron_intro__',
+// Id de la scène-intro synthétique d'un épisode de chronique. Elle n'existe ni
+// dans SCENES ni dans CHRONICLE_SCENES : l'expédition ne stocke que cet id et
+// currentScene() la reconstruit à partir du corps céleste (y compris pour les
+// sauvegardes faites avant ce correctif).
+const CHRON_INTRO_ID = '__chron_intro__';
+
+// Construit la scène-intro de l'épisode courant d'une chronique (ou null)
+function chronicleIntroScene(body) {
+  const episode = currentChronicleEpisode(body);
+  if (!episode) return null;
+  return {
+    id: CHRON_INTRO_ID,
     tags: ['__chronicle_intro__'],
-    text: introText,
+    text: chronicleEpisodeIntro(body) || episode.title || '',
     choices: [
-      { label: "Avancer", outcome: { log: '', next: episode.firstScene } }
+      { label: "Avancer", outcome: { next: episode.firstScene } }
     ]
   };
-  // Marque la chronique pour qu'on sache la première scène à charger
-  body.chronicle.currentSceneId = '__chron_intro__';
-  // La séquence ne contient que l'intro — la suite est résolue dynamiquement
+}
+
+// Vrai si l'expédition joue (ou va jouer) un épisode de chronique
+function isChronicleExpedition(exp) {
+  return !!exp && (!!exp.chronicleSceneId || exp.scenes?.[0] === CHRON_INTRO_ID);
+}
+
+// Construit la séquence de scènes pour l'épisode courant d'une chronique.
+// La séquence ne contient que la scène-intro synthétique : la première scène
+// de l'épisode puis les suivantes sont résolues dynamiquement par le moteur
+// d'expédition via les outcome.next (exp.chronicleSceneId).
+function buildChronicleEpisodeScenes(body) {
+  const introScene = chronicleIntroScene(body);
+  if (!introScene) return null;
+  body.chronicle.currentSceneId = CHRON_INTRO_ID;
   return [introScene];
 }
 
 
 // ---- Sélection des scènes pour une expédition ----
 // Détermine les tags actifs d'une planète et tire 5-10 scènes cohérentes
-function selectExpeditionScenes(body, rng) {
+function selectExpeditionScenes(body, rng, opts = {}) {
   // 0.24 — D'abord, on tente d'attribuer une chronique si pas déjà fait
-  tryAssignChronicle(body);
+  if (!opts.skipChronicle) tryAssignChronicle(body);
   
   // Si la planète a une chronique active avec un épisode à jouer,
   // on remplace la sélection normale par la séquence de l'épisode.
-  const chronEp = currentChronicleEpisode(body);
-  if (chronEp) {
-    return buildChronicleEpisodeScenes(body, chronEp);
+  const chronScenes = opts.skipChronicle ? null : buildChronicleEpisodeScenes(body);
+  if (chronScenes) {
+    return chronScenes;
   }
   
   const tags = [];
@@ -1332,8 +1374,9 @@ function selectExpeditionScenes(body, rng) {
   // Découpe : intro + corps (3-7) + outro
   const intros = SCENES.filter(s => s.tags.includes('intro') &&
     s.tags.every(t => t === 'intro' || tags.includes(t) || t === 'signal' && body.signal !== 'aucun'));
+  // (le tag 'ruines' est présent dans tags dès que le corps a des ruines)
   const outros = SCENES.filter(s => s.tags.includes('outro') &&
-    s.tags.every(t => t === 'outro' || tags.includes(t) || t === 'ruines'));
+    s.tags.every(t => t === 'outro' || tags.includes(t)));
 
   const bodyScenes = SCENES.filter(s => {
     if (s.tags.includes('intro') || s.tags.includes('outro')) return false;
@@ -1391,8 +1434,8 @@ function weightedPick(arr, rng) {
 }
 
 // Substitue les variables dans le texte d'une scène
-export function fillTemplate(text, ctx) {
-  return text
+export function fillTemplate(text, ctx = {}) {
+  return String(text ?? '')
     .replace(/\{vaisseau\}/g, ctx.vesselName || 'le vaisseau')
     .replace(/\{planete\}/g, ctx.bodyName || 'la planète')
     .replace(/\{biomeFrag\}/g, BIOMES[ctx.body?.biome]?.frag || '')
@@ -4302,7 +4345,7 @@ export function launchExpedition(args) {
   const scenes = selectExpeditionScenes(r.body, sceneRng);
   // Crée l'expédition
   const exp = {
-    id: 'e_' + Date.now().toString(36),
+    id: 'e_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36) + S.expeditions.length,
     vesselId: args.vesselId,
     bodyId: args.bodyId,
     systemId: r.sys.id,
@@ -4323,6 +4366,11 @@ export function launchExpedition(args) {
     sceneThreatMod: 0,
     equipment: { ...equipment }   // 0.15 — items embarqués
   };
+  // Épisode de chronique : on retient lequel, pour ne pas en sauter un si
+  // plusieurs expéditions visent le même corps
+  if (exp.scenes[0] === CHRON_INTRO_ID) {
+    exp.chronicleRef = { id: r.body.chronicle.id, episodeIdx: r.body.chronicle.episodeIdx };
+  }
   S.expeditions.push(exp);
   const equipNote = equipUnits > 0 ? ` · ${equipUnits} équipement(s) embarqué(s)` : '';
   log('neutral', `Décollage : <em>${r.vessel.name}</em> en route vers <em>${r.body.name}</em>. Voyage : ${fmtMin(r.oneWayMin)}${equipNote}.`);
@@ -4330,10 +4378,28 @@ export function launchExpedition(args) {
 }
 
 // Avance toutes les expéditions d'un tick
+let _chronRecruitsCheckedFor = null;
 export function tickExpeditions() {
+  // Répare une fois par partie chargée les colons de chronique créés par les versions ≤ 0.32
+  if (_chronRecruitsCheckedFor !== S) {
+    _chronRecruitsCheckedFor = S;
+    normalizeChronicleRecruits(S);
+  }
   if (S.expeditions.length === 0) return;
   const completed = [];
-  for (const exp of S.expeditions) {
+  for (const exp of [...S.expeditions]) {
+    if (exp.phase === 'sur_place' && !exp.combat?.active) {
+      // Sur place, l'expédition ne peut qu'attendre une décision
+      if (!exp.awaitingChoice) exp.awaitingChoice = true;
+      // Scène introuvable (données changées, sauvegarde ancienne…) : plutôt que de
+      // bloquer vaisseau et équipage pour toujours, l'équipe rentre.
+      if (!currentScene(exp)) {
+        exp.accumulatedLog.push("Plus rien à explorer ici : l'équipe regagne le vaisseau.");
+        log('warn', `<em>${vesselNameOf(exp)}</em> : mission interrompue sur <em>${bodyOfExpedition(exp)?.name || 'site inconnu'}</em>, retour à l'avant-poste.`);
+        startReturn(exp);
+        continue;
+      }
+    }
     // On ne fait pas avancer le temps quand on attend un choix joueur
     if (exp.phase === 'sur_place' && exp.awaitingChoice) continue;
 
@@ -4363,9 +4429,37 @@ function onArrival(exp) {
   body.visited = true;
   sys.explored = true;
   log('neutral', `<em>${vesselNameOf(exp)}</em> arrive sur <em>${body.name}</em>. Exploration en cours.`);
+  // Épisode de chronique prévu au départ : on vérifie qu'il est toujours jouable
+  // (une autre expédition a pu le conclure ou être en train de le jouer).
+  if (exp.scenes[0] === CHRON_INTRO_ID) {
+    const busy = S.expeditions.some(o => o !== exp && o.bodyId === exp.bodyId && o.phase === 'sur_place' && isChronicleExpedition(o));
+    if (currentChronicleEpisode(body) && !busy) {
+      exp.chronicleRef = { id: body.chronicle.id, episodeIdx: body.chronicle.episodeIdx };
+    } else {
+      exp.scenes = selectExpeditionScenes(body, rngFor(`${exp.seed}|arrivee`), { skipChronicle: true }).map(s => s.id);
+      delete exp.chronicleRef;
+    }
+  }
+  // Site déjà fouillé récemment : butin réduit pour toute la mission (hors chronique)
+  exp.lootMult = isChronicleExpedition(exp) ? 1 : bodyLootMult(body);
+  if (exp.lootMult < 1) {
+    exp.accumulatedLog.push(`Site déjà fouillé récemment : butin réduit (≈${Math.round(exp.lootMult * 100)} %), aucun gain de réputation.`);
+  }
   // Active la première scène
   exp.sceneIdx = 0;
   exp.awaitingChoice = true;
+}
+
+// ---- Épuisement des sites pillés ----
+// Un site fouillé ne rend que LOOT_DEPLETED_MULT de son butin, puis se
+// reconstitue linéairement en LOOT_RECOVERY_DAYS jours de jeu.
+const LOOT_DEPLETED_MULT = 0.25;
+const LOOT_RECOVERY_DAYS = 30;
+function bodyLootMult(body) {
+  if (!body || typeof body.lootedAt !== 'number') return 1;
+  const days = Math.max(0, (S.meta.gameMin - body.lootedAt) / 1440);
+  if (days >= LOOT_RECOVERY_DAYS) return 1;
+  return LOOT_DEPLETED_MULT + (1 - LOOT_DEPLETED_MULT) * days / LOOT_RECOVERY_DAYS;
 }
 
 // Départ après scènes : finit la mission et programme le retour
@@ -4375,7 +4469,12 @@ function startReturn(exp) {
   exp.awaitingChoice = false;
   const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
   const body = sys?.bodies.find(b => b.id === exp.bodyId);
-  if (body) body.looted = true;
+  if (body) {
+    body.looted = true;
+    // Le site est épuisé s'il a été fouillé (les épisodes de chronique ne comptent pas)
+    const tookSomething = Object.values(exp.accumulatedLoot).some(v => v > 0) || exp.accumulatedItems.length > 0;
+    if (!isChronicleExpedition(exp) && tookSomething) body.lootedAt = S.meta.gameMin;
+  }
   // Calcul résumé pour le journal
   const lootSummary = Object.entries(exp.accumulatedLoot).map(([k,v]) => `${v} ${RES_LABELS[k]}`).join(', ') || 'rien';
   const itemsSummary = exp.accumulatedItems.length > 0
@@ -4481,27 +4580,77 @@ function onReturn(exp) {
   
   // 0.24 — Recruter les PNJ ramenés des chroniques planétaires
   if (exp.pendingChronicleRecruits && exp.pendingChronicleRecruits.length > 0) {
-    for (const recruit of exp.pendingChronicleRecruits) {
-      const def = recruit.characterDef;
-      // Construit un colon spécial à partir du characterDef
-      const member = {
-        id: 'chronchar_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*9999).toString(36),
-        name: def.name,
-        age: def.age,
-        origine: 'humaine',
-        sante: 80,
-        moral: 60,
-        loyaute: 55,
-        statut: 'libre',
-        statuts: [],
-        traits: ['chronique_' + recruit.characterId], // marqueur unique
-        stats: { vigueur: 4, dexterite: 4, intellect: 6, sangfroid: 6, charisme: 5 },
-        skills: { combat: 1, science: def.role === 'Biologiste' ? 3 : 1, ingenierie: def.role === 'Mécanicien' ? 3 : 1, medecine: 1, pilotage: 1, linguistique: 2, survie: 2 },
-        birthGameMin: S.meta.gameMin - (def.age * YEAR_IN_GAME_MIN),
-        chronicleOrigin: recruit.chronicleId
-      };
-      S.crew.push(member);
-      log('success', `<em>${member.name}</em> rejoint l'avant-poste.`);
+    for (const recruit of exp.pendingChronicleRecruits) recruitChronicleCharacter(recruit);
+  }
+}
+
+// ---- PNJ de chronique ramenés à l'avant-poste ----
+// Le PNJ est construit comme un candidat ordinaire (genCandidate) dont on
+// surcharge l'identité, puis accepté via acceptCandidate (même conversion
+// candidat → membre que le recrutement normal). Habitat plein : il reste
+// dans la liste des candidats jusqu'à ce qu'une place se libère.
+function chronicleOriginOf(chronicleId, def) {
+  return { id: 'chronique', label: CHRONICLES[chronicleId]?.nom || 'Chronique planétaire', notes: def?.role && def.role !== '?' ? def.role : 'Rencontré·e lors d\'une chronique' };
+}
+
+function recruitChronicleCharacter({ characterId, chronicleId, characterDef }) {
+  const def = CHRONICLES[chronicleId]?.characters?.[characterId] || characterDef;
+  if (!def) return;
+  const already = [...S.crew, ...S.candidates].some(p => p.chronicleOrigin === chronicleId && p.chronicleCharacter === characterId);
+  if (already) return;
+  const c = genCandidate();
+  c.name = def.name;
+  if (typeof def.age === 'number' && def.age > 0) c.age = def.age;
+  c.origin = chronicleOriginOf(chronicleId, def);
+  if (def.stats) Object.assign(c.stats, def.stats);
+  if (def.skills) Object.assign(c.skills, def.skills);
+  if (Array.isArray(def.traits)) c.traits = def.traits.filter(t => TRAITS[t]);
+  c.salary = Math.max(1, 1 + Math.max(...Object.values(c.skills)));
+  c.chronicleOrigin = chronicleId;
+  c.chronicleCharacter = characterId;
+  S.candidates.push(c);
+  const cap = crewUsage();
+  if (cap.used < cap.total) {
+    acceptCandidate(c.id);
+  } else {
+    log('warn', `<em>${c.name}</em> est arrivé·e à l'avant-poste, mais l'habitat est plein : sa candidature attend une place libre.`);
+  }
+}
+
+// Sauvegardes ≤ 0.32 : les PNJ de chronique étaient créés sans `origin`
+// (champ `origine: 'humaine'`), sans séquelles ni salaire, avec un faux trait
+// « chronique_xxx ». On les remet au format d'un colon normal.
+// state : l'état à réparer (S par défaut ; load() peut l'appeler sur la sauvegarde brute).
+export function normalizeChronicleRecruits(state = S) {
+  if (!state) return;
+  const crew = state.crew || [];
+  const people = [...crew, ...(state.candidates || [])];
+  for (const p of people) {
+    if (!p || typeof p !== 'object') continue;
+    if (Array.isArray(p.traits)) {
+      const isFake = t => typeof t === 'string' && t.startsWith('chronique_') && !TRAITS[t];
+      const fake = p.traits.find(isFake);
+      if (fake) {
+        if (!p.chronicleCharacter) p.chronicleCharacter = fake.slice('chronique_'.length);
+        p.traits = p.traits.filter(t => !isFake(t));
+      }
+    } else {
+      p.traits = [];
+    }
+    if (!p.origin || typeof p.origin !== 'object' || !p.origin.label) {
+      const chronId = p.chronicleOrigin;
+      const def = chronId ? CHRONICLES[chronId]?.characters?.[p.chronicleCharacter] : null;
+      p.origin = chronId ? chronicleOriginOf(chronId, def) : { id: 'inconnue', label: 'Origine inconnue', notes: '' };
+      delete p.origine;
+    }
+    if (!p.stats) p.stats = { vigueur: 5, dexterite: 5, intellect: 5, sangfroid: 5, charisme: 5 };
+    if (!p.skills) p.skills = {};
+    if (typeof p.salary !== 'number') p.salary = Math.max(1, 1 + Math.max(0, ...Object.values(p.skills).filter(v => typeof v === 'number')));
+    if (crew.includes(p)) {
+      if (!Array.isArray(p.statuts)) p.statuts = [];
+      if (!Array.isArray(p.sequels)) p.sequels = [];
+      if (!Array.isArray(p.blessures)) p.blessures = [];
+      if (typeof p.joinedAt !== 'number') p.joinedAt = state.meta?.gameMin || 0;
     }
   }
 }
@@ -4517,14 +4666,14 @@ function vesselNameOf(exp) {
 
 // Récupère la scène active d'une expédition
 export function currentScene(exp) {
+  if (!exp) return null;
   // 0.24 — Support des scènes de chronique : exp.chronicleSceneId peut
   // pointer vers une scène spécifique (résolue dynamiquement par next)
-  if (exp.chronicleSceneId) {
-    const cs = CHRONICLE_SCENES.find(s => s.id === exp.chronicleSceneId);
-    if (cs) return cs;
-  }
-  if (exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
+  if (exp.chronicleSceneId) return findChronicleScene(exp.chronicleSceneId);
+  if (!Array.isArray(exp.scenes) || exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
   const sceneId = exp.scenes[exp.sceneIdx];
+  // Scène-intro synthétique d'un épisode de chronique : reconstruite à partir du corps
+  if (sceneId === CHRON_INTRO_ID) return chronicleIntroScene(bodyOfExpedition(exp));
   // Chercher d'abord dans CHRONICLE_SCENES (pour les ID qui y sont)
   const cs = CHRONICLE_SCENES.find(s => s.id === sceneId);
   if (cs) return cs;
@@ -4536,7 +4685,7 @@ export function currentScene(exp) {
 export function isChronicleScene(scene) {
   if (!scene) return false;
   if (scene.chronicleEpisode) return true;
-  if (scene.id === '__chron_intro__') return true;
+  if (scene.id === CHRON_INTRO_ID) return true;
   return false;
 }
 
@@ -4593,8 +4742,8 @@ export function evaluateChoice(exp, choice) {
     for (const k in choice.consume) {
       // L'item est traité plus bas
       if (k === 'item') continue;
-      if (S.res[k] < choice.consume[k]) {
-        return { available: false, reason: `Manque ${RES_LABELS[k]} (${choice.consume[k]})` };
+      if ((S.res[k] || 0) < choice.consume[k]) {
+        return { available: false, reason: `Manque ${RES_LABELS[k] || k} (${choice.consume[k]})` };
       }
     }
   }
@@ -4648,17 +4797,32 @@ export function playChoice(expId, choiceIdx) {
 
   // Détermine l'outcome final
   let outcome = choice.outcome;
+  // Clé de scène pour les tirages (les scènes de chronique gardent toutes sceneIdx = 0)
+  const sceneKey = exp.chronicleSceneId || `sc${exp.sceneIdx}`;
   if (choice.risky) {
-    // Jet : 1d10 + meilleur stat dans l'équipe ≥ dc
+    // Jet : 1d10 + bonus de la meilleure caractéristique de l'équipe ≥ dc
     const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
-    const bestStat = Math.max(...team.map(m => m.stats[choice.risky.stat] || 5));
-    const rng = rngFor(`${exp.seed}|sc${exp.sceneIdx}|${choiceIdx}|${S.meta.gameMin}`);
+    const key = choice.risky.stat;
+    let bonus, label;
+    if (!STAT_LABELS[key] && SKILL_LABELS[key]) {
+      // Donnée erronée (compétence à la place d'une caractéristique) : on utilise la compétence
+      bonus = Math.floor(Math.max(0, ...team.map(m => m.skills?.[key] || 0)) / 2);
+      label = SKILL_LABELS[key];
+    } else {
+      const bestStat = Math.max(...team.map(m => m.stats?.[key] || 5));
+      bonus = Math.floor((bestStat - 5) / 2);
+      label = STAT_LABELS[key] || key;
+    }
+    const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|${S.meta.gameMin}`);
     const roll = 1 + Math.floor(rng() * 10);
-    const total = roll + Math.floor((bestStat - 5) / 2);
+    const total = roll + bonus;
     const success = total >= choice.risky.dc;
     outcome = success ? choice.risky.success : choice.risky.fail;
-    exp.accumulatedLog.push(`Jet ${STAT_LABELS[choice.risky.stat]} : ${roll}+${Math.floor((bestStat-5)/2)} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
+    exp.accumulatedLog.push(`Jet ${label} : ${roll}${bonus >= 0 ? '+' : ''}${bonus} = ${total} vs ${choice.risky.dc} → ${success ? 'réussi' : 'échec'}`);
   }
+  // Site déjà fouillé : butin réduit (jamais pour les scènes de chronique)
+  const lootMult = isChronicleScene(scene) ? 1 : (typeof exp.lootMult === 'number' ? exp.lootMult : 1);
+  const depletionRng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|epuise`);
 
   // Applique l'outcome
   if (outcome === 'next' || !outcome) {
@@ -4674,12 +4838,14 @@ export function playChoice(expId, choiceIdx) {
     const isAlienRuins = body && (body.ruines === 'alien_a' || body.ruines === 'alien_b' || body.ruines === 'fusion');
     const alienMult = isAlienRuins ? techEffectsAccumulated().expeditionAlienLootMult : 1;
     for (const k in outcome.loot) {
-      const amount = Math.floor(outcome.loot[k] * alienMult);
+      // Les montants négatifs ne sont pas des gains (un coût s'exprime avec consume)
+      if (!(outcome.loot[k] > 0)) continue;
+      const amount = Math.floor(outcome.loot[k] * alienMult * lootMult);
       exp.accumulatedLoot[k] = (exp.accumulatedLoot[k] || 0) + amount;
     }
     // Sur ruines alien, une fraction des datacubes obtenus est aussi crédité en datacubes_alien
-    if (isAlienRuins && outcome.loot.datacubes) {
-      const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * 0.4);
+    if (isAlienRuins && outcome.loot.datacubes > 0) {
+      const alienShare = Math.ceil(outcome.loot.datacubes * alienMult * lootMult * 0.4);
       exp.accumulatedAlienDatacubes = (exp.accumulatedAlienDatacubes || 0) + alienShare;
     }
     // Cap par cargo du vaisseau
@@ -4692,13 +4858,18 @@ export function playChoice(expId, choiceIdx) {
       exp.accumulatedLog.push("Cargaison à saturation : la suite ne pourra pas être emportée.");
     }
   }
+  // Site déjà fouillé : les objets et schémas ne se retrouvent qu'avec une chance réduite
+  const keepFinds = lootMult >= 1 || depletionRng() < lootMult;
+  if (!keepFinds && (outcome.item || outcome.blueprint)) {
+    exp.accumulatedLog.push("Quelqu'un est déjà passé par là : il ne reste rien de précieux.");
+  }
   // Item
-  if (outcome.item) {
+  if (outcome.item && keepFinds) {
     exp.accumulatedItems.push(outcome.item);
   }
   // Blueprint : tire un schéma de l'origine demandée et l'ajoute aux items + bibliothèque
-  if (outcome.blueprint) {
-    const rng = rngFor(`${exp.seed}|sc${exp.sceneIdx}|${choiceIdx}|bp`);
+  if (outcome.blueprint && keepFinds) {
+    const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|bp`);
     let originPool;
     if (outcome.blueprint === 'auto') {
       // tire selon les ruines du corps
@@ -4745,7 +4916,10 @@ export function playChoice(expId, choiceIdx) {
   // Réputation faction (0.21)
   if (outcome.reputation) {
     const faction = factionForExpedition(exp);
-    if (faction) {
+    if (faction && outcome.reputation > 0 && lootMult < 1) {
+      // Revisite d'un site récemment fouillé : pas de réputation à regagner
+      exp.accumulatedLog.push(`${faction.name} : déjà rencontrés récemment, réputation inchangée.`);
+    } else if (faction) {
       adjustReputation(faction.id, outcome.reputation);
       exp.accumulatedLog.push(`${faction.name} : réputation ${outcome.reputation > 0 ? '+' : ''}${outcome.reputation}.`);
     }
@@ -4809,7 +4983,7 @@ export function playChoice(expId, choiceIdx) {
       }
       // Terminer l'épisode (passer au suivant à la prochaine visite)
       if (outcome.endChronicleEpisode) {
-        endChronicleEpisode(body);
+        endChronicleEpisode(body, exp);
         // Fin de l'expé : on rentre
         startReturn(exp);
         render();
@@ -4835,8 +5009,11 @@ function advanceScene(exp) {
   // Si on arrive ici sans next, c'est qu'on est sur une scène intro de chronique
   // ou qu'on doit terminer (cas géré ailleurs).
   if (exp.chronicleSceneId) {
-    // L'outcome ne contenait pas de next : on considère que l'épisode est fini.
-    exp.awaitingChoice = true;
+    // L'outcome ne contenait pas de next : on considère que l'épisode est fini
+    // (rejouer la même scène bloquerait l'équipe dans une boucle).
+    const body = bodyOfExpedition(exp);
+    if (body) endChronicleEpisode(body, exp);
+    startReturn(exp);
     render();
     return;
   }
@@ -5229,6 +5406,9 @@ export function abandonExpedition(expId) {
     return;
   }
   exp.accumulatedLog.push("Retraite décidée par le commandement.");
+  if (isChronicleExpedition(exp) && currentChronicleEpisode(bodyOfExpedition(exp))) {
+    log('neutral', `Chronique interrompue : l'épisode reprendra à la prochaine expédition sur <em>${bodyOfExpedition(exp).name}</em>.`);
+  }
   startReturn(exp);
   render();
 }

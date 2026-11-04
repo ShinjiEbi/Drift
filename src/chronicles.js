@@ -26,9 +26,11 @@ export const CHRONICLES = {
     
     // Personnages persistants
     characters: {
-      adele:  { name: 'Adèle Voronine', age: 47, role: 'Biologiste',  voice: 'sèche, ironique' },
+      adele:  { name: 'Adèle Voronine', age: 47, role: 'Biologiste',  voice: 'sèche, ironique',
+                skills: { science: 3, medecine: 2, survie: 2 }, traits: ['cynique', 'survivant'] },
       tomas:  { name: 'Tomas Renaud',   age: 31, role: 'Mécanicien',  voice: 'naïf, dépendant' },
-      soeur:  { name: 'Mira Voronine',  age: 52, role: '?',            voice: 'rare, étrange' }
+      soeur:  { name: 'Mira Voronine',  age: 52, role: '?',            voice: 'rare, étrange',
+                skills: { linguistique: 4, science: 2 }, traits: ['voix_murmurent', 'distant'] }
     },
     
     // Flags trackés tout au long de la chronique
@@ -240,13 +242,14 @@ export const CHRONICLES = {
     teaser: "Un cercle parfait, immobile, qui change de place quand on ne le regarde pas.",
     
     requires: {
-      atmosphere: ['anormale', 'exotique'],
+      atmosphere: ['anormale'],  // (« exotique » n'est pas une atmosphère générée)
       biome: ['desert', 'glace', 'volcanique', 'exotique', 'asteroide', 'jungle']
     },
     spawnChance: 0.30,
     
     characters: {
-      elie:   { name: 'Dr. Élie Calvet', age: 39, role: 'Physicienne théoricienne', voice: 'précise, inquiète' }
+      elie:   { name: 'Dr. Élie Calvet', age: 39, role: 'Physicienne théoricienne', voice: 'précise, inquiète',
+                skills: { science: 4, ingenierie: 2 }, traits: ['savant_eclaire', 'insomniaque'] }
     },
     
     initialFlags: {
@@ -313,13 +316,15 @@ export const CHRONICLES = {
     
     requires: {
       ruines: 'humaines',
-      biome: ['terrestre', 'tropical', 'jungle', 'toundra', 'desert']
+      // « terrestre » et « tropical » n'existent pas : océan et jungle en sont les plus proches
+      biome: ['ocean', 'jungle', 'toundra', 'desert']
     },
     spawnChance: 0.30,
     
     characters: {
       eyla:    { name: 'Eyla',      age: 73, role: 'Première Veilleuse',  voice: 'douce, écoute plus qu\'elle ne parle' },
-      karn:    { name: 'Karn',      age: 24, role: 'Jeune Veilleur',      voice: 'méfiant, curieux' },
+      karn:    { name: 'Karn',      age: 24, role: 'Jeune Veilleur',      voice: 'méfiant, curieux',
+                 skills: { linguistique: 3, survie: 3 }, traits: ['curieux'] },
       pretre:  { name: 'Le Prêtre', age: 56, role: 'Gardien des Présents', voice: 'rituelle, hostile' }
     },
     
@@ -388,15 +393,17 @@ export const CHRONICLES = {
     teaser: "Un bazar de fortune où humains, cristallins et symbiotes s'échangent ce qu'aucun n'avoue convoiter.",
     
     requires: {
-      ruines: ['mixtes', 'humaines', 'alien_a', 'alien_b'],
-      biome: ['terrestre', 'tropical', 'desert', 'jungle', 'asteroide', 'volcanique']
+      // « mixtes » → « fusion » (ruines humaines et alien mêlées) ; « terrestre »/« tropical » → toundra/jungle
+      ruines: ['fusion', 'humaines', 'alien_a', 'alien_b'],
+      biome: ['toundra', 'desert', 'jungle', 'asteroide', 'volcanique']
     },
     spawnChance: 0.30,
     
     characters: {
       kherda:    { name: 'Khêr-Da',    age: 134, role: 'Marchand hybride',     voice: 'calme, précise, ironique' },
       tisseuse:  { name: 'La Tisseuse', age: 0,   role: 'Marchande de promesses', voice: 'multiple, comme un chœur' },
-      voln:      { name: 'Voln',       age: 38,  role: 'Naufragé rabatteur',    voice: 'rauque, désespérée' }
+      voln:      { name: 'Voln',       age: 38,  role: 'Naufragé rabatteur',    voice: 'rauque, désespérée',
+                   skills: { linguistique: 3, pilotage: 2, survie: 2 }, traits: ['survivant'] }
     },
     
     initialFlags: {
@@ -699,19 +706,21 @@ export const CHRONICLE_SCENES = [
     choices: [
       {
         label: "Embarquer tout le monde sur le vaisseau",
+        consume: { biomasse: 30 },
         outcome: {
           log: "Adèle et Tomas montent à bord. La biomasse pour le voyage de retour est lourde mais gérable.",
-          loot: { biomasse: -30 },
           setFlags: { survivors_fate: 'sauves' },
-          // Plus tard, on ajoutera les colons à l'avant-poste lors de l'arrivée
+          // Adèle rejoint l'avant-poste au retour (Tomas en repartira de lui-même, cf. épisode 3)
+          addCandidate: 'adele',
           endChronicleEpisode: true
         }
       },
       {
         label: "Partager des provisions, revenir plus tard",
+        consume: { biomasse: 15 },
         outcome: {
           log: "Vous laissez ce que vous pouvez. Adèle, presque touchée : « Vous reviendrez ? » Vous promettez. En échange, elle vous remet un disque mémoire.",
-          loot: { biomasse: -15, datacubes: 20 },
+          loot: { datacubes: 20 },
           item: 'disque_memoire',
           setFlags: { survivors_fate: 'partages' },
           endChronicleEpisode: true
@@ -921,6 +930,14 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Elle hésite. Puis elle lève les sept doigts d'une main — non, sept doigts. Tu remarques qu'elle a deux pouces à la main droite, et que ce n'est pas une difformité. Tu ne sais pas comment.",
           setFlags: { choeur_eveille: true, inara_status: 'allie' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "Lui faire signe de chanter pour le temple",
+        outcome: {
+          log: "Inara hésite longtemps. Puis elle ferme les yeux et chante — un son sans paroles, pur, qui n'a plus rien d'humain. Le temple répond aussitôt, et tu comprends en une minute plus qu'en une heure de gestes. Mais elle ne s'arrête pas. Quand tu repars, elle chante encore, seule à l'orée, et sa voix commence à se briser.",
+          setFlags: { tone_compris: '+2', inara_status: 'morte' },
           next: 'chron_sanc_ep1_temple'
         }
       },
@@ -1584,7 +1601,7 @@ export const CHRONICLE_SCENES = [
           log: "Tu lui donnes 30 unités de biomasse. Les filaments se gorgent. La masse pulse en cadence rapide. Tu obtiens en retour : un mucus dont les propriétés régénératrices te seront utiles.",
           loot: { biomasse: 15, datacubes: 15 },
           item: 'serum_xeno',
-          setFlags: { nourriture: '+2' },
+          setFlags: { nourriture: '+2', pacte_organique: 'symbiose' },
           endChronicleEpisode: true
         }
       },
@@ -1593,7 +1610,7 @@ export const CHRONICLE_SCENES = [
         consume: { biomasse: 10 },
         outcome: {
           log: "Tu donnes un peu. Assez pour qu'elle se souvienne. Pas assez pour qu'elle grandisse trop.",
-          setFlags: { nourriture: '+1' },
+          setFlags: { nourriture: '+1', pacte_organique: 'cooperation' },
           endChronicleEpisode: true
         }
       },
@@ -1601,6 +1618,7 @@ export const CHRONICLE_SCENES = [
         label: "Refuser de la nourrir",
         outcome: {
           log: "Tu lui dis non, doucement. Elle accepte. Mais tu sens qu'elle attend autre chose, alors.",
+          setFlags: { pacte_organique: 'fuite' },
           endChronicleEpisode: true
         }
       },
@@ -1610,7 +1628,7 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Tu n'oses pas vraiment, mais tu y penses. Le simple fait d'y avoir pensé fait reculer la masse — comme si elle avait *senti* ton intention et l'avait rejetée. Tu remontes avec moins. Et avec un peu moins de toi.",
           morale: -5,
-          setFlags: { langage_appris: '+1' },
+          setFlags: { langage_appris: '+1', pacte_organique: 'destruction' },
           endChronicleEpisode: true
         }
       }
@@ -1986,6 +2004,7 @@ export const CHRONICLE_SCENES = [
           setFlags: { compas_obtenu: true },
           loot: { cristal: 30, datacubes: 25 },
           item: 'compas_cosmique',
+          addCandidate: 'elie',  // Élie poursuit ses travaux à l'avant-poste
           endChronicle: 'science_pure'
         }
       },
@@ -2009,6 +2028,7 @@ export const CHRONICLE_SCENES = [
           item: 'compas_cosmique',
           loot: { datacubes: 40, cristal: 50 },
           morale: -5,
+          addCandidate: 'elie',
           endChronicle: 'porte_ouverte'
         }
       },
@@ -2020,6 +2040,7 @@ export const CHRONICLE_SCENES = [
           setFlags: { compas_obtenu: false },
           loot: { datacubes: 30, cristal: 40 },
           morale: -3,
+          addCandidate: 'elie',
           endChronicle: 'verrou_brise'
         }
       },
@@ -2028,6 +2049,7 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Tu détruis ton matériel d'observation. Tu effaces les données. Vous repartez les mains vides. Élie te regarde longuement. Puis elle te dit : « Merci. » Vous ne reparlerez jamais de l'anneau.",
           setFlags: {},
+          addCandidate: 'elie',
           endChronicle: 'silence_respecte'
         }
       }
@@ -2390,10 +2412,10 @@ export const CHRONICLE_SCENES = [
       },
       {
         label: "Donner une ration à Voln sans rien demander en retour",
+        consume: { biomasse: 5 },
         outcome: {
           log: "Voln pleure. Pas de joie, juste de fatigue. Il te dit : « Si tu trouves la Tisseuse, ne lui promets rien. Si tu rencontres le Patron, ne le défie pas. Ce sont mes seuls cadeaux pour toi. » Il s'éloigne.",
           setFlags: { voln_aide: '+2' },
-          loot: { biomasse: -5 },
           next: 'chron_marche_ep1_premiere_offre'
         }
       }
@@ -2407,10 +2429,11 @@ export const CHRONICLE_SCENES = [
     choices: [
       {
         label: "Payer en biomasse immédiatement",
+        consume: { biomasse: 50 },
         outcome: {
           log: "Khêr-Da acquiesce et te remet le coffret. « Tu paies cash. C'est honnête. La plupart préfèrent le service — mais c'est leur problème, pas le mien. »",
           setFlags: { reputation_marche: '+1', kherda_lien: '+1' },
-          loot: { biomasse: -50, datacubes: 10 },
+          loot: { datacubes: 10 },
           endChronicleEpisode: true
         }
       },
@@ -2459,10 +2482,11 @@ export const CHRONICLE_SCENES = [
       },
       {
         label: "Proposer une marchandise à Khêr-Da : du minerai raffiné",
+        consume: { metal: 30 },
         outcome: {
           log: "Khêr-Da analyse ton minerai avec une lentille hybride. Il te propose un échange équitable : 30 metal raffinés contre 8 datacubes alien et une information sur le marché. Tu acceptes. Tu apprends que d'autres marchés existent ailleurs — il faut un sceau pour y entrer.",
           setFlags: { reputation_marche: '+1' },
-          loot: { metal: -30, datacubes: 8 },
+          loot: { datacubes: 8 },
           next: 'chron_marche_ep2_tisseuse'
         }
       }
