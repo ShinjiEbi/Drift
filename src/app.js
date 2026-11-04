@@ -2,10 +2,10 @@
 // Extrait de drift.html lors de la phase de modularisation
 
 import { MODULES, MODULE_JOBS, VESSELS, ITEMS, ITEM_TYPES, ITEM_ORIGINS, ITEM_NAME_TO_ID, BLUEPRINTS, TECH_TREE, TECH_BRANCHES, FABRICATIONS, SCENES, TREATMENTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, ENEMY_TYPES } from './catalog.js';
-import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, JOB_BASE_FRACTION, JOB_BIOMASSE_MULT, SKILL_LIST, SKILL_LABELS, STAT_LABELS, YEAR_IN_GAME_MIN, REL_LOVE, REL_FRIEND, REL_RIVAL, REL_RANCUNE } from './constants.js';
+import { VERSION, SAVE_KEY, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, JOB_BASE_FRACTION, JOB_BIOMASSE_MULT, SKILL_LIST, SKILL_LABELS, STAT_LABELS, YEAR_IN_GAME_MIN, REL_LOVE, REL_FRIEND, REL_RIVAL, REL_RANCUNE } from './constants.js';
 import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import { CHRONICLES, CHRONICLE_SCENES } from './chronicles.js';
-import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$ } from './util.js';
+import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$, esc, uid } from './util.js';
 import { S, setS, freshState, computeRates, capOf, buildTime, crewCap, canBuild, startBuild, finishBuild, GRAVITES, VIES, BODY_TYPES, SYS_PREFIXES, GREEK, CONSTELL, genSystemName, POETIC_NAMES, genBodyName, genBody, genSystem, genGalaxy, describeBody, bodyThreatLevel, bodyRewardLevel, FIRST_NAMES, LAST_NAMES, ORIGINS, rollPick, rollWeighted, gaussInt, genName, genStats, genSkills, genTraits, genCandidate, crewUsage, aliveCrew, tickCount, tickOnce, tick, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind, trainingTargetLevel, findInstructor, formationBonuses, save, load, exportSave, importSave, resetGame } from './state.js';
 import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers } from './ui.js';
 import { notif } from './notifications.js';
@@ -47,7 +47,6 @@ import { notif } from './notifications.js';
 // Identifiants uniques des recherches, fabrications, formations et traitements
 // (import séparé et renommé pour ne pas entrer en conflit avec la ligne d'import
 // principale de util.js).
-import { uid as makeId } from './util.js';
 
 // ============================================================
 //   POSTES & RÔLES — la vie de la base
@@ -696,7 +695,7 @@ export function startResearch(techId) {
   }
   if (!S.research) S.research = [];
   S.research.push({
-    id: makeId('r'),
+    id: uid('r'),
     techId,
     startedAt: S.meta.gameMin,
     totalMin: r.cost.time * BUILD_TIME_MULT,
@@ -975,7 +974,7 @@ export function startFabrication(fabId) {
   for (const k in fab.cost) S.res[k] -= fab.cost[k];
   if (!S.fabrication) S.fabrication = [];
   S.fabrication.push({
-    id: makeId('f'),
+    id: uid('f'),
     fabId,
     startedAt: S.meta.gameMin,
     totalMin: fab.time * BUILD_TIME_MULT,
@@ -1677,7 +1676,7 @@ export function startTraining(memberId, skill) {
   for (const k in r.cost) S.res[k] -= r.cost[k];
   // Ouvre la session
   const session = {
-    id: makeId('t'),
+    id: uid('t'),
     memberId,
     skill,
     targetLvl: r.target,
@@ -2042,7 +2041,7 @@ export function startTreatment(memberId, statusRef) {
   // Débite les ressources une fois tous les calculs faits (rien n'est perdu en cas d'erreur)
   for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
   S.treatments.push({
-    id: makeId('tr'),
+    id: uid('tr'),
     memberId,
     statusIdx: r.statusIdx,      // pour l'UI ; recalé par syncTreatmentIndexes
     statutKey: r.status.key,     // référence fiable du statut traité
@@ -2247,7 +2246,6 @@ export function progressMemberStatuts(member) {
 
 // Imports propres à la zone incidents / événements / sauvegarde / démarrage.
 // Alias pour ne pas entrer en collision avec les imports du haut du fichier.
-import { esc as escHtml, uid as newUid } from './util.js';
 import { MAX_PENDING_DECISIONS } from './constants.js';
 import { loadSave, exportRawSave, lockSaves, unlockSaves, setSimPaused, isSimPaused, isCatchingUp, runCatchUp, markSessionStart, reportTickError } from './state.js';
 
@@ -3056,7 +3054,7 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
   }
   if (!outcome) return true;
 
-  const workerHTML = victim ? `<em>${escHtml(victim.name)}</em>` : 'un colon';
+  const workerHTML = victim ? `<em>${esc(victim.name)}</em>` : 'un colon';
   if (outcome.log) say(inc.positive ? 'success' : 'warn', outcome.log.replace(/\{worker\}/g, workerHTML));
 
   // Applique (pertes plafonnées au stock ; gains plafonnés à la capacité)
@@ -3119,7 +3117,7 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
       const key = [victim.id, other.id].sort().join('|');
       if (!S.relations) S.relations = {};
       S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-      say('warn', `<em>${escHtml(victim.name)}</em> et <em>${escHtml(other.name)}</em> se brouillent durablement.`);
+      say('warn', `<em>${esc(victim.name)}</em> et <em>${esc(other.name)}</em> se brouillent durablement.`);
     }
   }
   // — chainIncident : déclenche un autre incident plus tard (cf. tickOnce)
@@ -3142,7 +3140,7 @@ export function applyIncidentChoice(inc, choice, victim, opts = {}) {
 
   if (auto) {
     log(inc.positive ? 'success' : 'warn',
-      `<b>${escHtml(inc.titre || 'Incident')}</b> — décision automatique : « ${escHtml(fillAmounts(choice.label, choice.outcome))} ». ${notes.join(' ')}`.trim());
+      `<b>${esc(inc.titre || 'Incident')}</b> — décision automatique : « ${esc(fillAmounts(choice.label, choice.outcome))} ». ${notes.join(' ')}`.trim());
   }
   return true;
 }
@@ -3179,7 +3177,7 @@ function syncPendingFlags() {
 
 function enqueueDecision(dec) {
   if (!Array.isArray(S.pendingDecisions)) S.pendingDecisions = [];
-  S.pendingDecisions.push({ id: newUid('dec'), createdAt: S.meta.gameMin, ...dec });
+  S.pendingDecisions.push({ id: uid('dec'), createdAt: S.meta.gameMin, ...dec });
   while (S.pendingDecisions.length > MAX_PENDING_DECISIONS) {
     // La plus ancienne qui n'est pas à l'écran est résolue automatiquement
     const idx = S.pendingDecisions[0].id === _shownDecisionId ? 1 : 0;
@@ -3315,7 +3313,7 @@ function showDecision(dec) {
 
 function renderIncidentContent(inc, victim) {
   const def = MODULES[inc.modKey];
-  const text = inc.text.replace(/\{worker\}/g, victim ? escHtml(victim.name) : 'un colon');
+  const text = inc.text.replace(/\{worker\}/g, victim ? esc(victim.name) : 'un colon');
   const severityLabel = ['', 'Mineur', 'Sérieux', 'Critique'][inc.severity || 1];
   const severityClass = ['', 'ok', 'warn', 'rust'][inc.severity || 1];
   const team = incidentTeam(inc);
@@ -3750,7 +3748,7 @@ function autoResolveColonyEvent(eventId, actors) {
 
 // Libellé d'un choix d'événement : montants réels et nom du protagoniste (échappé)
 function eventChoiceLabelHTML(ch, actors) {
-  return escHtml(fillAmounts(ch.label, ch.outcome)).replace(/\{primary\}/g, escHtml(actors?.primary?.name || ''));
+  return esc(fillAmounts(ch.label, ch.outcome)).replace(/\{primary\}/g, esc(actors?.primary?.name || ''));
 }
 
 function renderColonyEventContent(eventId, actors) {
@@ -3759,8 +3757,8 @@ function renderColonyEventContent(eventId, actors) {
   const secondaryName = actors.secondary?.name || '';
   const age = actors.primary ? currentAge(actors.primary) : '';
   const text = ev.text
-    .replace(/\{primary\}/g, primaryName ? `<em>${escHtml(primaryName)}</em>` : 'un colon')
-    .replace(/\{secondary\}/g, secondaryName ? `<em>${escHtml(secondaryName)}</em>` : '')
+    .replace(/\{primary\}/g, primaryName ? `<em>${esc(primaryName)}</em>` : 'un colon')
+    .replace(/\{secondary\}/g, secondaryName ? `<em>${esc(secondaryName)}</em>` : '')
     .replace(/\{age\}/g, age);
 
   const choicesHTML = ev.choices.map((ch, i) => {
@@ -3836,7 +3834,7 @@ function renderColonyConsequence(result, choice, actors) {
   const effectsHTML = (result.effects || []).map(e => {
     const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
     const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
-    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${escHtml(e.text)}</span></li>`;
+    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${esc(e.text)}</span></li>`;
   }).join('');
   const narrativeHTML = result.narrative
     ? `<p class="incident-body">${result.narrative}</p>`
@@ -4005,7 +4003,7 @@ export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
       }
       const member = {
         ...cand,
-        id: newUid('m'),
+        id: uid('m'),
         joinedAt: S.meta.gameMin,
         birthGameMin: S.meta.gameMin - (cand.age || 30) * 43200,
         statut: 'libre',
@@ -4048,7 +4046,7 @@ export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
     const key = [primary.id, secondary.id].sort().join('|');
     if (!S.relations) S.relations = {};
     S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-    say('warn', `<em>${escHtml(primary.name)}</em> et <em>${escHtml(secondary.name)}</em> se brouillent durablement.`);
+    say('warn', `<em>${esc(primary.name)}</em> et <em>${esc(secondary.name)}</em> se brouillent durablement.`);
     effects.push({ kind: 'bad', text: `${primary.name} et ${secondary.name} se brouillent durablement.` });
   }
   // — historicalMark : entrée dans le journal historique de la colonie
@@ -4065,12 +4063,12 @@ export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
   let narrative = '';
   if (o.log) {
     narrative = o.log
-      .replace(/\{primary\}/g, primary ? `<em>${escHtml(primary.name)}</em>` : 'un colon')
-      .replace(/\{secondary\}/g, secondary ? `<em>${escHtml(secondary.name)}</em>` : '');
+      .replace(/\{primary\}/g, primary ? `<em>${esc(primary.name)}</em>` : 'un colon')
+      .replace(/\{secondary\}/g, secondary ? `<em>${esc(secondary.name)}</em>` : '');
   }
   if (auto) {
     log(ev.positive ? 'success' : 'warn',
-      `<b>${escHtml(colonyEventTitle(eventId))}</b> — décision automatique : « ${eventChoiceLabelHTML(choice, actors)} ». ${[narrative, ...notes].filter(Boolean).join(' ')}`.trim());
+      `<b>${esc(colonyEventTitle(eventId))}</b> — décision automatique : « ${eventChoiceLabelHTML(choice, actors)} ». ${[narrative, ...notes].filter(Boolean).join(' ')}`.trim());
   } else if (narrative) {
     log(ev.positive ? 'success' : 'warn', narrative);
   }
@@ -4082,7 +4080,6 @@ export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
 
 // Identifiants uniques (factions, missions, vaisseaux) — import local et aliasé
 // pour ne pas entrer en conflit avec l'import principal de util.js.
-import { uid as makeUid } from './util.js';
 
 // ============================================================
 //   ARCS NARRATIFS (0.20)
@@ -4257,7 +4254,7 @@ function genFactionName(type, rng = Math.random) {
 function createFaction(type, body) {
   const ft = FACTION_TYPES[type];
   if (!ft) return null;
-  const id = makeUid('fac');
+  const id = uid('fac');
   const faction = {
     id,
     type,
@@ -4482,7 +4479,7 @@ export function launchDiplomaticMission(factionId, memberId) {
   // Le vaisseau n'est pas immobilisé : il reste utilisable pour les expéditions.
   const envoy = (S.fleet || []).find(v => v.type === 'emissaire' && v.available);
   S.diplomaticMissions.push({
-    id: makeUid('dipl'),
+    id: uid('dipl'),
     factionId,
     memberId,
     startedAt: S.meta.gameMin,
@@ -4698,7 +4695,7 @@ export function finishVesselBuild() {
   if (!b) return;
   const def = VESSELS[b.type];
   const vessel = {
-    id: makeUid('v'),
+    id: uid('v'),
     type: b.type,
     name: genVesselName(b.type),
     available: true   // false quand affecté à une expé en cours
@@ -6316,7 +6313,7 @@ function finishCatchUp({ before, seqStart, elapsedHours, simulatedHours, capped 
   if (elapsedHours >= CATCHUP_REPORT_MIN_HOURS) {
     // Une seule entrée de journal pour résumer la période
     const cappedNote = capped ? ` (simulation plafonnée à ${OFFLINE_MAX_HOURS}h)` : '';
-    log('neutral', escHtml(`Reprise du contact après ${realDurationLabel(elapsedHours)}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`));
+    log('neutral', esc(`Reprise du contact après ${realDurationLabel(elapsedHours)}${cappedNote}.${summary.length ? ' ' + summary.join(' · ') + '.' : ''}`));
   }
   save();
   try { render(); } catch (e) { reportTickError('render', e); }
@@ -6371,7 +6368,7 @@ function showCatchupModal(report) {
   const summaryHTML = report.summary.length > 0
     ? `<ul style="list-style:none;padding:0;margin:14px 0 0;">${
         report.summary.map(line =>
-          `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${escHtml(line)}</li>`
+          `<li style="font-family:var(--mono);font-size:12px;color:var(--text-dim);padding:5px 0;border-bottom:1px dashed var(--border);">${esc(line)}</li>`
         ).join('')
       }</ul>`
     : '<p style="font-style:italic;color:var(--text-mute);margin-top:10px">L\'avant-poste a tenu sans encombre.</p>';
@@ -6526,12 +6523,12 @@ function takeOverTab(reloadAfter) {
 function showCorruptSaveModal(res) {
   $('#modal').className = 'modal';
   const backupNote = res.backupKey
-    ? `Une copie de secours est gardée dans ce navigateur (<code>${escHtml(res.backupKey)}</code>).`
+    ? `Une copie de secours est gardée dans ce navigateur (<code>${esc(res.backupKey)}</code>).`
     : `⚠ Aucune copie de secours n'a pu être créée (stockage plein ?) : exporte la sauvegarde avant de recommencer.`;
   showModal({
     title: 'Sauvegarde illisible',
     body: `
-      <p>La sauvegarde de ta colonie n'a pas pu être chargée : ${escHtml(res.error?.message || 'erreur inconnue')}.</p>
+      <p>La sauvegarde de ta colonie n'a pas pu être chargée : ${esc(res.error?.message || 'erreur inconnue')}.</p>
       <p>Rien n'a été effacé. ${backupNote}</p>
       <p>Tu peux l'exporter (pour la réparer ou la transmettre), importer une autre sauvegarde, ou recommencer une partie.</p>
       <div class="btn-row" style="justify-content:flex-start;flex-wrap:wrap;margin-top:12px">
