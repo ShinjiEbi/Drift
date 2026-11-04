@@ -710,7 +710,8 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Adèle et Tomas montent à bord. La biomasse pour le voyage de retour est lourde mais gérable.",
           setFlags: { survivors_fate: 'sauves' },
-          // Plus tard, on ajoutera les colons à l'avant-poste lors de l'arrivée
+          // Adèle rejoint l'avant-poste au retour (Tomas en repartira de lui-même, cf. épisode 3)
+          addCandidate: 'adele',
           endChronicleEpisode: true
         }
       },
@@ -929,6 +930,14 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Elle hésite. Puis elle lève les sept doigts d'une main — non, sept doigts. Tu remarques qu'elle a deux pouces à la main droite, et que ce n'est pas une difformité. Tu ne sais pas comment.",
           setFlags: { choeur_eveille: true, inara_status: 'allie' },
+          next: 'chron_sanc_ep1_temple'
+        }
+      },
+      {
+        label: "Lui faire signe de chanter pour le temple",
+        outcome: {
+          log: "Inara hésite longtemps. Puis elle ferme les yeux et chante — un son sans paroles, pur, qui n'a plus rien d'humain. Le temple répond aussitôt, et tu comprends en une minute plus qu'en une heure de gestes. Mais elle ne s'arrête pas. Quand tu repars, elle chante encore, seule à l'orée, et sa voix commence à se briser.",
+          setFlags: { tone_compris: '+2', inara_status: 'morte' },
           next: 'chron_sanc_ep1_temple'
         }
       },
@@ -1592,7 +1601,7 @@ export const CHRONICLE_SCENES = [
           log: "Tu lui donnes 30 unités de biomasse. Les filaments se gorgent. La masse pulse en cadence rapide. Tu obtiens en retour : un mucus dont les propriétés régénératrices te seront utiles.",
           loot: { biomasse: 15, datacubes: 15 },
           item: 'serum_xeno',
-          setFlags: { nourriture: '+2' },
+          setFlags: { nourriture: '+2', pacte_organique: 'symbiose' },
           endChronicleEpisode: true
         }
       },
@@ -1601,7 +1610,7 @@ export const CHRONICLE_SCENES = [
         consume: { biomasse: 10 },
         outcome: {
           log: "Tu donnes un peu. Assez pour qu'elle se souvienne. Pas assez pour qu'elle grandisse trop.",
-          setFlags: { nourriture: '+1' },
+          setFlags: { nourriture: '+1', pacte_organique: 'cooperation' },
           endChronicleEpisode: true
         }
       },
@@ -1609,6 +1618,7 @@ export const CHRONICLE_SCENES = [
         label: "Refuser de la nourrir",
         outcome: {
           log: "Tu lui dis non, doucement. Elle accepte. Mais tu sens qu'elle attend autre chose, alors.",
+          setFlags: { pacte_organique: 'fuite' },
           endChronicleEpisode: true
         }
       },
@@ -1618,7 +1628,7 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Tu n'oses pas vraiment, mais tu y penses. Le simple fait d'y avoir pensé fait reculer la masse — comme si elle avait *senti* ton intention et l'avait rejetée. Tu remontes avec moins. Et avec un peu moins de toi.",
           morale: -5,
-          setFlags: { langage_appris: '+1' },
+          setFlags: { langage_appris: '+1', pacte_organique: 'destruction' },
           endChronicleEpisode: true
         }
       }
@@ -1994,6 +2004,7 @@ export const CHRONICLE_SCENES = [
           setFlags: { compas_obtenu: true },
           loot: { cristal: 30, datacubes: 25 },
           item: 'compas_cosmique',
+          addCandidate: 'elie',  // Élie poursuit ses travaux à l'avant-poste
           endChronicle: 'science_pure'
         }
       },
@@ -2017,6 +2028,7 @@ export const CHRONICLE_SCENES = [
           item: 'compas_cosmique',
           loot: { datacubes: 40, cristal: 50 },
           morale: -5,
+          addCandidate: 'elie',
           endChronicle: 'porte_ouverte'
         }
       },
@@ -2028,6 +2040,7 @@ export const CHRONICLE_SCENES = [
           setFlags: { compas_obtenu: false },
           loot: { datacubes: 30, cristal: 40 },
           morale: -3,
+          addCandidate: 'elie',
           endChronicle: 'verrou_brise'
         }
       },
@@ -2036,6 +2049,7 @@ export const CHRONICLE_SCENES = [
         outcome: {
           log: "Tu détruis ton matériel d'observation. Tu effaces les données. Vous repartez les mains vides. Élie te regarde longuement. Puis elle te dit : « Merci. » Vous ne reparlerez jamais de l'anneau.",
           setFlags: {},
+          addCandidate: 'elie',
           endChronicle: 'silence_respecte'
         }
       }

@@ -192,6 +192,39 @@ for (const [id, c] of Object.entries(CHRONICLES)) {
     for (const t of ch.traits || []) if (!TRAITS[t]) err(`CHRONICLES.${id}.characters.${cid}`, `trait inconnu « ${t} »`);
   }
 }
+// Valeurs de flags attendues (intro d'épisode, req.flag.equals) qu'aucun choix n'écrit jamais :
+// la branche correspondante est inaccessible.
+{
+  const written = {};
+  for (const s of CHRONICLE_SCENES) {
+    const cid = s.chronicleEpisode?.chronicle;
+    for (const c of s.choices || []) {
+      for (const o of [c.outcome, c.risky?.success, c.risky?.fail]) {
+        for (const [k, v] of Object.entries((o && o.setFlags) || {})) {
+          ((written[cid] ??= {})[k] ??= new Set()).add(typeof v === 'string' && /^[+-]\d+$/.test(v) ? '±' : String(v));
+        }
+      }
+    }
+  }
+  const reachable = (cid, k, v) => {
+    if (String(CHRONICLES[cid]?.initialFlags?.[k]) === String(v)) return true;
+    const w = written[cid]?.[k];
+    return !!w && (w.has(String(v)) || (w.has('±') && Number.isFinite(Number(v))));
+  };
+  for (const [cid, c] of Object.entries(CHRONICLES)) {
+    for (const ep of c.episodes || []) {
+      for (const [k, table] of Object.entries(ep.introByFlag || {})) {
+        for (const v of Object.keys(table)) if (!reachable(cid, k, v)) err(`CHRONICLES.${cid}`, `intro « ${ep.title} » pour ${k} = ${v} : valeur jamais écrite`);
+      }
+    }
+  }
+  for (const s of CHRONICLE_SCENES) {
+    (s.choices || []).forEach((c, i) => {
+      const f = c.req?.flag;
+      if (f && f.equals !== undefined && !reachable(s.chronicleEpisode?.chronicle, f.key, f.equals)) err(`CHRONICLE_SCENES.${s.id}[${i}]`, `req.flag ${f.key} = ${f.equals} : valeur jamais écrite`);
+    });
+  }
+}
 
 // ---- Arcs ----
 for (const [id, a] of Object.entries(DAF.ARCS)) {
