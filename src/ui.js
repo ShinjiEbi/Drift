@@ -195,6 +195,41 @@ function morphAttrs(cur, next) {
   }
 }
 
+// ---- HTML produit par le jeu (journal, logs d'expédition et de combat) ----
+// Ces textes contiennent volontairement du HTML (<em>…) et ne sont donc pas
+// échappés ; mais ils incluent des noms venus de la sauvegarde. On ne garde
+// que quelques balises de mise en forme, sans attribut autre que class.
+const SAFE_TAGS = new Set(['EM', 'STRONG', 'B', 'I', 'U', 'BR', 'SPAN', 'SMALL', 'SUB', 'SUP']);
+const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'NOSCRIPT', 'SVG', 'MATH',
+  'IMG', 'PICTURE', 'VIDEO', 'AUDIO', 'SOURCE', 'LINK', 'META', 'BASE', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT']);
+const _safeCache = new Map();
+function safeHTML(html) {
+  html = String(html ?? '');
+  if (!html.includes('<')) return html;
+  const hit = _safeCache.get(html);
+  if (hit !== undefined) return hit;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  cleanNode(tpl.content);
+  const out = tpl.innerHTML;
+  if (_safeCache.size > 1000) _safeCache.clear();
+  _safeCache.set(html, out);
+  return out;
+}
+function cleanNode(node) {
+  for (const child of Array.from(node.childNodes)) {
+    if (child.nodeType === 1) {
+      const tag = child.nodeName.toUpperCase();
+      if (DROP_TAGS.has(tag)) { child.remove(); continue; }
+      cleanNode(child);
+      if (!SAFE_TAGS.has(tag)) { child.replaceWith(...child.childNodes); continue; }
+      for (const a of Array.from(child.attributes)) if (a.name !== 'class') child.removeAttribute(a.name);
+    } else if (child.nodeType !== 3) {
+      child.remove();   // commentaires, instructions…
+    }
+  }
+}
+
 // ---- Accès tolérants aux données inattendues (sauvegarde ancienne ou modifiée) ----
 // Nom d'une entrée de catalogue, déjà échappé ; à défaut la clé elle-même.
 const nomOf = (table, key) => esc(table?.[key]?.nom ?? key ?? '?');
@@ -425,7 +460,7 @@ function showAlertsModal(alerts) {
     const cls = a.critical ? 'critical' : '';
     return `<div class="alert-row ${cls}">
       <span class="alert-icon">${a.critical ? '⚠' : '◦'}</span>
-      <span class="alert-text">${a.text}</span>
+      <span class="alert-text">${esc(a.text)}</span>
     </div>`;
   }).join('');
   m.classList.add('alerts-modal');
@@ -542,8 +577,8 @@ function renderBuildSlot() {
   if (slot.className !== 'module') slot.className = 'module';
   setHTML(slot, `
     <div class="title-row">
-      <div class="name">${def.nom}</div>
-      <div class="level">→ NIV ${b.targetLevel}</div>
+      <div class="name">${esc(def.nom)}</div>
+      <div class="level">→ NIV ${esc(b.targetLevel)}</div>
     </div>
     <div class="desc">${def.desc}</div>
     <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}">
@@ -597,7 +632,7 @@ function renderModules() {
       actionHTML = `<button class="build" disabled>Requiert : ${txt}</button>`;
     } else {
       actionHTML = `<button class="build" data-id="${id}" ${check.ok ? '' : 'disabled'}>
-        ${cur === 0 ? 'Construire' : `Améliorer → niv ${next}`}
+        ${cur === 0 ? 'Construire' : `Améliorer → niv ${esc(next)}`}
       </button>`;
     }
 
@@ -618,7 +653,7 @@ function renderModules() {
     return `<div class="module ${lockedClass} ${disabledClass}" data-id="${id}">
       <div class="title-row">
         <div class="name">${def.nom}${tierBadge}${disabledBadge}</div>
-        <div class="level">${cur === 0 ? '— NON CONSTRUIT' : `NIVEAU ${cur}${isMax ? ' (MAX)' : ''}`}</div>
+        <div class="level">${cur === 0 ? '— NON CONSTRUIT' : `NIVEAU ${esc(cur)}${isMax ? ' (MAX)' : ''}`}</div>
       </div>
       <div class="desc">${def.desc}</div>
       ${effects ? `<div class="effects">${effects}</div>` : ''}
@@ -871,7 +906,7 @@ function renderSlotRow(modKey, slotIdx, job) {
     } else if (occMember.statut === 'travail') {
       statusLabel = `<div class="occ-status">● en poste</div>`;
     } else {
-      statusLabel = `<div class="occ-status">${occMember.statut}</div>`;
+      statusLabel = `<div class="occ-status">${esc(occMember.statut)}</div>`;
     }
     let careerBadge = '';
     if (isReallyOnPost && occMember.posteInfo) {
@@ -883,7 +918,7 @@ function renderSlotRow(modKey, slotIdx, job) {
       }
     }
     occHTML = `<div class="slot-occupant">
-      <div class="occ-name ${unfitCls}">${occMember.name}</div>
+      <div class="occ-name ${unfitCls}">${esc(occMember.name)}</div>
       ${statusLabel}
       ${careerBadge}
     </div>`;
@@ -989,17 +1024,17 @@ function renderAssignPickerContent() {
     const detail = busy && !isCurrent ? `Occupé : ${busy}` :
                    m.statut === 'libre' ? 'Libre' :
                    isCurrent ? 'Affecté ici' : m.statut;
-    return `<div class="assign-pick-item ${cls} ${dis}" data-pick-member="${m.id}">
+    return `<div class="assign-pick-item ${cls} ${dis}" data-pick-member="${esc(m.id)}" role="button"${dis ? ' aria-disabled="true"' : ' tabindex="0"'}${isCurrent ? ' aria-current="true"' : ''}>
       <div class="api-info">
-        <div class="api-name">${m.name}</div>
-        <div class="api-detail">${detail}</div>
+        <div class="api-name">${esc(m.name)}</div>
+        <div class="api-detail">${esc(detail)}</div>
       </div>
-      <div class="api-relevant">${relevant}</div>
+      <div class="api-relevant">${esc(relevant)}</div>
     </div>`;
   }).join('');
 
   const currentInfo = currentOccupant
-    ? `<p style="margin-bottom:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim)">Actuellement : <em style="color:var(--amber)">${currentOccupant.name}</em></p>`
+    ? `<p style="margin-bottom:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim)">Actuellement : <em style="color:var(--amber)">${esc(currentOccupant.name)}</em></p>`
     : '';
 
   return `
@@ -1080,7 +1115,7 @@ function renderDiplomacy() {
       const remaining = Math.max(0, mis.duration - elapsed);
       html += `<div class="diplo-mission">
         <div class="dm-head">
-          <div><b>${member.name}</b> → <em>${f.name}</em></div>
+          <div><b>${esc(member.name)}</b> → <em>${esc(f.name)}</em></div>
           <div class="dm-eta">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
         </div>
         <div class="dm-bar"><div class="dm-fill" style="width:${pct}%"></div></div>
@@ -1152,7 +1187,7 @@ function renderFactionCard(f) {
       <div class="dc-section-label">Commerce</div>
       <div class="dt-rates">${offerStr} contre ${askStr} · toutes les 15j</div>
       <div class="dt-row">
-        <button class="dt-btn ${f.tradeActive ? 'active' : ''}" data-trade="${f.id}">${f.tradeActive ? '◼ Désactiver' : '◻ Activer'} la route</button>
+        <button class="dt-btn ${f.tradeActive ? 'active' : ''}" data-trade="${esc(f.id)}">${f.tradeActive ? '◼ Désactiver' : '◻ Activer'} la route</button>
         ${f.tradeActive && nextCaravan !== null ? `<span class="dt-eta">Prochaine dans ${fmtMin(nextCaravan)}</span>` : ''}
       </div>
     </div>`;
@@ -1160,7 +1195,7 @@ function renderFactionCard(f) {
     tradeHTML = `<div class="dc-section dc-section-locked">Commerce disponible à réputation 40+</div>`;
   }
   if (f.reputation <= -60) {
-    tradeHTML = `<div class="dc-section dc-section-hostile">⚠ Faction hostile — expéditions sur ${f.bodyName} risquent l'embuscade.</div>`;
+    tradeHTML = `<div class="dc-section dc-section-hostile">⚠ Faction hostile — expéditions sur ${esc(f.bodyName)} risquent l'embuscade.</div>`;
   }
 
   // ── Alliance ──
@@ -1186,7 +1221,7 @@ function renderFactionCard(f) {
     const giftBtns = ft.giftOptions.map((g, i) => {
       const canAfford = (S.res[g.resource] || 0) >= g.amount;
       const dis = (waitLeft > 0 || !canAfford) ? 'disabled' : '';
-      return `<button class="gift-btn ${canAfford ? '' : 'cant'}" ${dis} data-gift-faction="${f.id}" data-gift-idx="${i}">
+      return `<button class="gift-btn ${canAfford ? '' : 'cant'}" ${dis} data-gift-faction="${esc(f.id)}" data-gift-idx="${i}">
         ${g.label} (−${g.amount} ${RES_LABELS[g.resource]}) → +${g.repGain} rép.
       </button>`;
     }).join('');
@@ -1222,10 +1257,10 @@ function renderFactionCard(f) {
       missionHTML = `<div class="dc-section">
         <div class="dc-section-label">Mission diplomatique · ${cost} biomasse</div>
         <div class="mission-req">Valorisée : <em>${pSkillLabel}</em> · Requis : ${reqLabel}</div>
-        <div class="mission-best">Meilleur candidat : <b>${best.name}</b>
+        <div class="mission-best">Meilleur candidat : <b>${esc(best.name)}</b>
           · <span class="mission-chance ${chance >= 70 ? 'good' : chance >= 40 ? 'mid' : 'bad'}">${chance}% de succès</span>
         </div>
-        <button class="diplo-launch-btn" data-diplo-launch="${f.id}">Envoyer une mission</button>
+        <button class="diplo-launch-btn" data-diplo-launch="${esc(f.id)}">Envoyer une mission</button>
       </div>`;
     } else {
       const altLabel = reqAlt ? ` ou ${SKILL_LABELS[reqAlt.skill]} ${reqAlt.min}+` : '';
@@ -1235,10 +1270,10 @@ function renderFactionCard(f) {
 
   return `<div class="diplo-card" style="border-left-color:${ft.color}">
     <div class="dc-head">
-      <div class="dc-name">${f.name}</div>
+      <div class="dc-name">${esc(f.name)}</div>
       <div class="dc-status" style="color:${status.color}">${status.label}</div>
     </div>
-    <div class="dc-meta" style="color:${ft.color}">${ft.label} · ${f.bodyName}</div>
+    <div class="dc-meta" style="color:${ft.color}">${ft.label} · ${esc(f.bodyName)}</div>
     <div class="dc-desc">${ft.desc}</div>
     <div class="dc-rep">
       <div class="dc-rep-header">
@@ -1291,9 +1326,9 @@ function openDiploLaunchModal(factionId) {
     const cls = chance >= 70 ? 'good' : chance >= 40 ? 'mid' : 'bad';
     const pScore = c.skills[ft.missionSkill] || 0;
     const sel = _diploLaunchPick.memberId === c.id ? 'selected' : '';
-    return `<div class="diplo-pick ${sel}" data-pick-diplo="${c.id}">
-      <div class="dp-name">${c.name}</div>
-      <div class="dp-meta">${pSkillLabel} ${pScore} · Charisme ${c.stats?.charisme || 5}
+    return `<div class="diplo-pick ${sel}" data-pick-diplo="${esc(c.id)}" role="button" tabindex="0">
+      <div class="dp-name">${esc(c.name)}</div>
+      <div class="dp-meta">${pSkillLabel} ${esc(pScore)} · Charisme ${esc(c.stats?.charisme || 5)}
         · <span class="mission-chance ${cls}">${chance}%</span>
       </div>
     </div>`;
@@ -1303,7 +1338,7 @@ function openDiploLaunchModal(factionId) {
     : `${SKILL_LABELS[reqSkill]} ${reqMin}+`;
   m.innerHTML = `
     <div class="incident-eyebrow">Mission diplomatique</div>
-    <h3 class="incident-title">→ ${f.name}</h3>
+    <h3 class="incident-title">→ ${esc(f.name)}</h3>
     <p class="incident-body" style="font-size:13px;padding:8px 0 12px">
       Durée : 24–48h jeu · Coût : ${cost} biomasse · Compétence valorisée : <em>${pSkillLabel}</em><br>
       Requis : ${pSkills}
@@ -1445,11 +1480,12 @@ function renderJournal() {
     const m = Math.floor(t % 60);
     const stamp = `J${d} · ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
     const kind = JOURNAL_KINDS.has(e.kind) ? e.kind : 'neutral';
-    // e.txt est du HTML produit par le jeu (<em>…) : volontairement non échappé.
-    // Les sauvegardes importées sont assainies au chargement (liste blanche).
+    // e.txt est du HTML produit par le jeu (<em>…) : volontairement non échappé,
+    // mais filtré par liste blanche (safeHTML) car il contient des noms de colons.
+    // Les sauvegardes importées sont en plus assainies au chargement.
     return `<li class="entry ${kind}">
       <div class="meta">${stamp}</div>
-      <div class="body">${e.txt}</div>
+      <div class="body">${safeHTML(e.txt)}</div>
     </li>`;
   }).join(''));
 }
@@ -1472,7 +1508,7 @@ function renderInventory() {
     return;
   }
 
-  setHTML(sub, `<b>${total}</b> item(s) au total · ${distinct} type(s) distinct(s)`);
+  setHTML(sub, `<b>${esc(total)}</b> item(s) au total · ${distinct} type(s) distinct(s)`);
 
   // Résumé par origine
   const byOrigin = {};
@@ -1483,7 +1519,7 @@ function renderInventory() {
     byOrigin[def.origin] = (byOrigin[def.origin] || 0) + inv[id];
   }
   const originLine = Object.entries(byOrigin)
-    .map(([o, n]) => `<span style="color:${ITEM_ORIGINS[o]?.color || 'var(--text)'}">${ITEM_ORIGINS[o]?.nom || o}</span> <b>${n}</b>`)
+    .map(([o, n]) => `<span style="color:${ITEM_ORIGINS[o]?.color || 'var(--text)'}">${ITEM_ORIGINS[o]?.nom || esc(o)}</span> <b>${esc(n)}</b>`)
     .join(' · ');
   let html = `<div class="inv-summary">Origine : ${originLine}</div>`;
 
@@ -1501,7 +1537,7 @@ function renderInventory() {
       <div class="inv-section-head">
         <div class="ish-title">${typeDef.nom}</div>
         <div class="ish-desc">${cleanTypeDesc(typeDef.desc)}</div>
-        <div class="ish-count">${typeTotal} item(s)</div>
+        <div class="ish-count">${esc(typeTotal)} item(s)</div>
       </div>
       <div class="inv-grid">`;
 
@@ -1520,7 +1556,7 @@ function renderInventory() {
           <div class="ic-name">${def.nom}</div>
           <div class="ic-origin" style="color:${ori.color}">${ori.nom}</div>
         </div>
-        <div class="ic-count">${inv[id]}<span class="lbl">en stock</span></div>
+        <div class="ic-count">${esc(inv[id])}<span class="lbl">en stock</span></div>
         <div class="ic-desc">${def.desc}</div>
       </div>`;
     }
@@ -1608,8 +1644,8 @@ function renderLibrary() {
             <span class="lbl">${unlockKindLabel}</span>${unlocksLabel}
             <span class="pending">— exploitable en phase 0.13</span>
           </div>
-          ${stock > 0 ? `<div class="bp-stock">${stock} exemplaire(s) en inventaire</div>` : ''}
-          <div class="bp-found-at">Découvert J${d} via ${discoveries[id].source}</div>
+          ${stock > 0 ? `<div class="bp-stock">${esc(stock)} exemplaire(s) en inventaire</div>` : ''}
+          <div class="bp-found-at">Découvert J${d} via ${esc(discoveries[id].source)}</div>
         `;
       } else {
         // Non-découvert : silhouette grisée, juste l'origine et la rareté
@@ -1653,7 +1689,7 @@ function renderResearch() {
 
   const slots = Math.max(1, Math.ceil(labLvl / 2));
   const lb = laboratoryBonuses();
-  setHTML(sub, `Laboratoire niv ${labLvl} · <b>${ongoing}/${slots}</b> recherche(s) en cours · <b>${completed}/${allTechs.length}</b> technologies maîtrisées`);
+  setHTML(sub, `Laboratoire niv ${esc(labLvl)} · <b>${ongoing}/${slots}</b> recherche(s) en cours · <b>${completed}/${allTechs.length}</b> technologies maîtrisées`);
 
   // Résumé global avec datacubes / datacubes alien
   let html = `<div class="research-summary">
@@ -1678,7 +1714,7 @@ function renderResearch() {
         <div class="ra-bar"><div class="ra-fill" style="width:${pct}%"></div></div>
         <div class="ra-foot">
           <span>Branche : ${TECH_BRANCHES[tech?.branch]?.nom || '?'}</span>
-          <button class="ra-cancel" data-cancel-research="${r.id}">Annuler</button>
+          <button class="ra-cancel" data-cancel-research="${esc(r.id)}">Annuler</button>
         </div>
       </div>`;
     }).join('');
@@ -1742,7 +1778,7 @@ function renderTechCard(techId, branchColor) {
     statusHTML = `<span class="tc-status av">disponible</span>`;
   } else {
     cls = 'locked';
-    statusHTML = `<span class="tc-status lk">${r.reason}</span>`;
+    statusHTML = `<span class="tc-status lk">${esc(r.reason)}</span>`;
   }
 
   // Coût
@@ -1842,7 +1878,7 @@ function openResearchModal(techId) {
     <div class="rm-desc">${tech.desc}</div>
     <div class="rm-effects">${effectsLines.map(l => '› ' + l).join('<br>')}</div>
     ${costHTML}
-    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust)">${r.reason}</div>` : ''}
+    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust)">${esc(r.reason)}</div>` : ''}
     <div class="btn-row">
       <button id="researchCancel">Annuler</button>
       <button id="researchConfirm" class="primary" ${r.ok ? '' : 'disabled'}>Lancer la recherche</button>
@@ -1882,7 +1918,7 @@ function renderWorkshop() {
   }
 
   const bonuses = workshopBonuses();
-  setHTML(sub, `Atelier niv ${lvl} · <b>${inQueue}/${slots}</b> en cours`);
+  setHTML(sub, `Atelier niv ${esc(lvl)} · <b>${inQueue}/${slots}</b> en cours`);
 
   // Encart staff de l'atelier
   const wBonusParts = [];
@@ -1909,7 +1945,7 @@ function renderWorkshop() {
         </div>
         <div class="fa-bar"><div class="fa-fill" style="width:${pct}%"></div></div>
         <div class="fa-foot">
-          <button class="fa-cancel" data-cancel-fab="${f.id}">Annuler</button>
+          <button class="fa-cancel" data-cancel-fab="${esc(f.id)}">Annuler</button>
         </div>
       </div>`;
     }).join('');
@@ -1975,7 +2011,7 @@ function renderFabCard(fabId) {
   } else if (isFabAvailable(fabId)) {
     // Disponible (prérequis OK) mais coût/file pas remplis
     cls = 'locked';
-    statusHTML = `<span class="fc-status lk">${r.reason}</span>`;
+    statusHTML = `<span class="fc-status lk">${esc(r.reason)}</span>`;
   } else {
     cls = 'locked';
     statusHTML = `<span class="fc-status lk">verrouillée</span>`;
@@ -2011,7 +2047,7 @@ function renderFabCard(fabId) {
 
   // Stock actuel de l'item produit
   const stock = (S.inventory || {})[fab.produces] || 0;
-  const stockHTML = stock > 0 ? `<span class="fc-tag" style="color:var(--moss)">stock: ${stock}</span>` : '';
+  const stockHTML = stock > 0 ? `<span class="fc-tag" style="color:var(--moss)">stock: ${esc(stock)}</span>` : '';
 
   return `<div class="fab-card ${cls}" data-fab="${fabId}"${cls === 'available' ? ' role="button" tabindex="0"' : ''} ${cls === 'available' ? `style="border-left-color:${ori.color}"` : ''}>
     <div class="fc-head">
@@ -2052,7 +2088,7 @@ function openFabModal(fabId) {
     <h3>${fab.nom}</h3>
     <div class="rm-desc">${itemDef2.desc}</div>
     ${costHTML}
-    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust)">${r.reason}</div>` : ''}
+    ${!r.ok ? `<div class="rm-prereq" style="color:var(--rust)">${esc(r.reason)}</div>` : ''}
     <div class="btn-row">
       <button id="fabCancel">Annuler</button>
       <button id="fabConfirm" class="primary" ${r.ok ? '' : 'disabled'}>Lancer la fabrication</button>
@@ -2118,9 +2154,9 @@ function renderGalaxyList() {
     const isHome = sys.distance < 0.8;
     const cls = isHome ? 'home' : (sys.explored ? 'explored' : '');
     const chips = systemChips(sys);
-    return `<div class="system-card ${cls}" data-system-id="${sys.id}">
+    return `<div class="system-card ${cls}" data-system-id="${esc(sys.id)}" role="button" tabindex="0">
       <div class="scard-head">
-        <div class="sysname">${sys.name}${isHome ? '<span class="home-marker">Origine</span>' : ''}</div>
+        <div class="sysname">${esc(sys.name)}${isHome ? '<span class="home-marker">Origine</span>' : ''}</div>
         <div class="sysdist">${sys.distance.toFixed(2)} pc</div>
       </div>
       <div class="sysmeta">${sys.bodies.length} corps céleste${sys.bodies.length > 1 ? 's' : ''}</div>
@@ -2137,7 +2173,7 @@ function renderGalaxyList() {
     </div>
     <div class="galaxy-stats">
       Systèmes connus : <b>${scanned.length} / ${total}</b> · Portée actuelle : <b>${range} pc</b>
-      ${antLvl === 0 ? ' · Aucune antenne longue portée' : ` · Antenne niv ${antLvl}`}
+      ${antLvl === 0 ? ' · Aucune antenne longue portée' : ` · Antenne niv ${esc(antLvl)}`}
     </div>
     <div style="height:14px"></div>
     <div class="system-list">${cards || '<div class="empty">Aucun système cartographié.</div>'}</div>
@@ -2162,9 +2198,9 @@ function renderGalaxySystem() {
     ].filter(Boolean).join(' · ');
 
     return `<div class="body-card ${b.visited ? 'visited' : ''} ${b.looted ? 'looted' : ''}"
-      data-body-id="${b.id}" data-type="${b.type}">
+      data-body-id="${esc(b.id)}" data-type="${esc(b.type)}" role="button" tabindex="0">
       <div class="bcard-head">
-        <div class="bname">${b.name}</div>
+        <div class="bname">${esc(b.name)}</div>
         <div class="btype">${nomOf(BODY_TYPES, b.type)}</div>
       </div>
       <div class="bsummary">${summary}</div>
@@ -2178,7 +2214,7 @@ function renderGalaxySystem() {
   return `
     <button class="back-btn" data-galaxy-action="list">Galaxie</button>
     <div class="system-header">
-      <div class="sysname-big">${sys.name}${isHome ? '<span class="home-marker">Origine</span>' : ''}</div>
+      <div class="sysname-big">${esc(sys.name)}${isHome ? '<span class="home-marker">Origine</span>' : ''}</div>
       <div class="sysmeta-big">${sys.distance.toFixed(2)} pc · ${sys.bodies.length} corps céleste${sys.bodies.length > 1 ? 's' : ''}</div>
     </div>
     <div class="body-list">${bodyCards}</div>
@@ -2230,24 +2266,24 @@ function renderGalaxyBody() {
     } else if (freeC === 0) {
       actionHTML = `<div class="body-action-area">Aucun membre d'équipage disponible.</div>`;
     } else {
-      actionHTML = `<button class="cta-btn" data-galaxy-action="launch" data-body-id="${body.id}">
+      actionHTML = `<button class="cta-btn" data-galaxy-action="launch" data-body-id="${esc(body.id)}">
         Lancer une expédition
       </button>`;
     }
   }
 
   return `
-    <button class="back-btn" data-galaxy-action="system">${sys.name}</button>
+    <button class="back-btn" data-galaxy-action="system">${esc(sys.name)}</button>
     <div class="body-detail-header">
-      <div class="bname-big">${body.name}</div>
-      <div class="bsystem">Système ${sys.name} · ${sys.distance.toFixed(2)} pc · ${nomOf(BODY_TYPES, body.type)}</div>
+      <div class="bname-big">${esc(body.name)}</div>
+      <div class="bsystem">Système ${esc(sys.name)} · ${sys.distance.toFixed(2)} pc · ${nomOf(BODY_TYPES, body.type)}</div>
     </div>
     <div class="body-data-grid">${dataHTML}</div>
     <div style="display:flex;gap:14px;font-family:var(--mono);font-size:11px;color:var(--text-mute);margin-bottom:18px;">
       <span>Menace ${pipBar(threat, 'threat')}</span>
       <span>Récompense ${pipBar(reward, 'reward')}</span>
     </div>
-    <div class="body-narrative">${narrative}</div>
+    <div class="body-narrative">${esc(narrative)}</div>
     ${actionHTML}
   `;
 }
@@ -2275,12 +2311,12 @@ function renderStaffPanel(modKey, opts = {}) {
     if (onPost) {
       return `<div class="staff-row" style="border-left-color:${role.color}">
         <div class="sr-info"><span class="role-mini" style="color:${role.color}">${role.nom}</span>${job.label}</div>
-        <div class="sr-name">${m.name}</div>
+        <div class="sr-name">${esc(m.name)}</div>
       </div>`;
     } else if (m) {
       return `<div class="staff-row empty" style="border-left-color:${role.color}">
         <div class="sr-info"><span class="role-mini" style="color:${role.color}">${role.nom}</span>${job.label}</div>
-        <div class="sr-name">${m.name} · ${m.statut}</div>
+        <div class="sr-name">${esc(m.name)} · ${esc(m.statut)}</div>
       </div>`;
     } else {
       return `<div class="staff-row empty" style="border-left-color:${role.color}">
@@ -2299,7 +2335,7 @@ function renderStaffPanel(modKey, opts = {}) {
   return `<div class="staff-panel">
     <div class="sp-head">
       <div class="sp-title">${opts.title || `Équipe — ${def.nom}`}</div>
-      <button class="sp-link" data-goto-assign="${modKey}">Gérer →</button>
+      <button class="sp-link" data-goto-assign="${esc(modKey)}">Gérer →</button>
     </div>
     ${bonusesHTML}
     <div class="staff-list">${rows}</div>
@@ -2328,7 +2364,7 @@ function renderFleet() {
 
   const cap = hangar.level;
   const cur = S.fleet.length + (S.vesselBuild ? 1 : 0);
-  setHTML(sub, `Hangar niv ${cap} · capacité ${cur}/${cap} vaisseau(x)`);
+  setHTML(sub, `Hangar niv ${esc(cap)} · capacité ${esc(cur)}/${esc(cap)} vaisseau(x)`);
 
   // Encart staff hangar
   const hb = hangarBonuses();
@@ -2356,7 +2392,7 @@ function renderFleet() {
     const pct = Math.min(100, S.vesselBuild.doneMin / S.vesselBuild.totalMin * 100);
     const remaining = S.vesselBuild.totalMin - S.vesselBuild.doneMin;
     listHTML += `<div class="vessel-buildslot">
-      <div class="name">${def.nom} en construction</div>
+      <div class="name">${esc(def.nom)} en construction</div>
       <div class="progress-wrap">
         <div class="bar" style="width:${pct}%"></div>
         <div class="lbl">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
@@ -2376,13 +2412,13 @@ function renderFleet() {
         if (exp) {
           const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
           const body = sys?.bodies.find(b => b.id === exp.bodyId);
-          busyInfo = ` · vers ${body?.name || '?'} (${exp.phase})`;
+          busyInfo = ` · vers ${esc(body?.name || '?')} (${esc(exp.phase)})`;
         }
       }
       return `<div class="vessel-card ${busy ? 'busy' : ''}">
         <div class="vcard-head">
-          <div class="vname">${v.name}</div>
-          <div class="vtype">${def.nom}</div>
+          <div class="vname">${esc(v.name)}</div>
+          <div class="vtype">${esc(def.nom)}</div>
         </div>
         <div class="vflavor">${def.flavor}</div>
         <div class="vstats">
@@ -2420,7 +2456,7 @@ function renderFleet() {
         </div>
         <div class="vmcost">${costStr} · ${fmtMin(def.buildHours * 60 * BUILD_TIME_MULT)}</div>
         <button data-build-vessel="${key}" ${r.ok ? '' : 'disabled'}>
-          ${r.ok ? 'Mettre sur cale' : r.why}
+          ${r.ok ? 'Mettre sur cale' : esc(r.why)}
         </button>
       </div>`;
     }).join(''));
@@ -2458,22 +2494,22 @@ function renderExpeditions() {
       const pct = Math.min(100, exp.elapsedMin / totalForPhase * 100);
       const remaining = totalForPhase - exp.elapsedMin;
       const crewNames = exp.crewIds
-        .map(id => S.crew.find(c => c.id === id)?.name || '?')
+        .map(id => esc(S.crew.find(c => c.id === id)?.name || '?'))
         .join(', ');
 
       // Bouton Reprendre si on est sur place et qu'une décision est attendue
       let actionBtn = '';
       if (exp.phase === 'sur_place' && exp.awaitingChoice) {
         if (exp.combat?.active) {
-          const roundLabel = `Round ${exp.combat.round}`;
+          const roundLabel = `Round ${esc(exp.combat.round)}`;
           const phase = exp.combat.phase === 'player' ? 'tour des alliés' : 'phase ennemie';
-          actionBtn = `<button class="cta-btn cbt-btn" data-resume-exp="${exp.id}" style="margin-top:10px;padding:10px;font-size:11px;background:#8b2020;">
+          actionBtn = `<button class="cta-btn cbt-btn" data-resume-exp="${esc(exp.id)}" style="margin-top:10px;padding:10px;font-size:11px;background:#8b2020;">
             ⚔ Combat en cours · ${roundLabel} · ${phase}
           </button>`;
         } else {
-          const sceneNum = exp.sceneIdx + 1;
+          const sceneNum = esc(Number(exp.sceneIdx) + 1);
           const sceneTotal = exp.scenes.length;
-          actionBtn = `<button class="cta-btn" data-resume-exp="${exp.id}" style="margin-top:10px;padding:10px;font-size:11px;">
+          actionBtn = `<button class="cta-btn" data-resume-exp="${esc(exp.id)}" style="margin-top:10px;padding:10px;font-size:11px;">
             Reprendre la mission · scène ${sceneNum}/${sceneTotal}
           </button>`;
         }
@@ -2481,18 +2517,18 @@ function renderExpeditions() {
 
       // Pour la phase sur_place, on n'affiche pas la barre puisque le temps ne progresse pas
       const progressHTML = exp.phase === 'sur_place'
-        ? `<div class="eprog"><div class="lbl">${exp.combat?.active ? `⚔ Combat · Round ${exp.combat.round}` : `Scène ${exp.sceneIdx + 1}/${exp.scenes.length} · décision attendue`}</div></div>`
+        ? `<div class="eprog"><div class="lbl">${exp.combat?.active ? `⚔ Combat · Round ${esc(exp.combat.round)}` : `Scène ${esc(Number(exp.sceneIdx) + 1)}/${exp.scenes.length} · décision attendue`}</div></div>`
         : `<div class="eprog">
             <div class="bar" style="width:${pct}%"></div>
             <div class="lbl">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
           </div>`;
 
-      return `<div class="expedition-card ${exp.phase}">
+      return `<div class="expedition-card ${esc(exp.phase)}">
         <div class="ehead">
-          <div class="edest">${body?.name || '?'}</div>
+          <div class="edest">${esc(body?.name || '?')}</div>
           <div class="ephase">${label}</div>
         </div>
-        <div class="emeta">${vessel?.name || '?'} · ${sys?.distance.toFixed(2)} pc · ${exp.crewIds.length} membre${exp.crewIds.length>1?'s':''}</div>
+        <div class="emeta">${esc(vessel?.name || '?')} · ${sys?.distance.toFixed(2)} pc · ${exp.crewIds.length} membre${exp.crewIds.length>1?'s':''}</div>
         ${progressHTML}
         <div class="ecrew">${crewNames}</div>
         ${actionBtn}
@@ -2509,10 +2545,10 @@ function renderExpeditions() {
       const cls = h.result?.outcomeKind === 'warn' ? 'warn' : '';
       return `<div class="exphistory-row ${cls}">
         <div class="h-head">
-          <div class="h-dest">${h.bodyName}</div>
+          <div class="h-dest">${esc(h.bodyName)}</div>
           <div>J${d}</div>
         </div>
-        <div class="h-summary">${h.vesselName} · ${h.crewCount} membre${h.crewCount>1?'s':''} · ${h.result?.summary || ''}</div>
+        <div class="h-summary">${esc(h.vesselName)} · ${esc(h.crewCount)} membre${h.crewCount>1?'s':''} · ${esc(h.result?.summary || '')}</div>
       </div>`;
     }).join(''));
   } else {
@@ -2559,15 +2595,15 @@ function renderCombatOverlay(exp) {
     const coverActive = a.effects.some(e => e.type === 'cover');
     const shieldBar = a.maxShieldHp > 0
       ? `<div class="cbt-shield-bar"><div class="cbt-shield-fill" style="width:${Math.max(0, a.shieldHp / a.maxShieldHp * 100)}%"></div></div>
-         <div class="cbt-hp-txt" style="color:#7ab8e8">⚡${a.shieldHp}/${a.maxShieldHp} Bouclier</div>`
+         <div class="cbt-hp-txt cbt-shield-txt">⚡${esc(a.shieldHp)}/${esc(a.maxShieldHp)} Bouclier</div>`
       : '';
-    const wType = a.weaponType ? `<span class="cbt-wtype">${weaponLabel[a.weaponType] || a.weaponType}</span>` : '';
-    return `<div class="cbt-ally ${dead ? 'dead' : ''} ${sel}" data-cbt-ally="${a.id}">
-      <div class="cbt-a-name">${a.name}${wType}${coverActive ? ' <span class="cbt-cover-icon">🛡</span>' : ''}</div>
+    const wType = a.weaponType ? `<span class="cbt-wtype">${esc(weaponLabel[a.weaponType] || a.weaponType)}</span>` : '';
+    return `<div class="cbt-ally ${dead ? 'dead' : ''} ${sel}" data-cbt-ally="${esc(a.id)}"${dead ? '' : ' role="button" tabindex="0"'}${sel ? ' aria-pressed="true"' : ''}>
+      <div class="cbt-a-name">${esc(a.name)}${wType}${coverActive ? ' <span class="cbt-cover-icon">🛡</span>' : ''}</div>
       ${shieldBar}
       <div class="cbt-hp-bar"><div class="cbt-hp-fill ${hpCls}" style="width:${hpPct}%"></div></div>
-      <div class="cbt-hp-txt">${a.hp}/${a.maxHp} PV</div>
-      <div class="cbt-pa-row">${paDots}<span class="cbt-pa-lbl">${a.pa} PA</span></div>
+      <div class="cbt-hp-txt">${esc(a.hp)}/${esc(a.maxHp)} PV</div>
+      <div class="cbt-pa-row">${paDots}<span class="cbt-pa-lbl">${esc(a.pa)} PA</span></div>
     </div>`;
   }).join('');
 
@@ -2576,16 +2612,16 @@ function renderCombatOverlay(exp) {
     const dead = e.hp <= 0;
     const hpPct = Math.max(0, e.hp / e.maxHp * 100);
     const sel = _pendingCombatAction ? 'targetable' : '';
-    return `<div class="cbt-enemy ${dead ? 'dead' : ''} ${sel}" data-cbt-enemy="${i}">
-      <div class="cbt-e-name">${e.nom}</div>
+    return `<div class="cbt-enemy ${dead ? 'dead' : ''} ${sel}" data-cbt-enemy="${i}"${dead ? '' : ' role="button" tabindex="0"'}>
+      <div class="cbt-e-name">${esc(e.nom)}</div>
       <div class="cbt-hp-bar"><div class="cbt-hp-fill enemy" style="width:${hpPct}%"></div></div>
-      <div class="cbt-hp-txt">${e.hp}/${e.maxHp} PV · armure ${e.armor}</div>
+      <div class="cbt-hp-txt">${esc(e.hp)}/${esc(e.maxHp)} PV · armure ${esc(e.armor)}</div>
     </div>`;
   }).join('');
 
   // Journal (6 dernières lignes)
   const logHTML = cbt.log.slice(-7).map(l =>
-    `<div class="cbt-log-line">${l}</div>`
+    `<div class="cbt-log-line">${safeHTML(l)}</div>`
   ).join('');
 
   // Actions pour l'allié sélectionné
@@ -2633,8 +2669,8 @@ function renderCombatOverlay(exp) {
 
   $('#sceneInner').innerHTML = `
     <div class="cbt-header">
-      <span class="cbt-title">⚔ Combat · Round ${cbt.round}</span>
-      <span class="cbt-phase-lbl ${cbt.phase}">${
+      <span class="cbt-title">⚔ Combat · Round ${esc(cbt.round)}</span>
+      <span class="cbt-phase-lbl ${esc(cbt.phase)}">${
         cbt.phase === 'player' ? 'Tour des alliés' :
         cbt.phase === 'enemy'  ? 'Phase ennemie…' : 'Terminé'
       }</span>
@@ -2776,8 +2812,9 @@ function renderSceneOverlay() {
   const body = sys?.bodies.find(b => b.id === exp.bodyId);
   const vessel = S.fleet.find(v => v.id === exp.vesselId);
   const ctx = {
-    vesselName: vessel?.name,
-    bodyName: body?.name,
+    // Noms échappés : le texte de scène est du HTML (catalogue) où ils sont insérés
+    vesselName: esc(vessel?.name ?? ''),
+    bodyName: esc(body?.name ?? ''),
     body
   };
   // 0.24 — texte dynamique (fonction des flags de chronique) si applicable
@@ -2847,13 +2884,13 @@ function renderSceneOverlay() {
       .filter(x => x.v > 0)
       .sort((a,b) => b.v - a.v)
       .slice(0, 2)
-      .map(x => `${SKILL_LABELS[x.s].slice(0,3)}${x.v}`)
+      .map(x => `${SKILL_LABELS[x.s].slice(0,3)}${esc(x.v)}`)
       .join(' ') || '—';
-    const traits = (m.traits || []).slice(0, 2).map(t => TRAITS[t]?.nom || t).join(', ') || '—';
+    const traits = esc((m.traits || []).slice(0, 2).map(t => TRAITS[t]?.nom || t).join(', ') || '—');
     const healthCls = m.sante < 40 ? 'warn' : '';
     return `<div class="scene-team-row ${dead ? 'dead' : ''}">
-      <span>${m.name}</span>
-      <span class="row-info">santé <span class="v ${healthCls}">${m.sante}%</span> · ${skillsTop} · ${traits}</span>
+      <span>${esc(m.name)}</span>
+      <span class="row-info">santé <span class="v ${healthCls}">${esc(m.sante)}%</span> · ${skillsTop} · ${traits}</span>
     </div>`;
   }).join('');
 
@@ -2862,8 +2899,8 @@ function renderSceneOverlay() {
   const lootHTML = lootEntries.length === 0 && exp.accumulatedItems.length === 0
     ? `<div class="scene-loot empty">Aucune cargaison récoltée pour l'instant.</div>`
     : `<div class="scene-loot">
-        <div class="lloot">${lootEntries.map(([k,v]) => `<span>${RES_LABELS[k]} <b>+${v}</b></span>`).join('')}</div>
-        ${exp.accumulatedItems.length > 0 ? `<div class="litems">Items : ${exp.accumulatedItems.map(i => itemDef(i)?.nom || i).join(', ')}</div>` : ''}
+        <div class="lloot">${lootEntries.map(([k,v]) => `<span>${RES_LABELS[k] || esc(k)} <b>+${esc(v)}</b></span>`).join('')}</div>
+        ${exp.accumulatedItems.length > 0 ? `<div class="litems">Items : ${exp.accumulatedItems.map(i => esc(itemDef(i)?.nom || i)).join(', ')}</div>` : ''}
       </div>`;
 
   // Équipement embarqué encore disponible (0.15)
@@ -2874,7 +2911,7 @@ function renderSceneOverlay() {
       const items = equipList.map(([id, n]) => {
         const itDef = ITEMS[id];
         const ori = ITEM_ORIGINS[itDef?.origin] || { color: 'var(--text-mute)' };
-        return `<span style="color:${ori.color}">${itDef?.nom || id}${n > 1 ? ` ×${n}` : ''}</span>`;
+        return `<span style="color:${ori.color}">${esc(itDef?.nom || id)}${n > 1 ? ` ×${esc(n)}` : ''}</span>`;
       });
       equipHTML = `<div class="scene-equip"><span class="lbl">Équipement embarqué :</span> ${items.join(' · ')}</div>`;
     }
@@ -2883,18 +2920,18 @@ function renderSceneOverlay() {
   // Mini-journal (3 dernières entrées)
   const mjHTML = exp.accumulatedLog.length === 0 ? '' : `
     <div class="scene-mini-journal">
-      ${exp.accumulatedLog.slice(-3).map(line => `<div class="mj-line">› ${line}</div>`).join('')}
+      ${exp.accumulatedLog.slice(-3).map(line => `<div class="mj-line">› ${safeHTML(line)}</div>`).join('')}
     </div>
   `;
 
   $('#sceneInner').innerHTML = `
     <div class="scene-header">
-      <div class="sh-loc">${sys?.name || '?'} › ${body?.name || '?'}</div>
-      <div class="sh-title">${scene.id.replace(/_/g, ' ')}</div>
-      <div class="sh-sub">${vessel?.name || '?'} · scène ${exp.sceneIdx + 1} / ${exp.scenes.length}</div>
+      <div class="sh-loc">${esc(sys?.name || '?')} › ${esc(body?.name || '?')}</div>
+      <div class="sh-title">${esc(String(scene.id).replace(/_/g, ' '))}</div>
+      <div class="sh-sub">${esc(vessel?.name || '?')} · scène ${esc(Number(exp.sceneIdx) + 1)} / ${exp.scenes.length}</div>
       <div class="sh-progress">${dots}</div>
     </div>
-    <div class="scene-body">${text}</div>
+    <div class="scene-body">${safeHTML(text)}</div>
     <div class="scene-choices">${choicesHTML}</div>
     <div class="scene-team">
       <h4>Équipage présent</h4>
@@ -2975,9 +3012,9 @@ function renderLaunchModal() {
     vesselHTML = `<div class="tpicker">${avail.map(v => {
       const def = vesselDef(v.type);
       const sel = v.id === _launchPick.vesselId ? 'selected' : '';
-      return `<div class="tpicker-item ${sel}" data-pick-vessel="${v.id}">
-        <div class="pi-name">${v.name}</div>
-        <div class="pi-detail">${def.nom} · ${def.places} places · cargo ${def.cargo}</div>
+      return `<div class="tpicker-item ${sel}" data-pick-vessel="${esc(v.id)}" role="button" tabindex="0"${sel ? ' aria-pressed="true"' : ''}>
+        <div class="pi-name">${esc(v.name)}</div>
+        <div class="pi-detail">${esc(def.nom)} · ${def.places} places · cargo ${def.cargo}</div>
       </div>`;
     }).join('')}</div>`;
   }
@@ -3046,14 +3083,14 @@ function renderLaunchModal() {
             .filter(x => x.v > 0)
             .sort((a,b) => b.v - a.v)
             .slice(0, 3)
-            .map(x => `${SKILL_LABELS[x.s].slice(0,3)} ${x.v}`)
+            .map(x => `${SKILL_LABELS[x.s].slice(0,3)} ${esc(x.v)}`)
             .join(' · ') || '—';
-          return `<div class="crew-picker-item ${sel} ${dis}" data-pick-crew="${c.id}">
+          return `<div class="crew-picker-item ${sel} ${dis}" data-pick-crew="${esc(c.id)}"${dis ? ' aria-disabled="true"' : ' tabindex="0"'} role="checkbox" aria-checked="${sel ? 'true' : 'false'}">
             <span class="checkbox"></span>
             <div class="pi-main">
-              <div class="pi-name">${c.name}</div>
+              <div class="pi-name">${esc(c.name)}</div>
               ${postHTML}
-              <div class="pi-detail">Santé ${c.sante}% · Moral ${c.moral}</div>
+              <div class="pi-detail">Santé ${esc(c.sante)}% · Moral ${esc(c.moral)}</div>
             </div>
             <div class="pi-skills">${topSkills}</div>
           </div>`;
@@ -3070,11 +3107,11 @@ function renderLaunchModal() {
           else if (c.statut === 'diplomatie') where = 'mission diplomatique';
           else where = c.statut;
           const post = postLabel(c);
-          return `<div class="crew-picker-item unavailable">
+          return `<div class="crew-picker-item unavailable" aria-disabled="true">
             <span class="checkbox dot">◌</span>
             <div class="pi-main">
-              <div class="pi-name">${c.name}</div>
-              <div class="pi-detail">${where}${eta(c)}${post ? ' · ' + post : ''}</div>
+              <div class="pi-name">${esc(c.name)}</div>
+              <div class="pi-detail">${esc(where)}${eta(c)}${post ? ' · ' + post : ''}</div>
             </div>
           </div>`;
         }).join('')}</div>`;
@@ -3104,7 +3141,7 @@ function renderLaunchModal() {
         return `<div class="equip-row">
           <div class="er-info" style="border-left-color:${ori.color}">
             <div class="er-name">${itDef.nom}</div>
-            <div class="er-detail">${typeLabel} · stock ${n - taken}/${n}</div>
+            <div class="er-detail">${typeLabel} · stock ${esc(n - taken)}/${esc(n)}</div>
           </div>
           <div class="er-controls">
             <button class="er-btn" data-equip-minus="${id}" ${taken === 0 ? 'disabled' : ''}>−</button>
@@ -3143,7 +3180,7 @@ function renderLaunchModal() {
         <div class="row"><span class="lbl">Récompense potentielle</span><span class="val ok">${'●'.repeat(reward)}${'○'.repeat(5-reward)}</span></div>
       </div>`;
     } else {
-      estimateHTML = `<div class="estimate"><div class="ko">${r.why}</div></div>`;
+      estimateHTML = `<div class="estimate"><div class="ko">${esc(r.why)}</div></div>`;
     }
   }
 
@@ -3151,8 +3188,8 @@ function renderLaunchModal() {
     <h3>Lancer une expédition</h3>
     <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">Destination</p>
     <div class="estimate" style="margin-bottom:12px">
-      <div style="font-family:var(--serif);font-style:italic;color:var(--text);font-size:15px">${body.name}</div>
-      <div style="color:var(--text-mute);font-size:11px;margin-top:2px">${sys.name} · ${BIOMES[body.biome]?.nom || ''} · ${nomOf(BODY_TYPES, body.type)}</div>
+      <div style="font-family:var(--serif);font-style:italic;color:var(--text);font-size:15px">${esc(body.name)}</div>
+      <div style="color:var(--text-mute);font-size:11px;margin-top:2px">${esc(sys.name)} · ${BIOMES[body.biome]?.nom || ''} · ${nomOf(BODY_TYPES, body.type)}</div>
     </div>
     <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">Vaisseau</p>
     ${vesselHTML}
@@ -3243,7 +3280,7 @@ function renderPersonCard(p, opts = {}) {
     const cls = v >= 8 ? 'high' : v <= 3 ? 'low' : '';
     return `<div class="stat ${cls}">
       <span class="lbl">${esc(String(STAT_LABELS[k] ?? k).slice(0,3).toUpperCase())}</span>
-      <span class="v">${v}</span>
+      <span class="v">${esc(v)}</span>
     </div>`;
   }).join('');
 
@@ -3252,14 +3289,14 @@ function renderPersonCard(p, opts = {}) {
     const cls = v === 0 ? 'zero' : v >= 3 ? 'notable' : '';
     return `<div class="skill ${cls}">
       <span class="lbl">${SKILL_LABELS[s].slice(0,3)}</span>
-      <span class="v">${v}</span>
+      <span class="v">${esc(v)}</span>
     </div>`;
   }).join('');
 
   const traitsHTML = (p.traits || []).map(tid => {
     const t = TRAITS[tid];
     if (!t) return '';
-    return `<span class="trait-chip ${t.kind}" title="${t.desc.replace(/"/g,'&quot;')}">${t.nom}</span>`;
+    return `<span class="trait-chip ${t.kind}" title="${esc(t.desc)}">${t.nom}</span>`;
   }).join('');
 
   let actionsHTML = '';
@@ -3267,8 +3304,8 @@ function renderPersonCard(p, opts = {}) {
     const cap = crewUsage();
     const full = cap.used >= cap.total;
     actionsHTML = `<div class="actions-row">
-      <button class="refuse" data-action="refuse" data-id="${p.id}">Écarter</button>
-      <button class="accept" data-action="accept" data-id="${p.id}" ${full ? 'disabled' : ''}>
+      <button class="refuse" data-action="refuse" data-id="${esc(p.id)}">Écarter</button>
+      <button class="accept" data-action="accept" data-id="${esc(p.id)}" ${full ? 'disabled' : ''}>
         ${full ? 'Habitat plein' : 'Engager'}
       </button>
     </div>`;
@@ -3308,9 +3345,9 @@ function renderPersonCard(p, opts = {}) {
       }
     }
     actionsHTML = `${postInfo}${medInfo}<div class="actions-row">
-      <span class="status-tag ${p.statut}">${p.statut}</span>
+      <span class="status-tag ${esc(p.statut)}">${esc(p.statut)}</span>
       <span style="flex:1; text-align:right; font-family:var(--mono); font-size:11px; color:var(--text-mute);">
-        Santé ${healthDisplay} · Moral ${p.moral} · Loy ${p.loyaute}
+        Santé ${esc(healthDisplay)} · Moral ${esc(p.moral)} · Loy ${esc(p.loyaute)}
       </span>
     </div>`;
   }
@@ -3322,11 +3359,11 @@ function renderPersonCard(p, opts = {}) {
     if (friends.length > 0 || rivals.length > 0) {
       const friendChips = friends.map(({ member, affinity }) => {
         const t = relationType(affinity);
-        return `<span class="rel-chip" style="color:${t.color}" title="${t.label} · affinité ${Math.round(affinity)}">${member.name}</span>`;
+        return `<span class="rel-chip" style="color:${t.color}" title="${t.label} · affinité ${Math.round(affinity)}">${esc(member.name)}</span>`;
       }).join('');
       const rivalChips = rivals.map(({ member, affinity }) => {
         const t = relationType(affinity);
-        return `<span class="rel-chip" style="color:${t.color}" title="${t.label} · affinité ${Math.round(affinity)}">${member.name}</span>`;
+        return `<span class="rel-chip" style="color:${t.color}" title="${t.label} · affinité ${Math.round(affinity)}">${esc(member.name)}</span>`;
       }).join('');
       const parts = [];
       if (friends.length > 0) parts.push(`<div class="rel-line"><span class="rel-lbl">Liens :</span> ${friendChips}</div>`);
@@ -3339,17 +3376,17 @@ function renderPersonCard(p, opts = {}) {
   const candClass = opts.isCandidate ? ' candidate' : '';
   // Âge affiché : dynamique pour les colons actifs, statique pour candidats
   const displayAge = opts.isCandidate ? p.age : currentAge(p);
-  return `<div class="person${candClass}${freshClass}" data-id="${p.id}">
+  return `<div class="person${candClass}${freshClass}" data-id="${esc(p.id)}">
     <div class="head-row">
-      <div class="pname">${p.name}</div>
-      <div class="pmeta">${displayAge} ans</div>
+      <div class="pname">${esc(p.name)}</div>
+      <div class="pmeta">${esc(displayAge)} ans</div>
     </div>
     <div class="origin">${esc(p.origin?.label ?? '')}<small>${esc(p.origin?.notes ?? '')}</small></div>
     <div class="stats-row">${statsHTML}</div>
     <div class="skills-row">${skillsHTML}</div>
     ${traitsHTML ? `<div class="traits">${traitsHTML}</div>` : ''}
     ${relationsHTML}
-    ${opts.isCandidate ? `<div class="salary">Prétention : <b>${p.salary} biomasse / cycle</b></div>` : ''}
+    ${opts.isCandidate ? `<div class="salary">Prétention : <b>${esc(p.salary)} biomasse / cycle</b></div>` : ''}
     ${actionsHTML}
   </div>`;
 }
@@ -3410,10 +3447,10 @@ function renderCrew() {
       const d = Math.floor((p.diedAt || S.meta.gameMin) / (24*60)) + 1;
       return `<div class="person dead-row">
         <div class="head-row">
-          <div class="pname">${p.name}</div>
+          <div class="pname">${esc(p.name)}</div>
           <div class="pmeta">décédé(e) J${d}</div>
         </div>
-        <div class="origin">${p.origin?.label || ''}<small>${traits} · ${p.age} ans</small></div>
+        <div class="origin">${esc(p.origin?.label || '')}<small>${esc(traits)} · ${esc(p.age)} ans</small></div>
       </div>`;
     }).join('');
   }
@@ -3444,7 +3481,7 @@ function renderFormation() {
   const inUse = S.training.length;
   const skillCap = lvl + 1;
 
-  setHTML(sub, `Centre niv ${lvl} · plafond skill enseignable : <em>${skillCap}</em>`);
+  setHTML(sub, `Centre niv ${esc(lvl)} · plafond skill enseignable : <em>${esc(skillCap)}</em>`);
 
   // Encart staff de la formation
   const fb = formationBonuses();
@@ -3457,7 +3494,7 @@ function renderFormation() {
   const formStaffHTML = renderStaffPanel('formation', { title: 'Équipe pédagogique', bonusText: fBonusText });
 
   setHTML(status, formStaffHTML + `<div class="formation-status">
-    Places : <b>${inUse}/${cap}</b> · Membres libres : <b>${S.crew.filter(m => m.statut === 'libre').length}</b>
+    Places : <b>${inUse}/${esc(cap)}</b> · Membres libres : <b>${S.crew.filter(m => m.statut === 'libre').length}</b>
   </div>`);
 
   // Sessions en cours (« Interrompre » : VIEW_ACTIONS)
@@ -3472,20 +3509,20 @@ function renderFormation() {
       const cur = member.skills[t.skill] || 0;
       const instr = t.instructorId ? S.crew.find(m => m.id === t.instructorId) : null;
       const failPct = (t.failChance * 100).toFixed(0);
-      return `<div class="training-card" data-id="${t.id}">
+      return `<div class="training-card" data-id="${esc(t.id)}">
         <div class="tcard-head">
-          <div class="tname">${member.name}</div>
-          <div class="tlevel">${esc(String(TRAINING_PROGRAMS[t.skill]?.nom ?? t.skill).toUpperCase())} · ${cur}→${t.targetLvl}</div>
+          <div class="tname">${esc(member.name)}</div>
+          <div class="tlevel">${esc(String(TRAINING_PROGRAMS[t.skill]?.nom ?? t.skill).toUpperCase())} · ${esc(cur)}→${esc(t.targetLvl)}</div>
         </div>
         <div class="tprog">
           <div class="bar" style="width:${pct}%"></div>
           <div class="lbl">${pct.toFixed(0)}% · reste ${fmtMin(remaining)}</div>
         </div>
         <div class="tmeta">
-          ${instr ? `<span class="instr">Instructeur : ${instr.name}</span>` : '<span>Auto-formation</span>'}
+          ${instr ? `<span class="instr">Instructeur : ${esc(instr.name)}</span>` : '<span>Auto-formation</span>'}
           <span class="risk">Risque échec : ${failPct}%</span>
         </div>
-        <button class="cancel" data-cancel="${t.id}">Interrompre (rembours. 50%)</button>
+        <button class="cancel" data-cancel="${esc(t.id)}">Interrompre (rembours. 50%)</button>
       </div>`;
     }).join(''));
   }
@@ -3522,9 +3559,9 @@ function renderTrainingModalContent() {
   const memberOptions = freeCrew.map(c => {
     const sel = c.id === _trainPick.memberId ? 'selected' : '';
     const traits = (c.traits || []).map(traitNom).join(', ') || '—';
-    return `<div class="tpicker-item ${sel}" data-pick-member="${c.id}">
-      <div class="pi-name">${c.name}</div>
-      <div class="pi-detail">Traits : ${traits}</div>
+    return `<div class="tpicker-item ${sel}" data-pick-member="${esc(c.id)}" role="button" tabindex="0"${sel ? ' aria-pressed="true"' : ''}>
+      <div class="pi-name">${esc(c.name)}</div>
+      <div class="pi-detail">Traits : ${esc(traits)}</div>
     </div>`;
   }).join('') || '<div class="empty" style="padding:18px">Aucun membre libre.</div>';
 
@@ -3546,7 +3583,7 @@ function renderTrainingModalContent() {
     } else {
       detail = "Choisis d'abord un colon";
     }
-    return `<div class="tpicker-item ${sel} ${dis}" data-pick-skill="${s}">
+    return `<div class="tpicker-item ${sel} ${dis}" data-pick-skill="${s}" role="button"${dis ? ' aria-disabled="true"' : ' tabindex="0"'}${sel ? ' aria-pressed="true"' : ''}>
       <div class="pi-name">${nomOf(TRAINING_PROGRAMS, s)}</div>
       <div class="pi-detail">${detail}</div>
     </div>`;
@@ -3564,11 +3601,11 @@ function renderTrainingModalContent() {
         <div class="row"><span class="lbl">Niveau cible</span><span class="val">${r.target}</span></div>
         <div class="row"><span class="lbl">Durée</span><span class="val">${fmtMin(r.duration)}</span></div>
         <div class="row"><span class="lbl">Coût</span><span class="val">${costStr}</span></div>
-        <div class="row"><span class="lbl">Instructeur</span><span class="val">${r.instructor ? r.instructor.name : '—'}</span></div>
+        <div class="row"><span class="lbl">Instructeur</span><span class="val">${esc(r.instructor ? r.instructor.name : '—')}</span></div>
         <div class="row"><span class="lbl">Risque d'échec</span><span class="val ${r.failChance>0.1?'warn':'ok'}">${(r.failChance*100).toFixed(0)}%</span></div>
       </div>`;
     } else {
-      estimateHTML = `<div class="estimate"><div class="ko">${r.reason}</div></div>`;
+      estimateHTML = `<div class="estimate"><div class="ko">${esc(r.reason)}</div></div>`;
     }
   }
 
@@ -3648,9 +3685,9 @@ function renderSoins() {
   const lvl = inf.level;
   const doctor = bestAvailableDoctor();
   const docInfo = doctor
-    ? `<b>${doctor.name}</b> (Méd ${doctor.skills.medecine})`
+    ? `<b>${esc(doctor.name)}</b> (Méd ${esc(doctor.skills?.medecine)})`
     : `<span style="color:var(--rust)">aucun médecin disponible</span>`;
-  setHTML(sub, `Infirmerie niv ${lvl} · paliers diag/traitement jusqu'à ${lvl}`);
+  setHTML(sub, `Infirmerie niv ${esc(lvl)} · paliers diag/traitement jusqu'à ${esc(lvl)}`);
 
   // Encart staff de l'infirmerie + bonus actuels
   const ib = infirmaryBonuses();
@@ -3723,7 +3760,7 @@ function renderPatientCard(member, admitted) {
     sequelsHTML = `<div class="sequels-list">${
       sequels.map(sq => {
         const def = SEQUELS[sq.key];
-        return def ? `<span class="sequel-chip" title="${def.desc.replace(/"/g,'&quot;')}">${def.nom}</span>` : '';
+        return def ? `<span class="sequel-chip" title="${esc(def.desc)}">${esc(def.nom)}</span>` : '';
       }).join('')
     }</div>`;
   }
@@ -3731,24 +3768,24 @@ function renderPatientCard(member, admitted) {
   let patientActions = '';
   if (admitted) {
     patientActions = `<div class="patient-actions">
-      <button class="discharge" data-act="discharge" data-mid="${member.id}">Faire sortir</button>
+      <button class="discharge" data-act="discharge" data-mid="${esc(member.id)}">Faire sortir</button>
     </div>`;
   } else if (statuts.length > 0 && member.statut === 'libre') {
     patientActions = `<div class="patient-actions">
-      <button class="admit" data-act="admit" data-mid="${member.id}" ${canAdmit ? '' : 'disabled'}>
+      <button class="admit" data-act="admit" data-mid="${esc(member.id)}" ${canAdmit ? '' : 'disabled'}>
         ${canAdmit ? "Admettre à l'infirmerie" : 'Lits pleins'}
       </button>
     </div>`;
   } else if (member.statut !== 'libre' && statuts.length > 0) {
     patientActions = `<div class="patient-actions">
-      <button disabled>Indisponible (${member.statut})</button>
+      <button disabled>Indisponible (${esc(member.statut)})</button>
     </div>`;
   }
 
   return `<div class="patient-card ${admitted ? '' : 'libre'}">
     <div class="pcard-head">
-      <div class="pname">${member.name}</div>
-      <div class="health-bar">Santé <span class="v ${healthCls}">${member.sante}%</span> · Moral ${member.moral}</div>
+      <div class="pname">${esc(member.name)}</div>
+      <div class="health-bar">Santé <span class="v ${healthCls}">${esc(member.sante)}%</span> · Moral ${esc(member.moral)}</div>
     </div>
     ${statutsHTML}
     ${sequelsHTML}
@@ -3809,16 +3846,16 @@ function renderStatusRow(member, status, idx, admitted) {
       if (!labOk) { dis = 'disabled'; tooltip = 'Labo requis'; }
       else if (!docOk) { dis = 'disabled'; tooltip = 'Aucun médecin'; }
       actionsHTML = `<div class="statut-actions">
-        <button class="diagnose" data-act="diagnose" data-mid="${member.id}" data-s="${idx}" ${dis}>${tooltip}</button>
+        <button class="diagnose" data-act="diagnose" data-mid="${esc(member.id)}" data-s="${idx}" ${dis}>${tooltip}</button>
       </div>`;
     } else {
       // Bouton traitement
       const r = canTreat(member.id, idx);
       const tdef = TREATMENTS[status.key]?.[0];
       const costStr = tdef ? Object.entries(tdef.cost).map(([k,v]) => `${RES_LABELS[k]} ${v}`).join(' · ') : '';
-      let label = r.ok ? `Traiter (${costStr})` : r.reason;
+      let label = r.ok ? `Traiter (${costStr})` : esc(r.reason);
       actionsHTML = `<div class="statut-actions">
-        <button class="treat" data-act="treat" data-mid="${member.id}" data-s="${idx}" ${r.ok ? '' : 'disabled'}>${label}</button>
+        <button class="treat" data-act="treat" data-mid="${esc(member.id)}" data-s="${idx}" ${r.ok ? '' : 'disabled'}>${label}</button>
       </div>`;
     }
   } else if (!admitted && !isUnknown) {
@@ -3830,8 +3867,8 @@ function renderStatusRow(member, status, idx, admitted) {
 
   return `<div class="statut-row ${isUnknown ? 'hidden-status' : ''}">
     <div class="srow-head">
-      <div class="sname ${isUnknown ? 'unknown' : ''}">${displayName}</div>
-      <div class="skind ${def.kind}">${def.kind}</div>
+      <div class="sname ${isUnknown ? 'unknown' : ''}">${esc(displayName)}</div>
+      <div class="skind ${esc(def.kind)}">${esc(def.kind)}</div>
     </div>
     <div class="sshort">${displayShort}</div>
     <div class="smeta">Apparu il y a ${fmtMin(elapsed)} ${countdownHTML ? '· ' + countdownHTML : ''}</div>
@@ -3855,7 +3892,7 @@ function renderRecruit() {
   const intervalH = Math.round(24/lvl);
   const cap = crewUsage();
   const nextIn = Math.max(0, S.nextRecruitMin - S.meta.gameMin);
-  setHTML(sub, `Balise niv ${lvl} · ~1 candidat / ${intervalH}h jeu · prochain dans ${fmtMin(nextIn)} · habitat ${cap.used}/${cap.total}`);
+  setHTML(sub, `Balise niv ${esc(lvl)} · ~1 candidat / ${intervalH}h jeu · prochain dans ${fmtMin(nextIn)} · habitat ${cap.used}/${cap.total}`);
 
   if (S.candidates.length === 0) {
     setHTML(list, '<div class="empty">Aucun candidat pour le moment.</div>');
@@ -4137,14 +4174,16 @@ export function toast(msg) {
 export function showModal({ title, body, primaryLabel='OK', primaryClass='primary', onPrimary, withInput=false, inputValue='', inputPlaceholder='', hideCancel=false, bodyIsHTML=false }) {
   const bg = $('#modalBg');
   const m = $('#modal');
-  const bodyHTML = bodyIsHTML ? `<div class="modal-body">${body}</div>` : `<p>${body}</p>`;
+  // title et body sont du texte (échappé) ; body n'est inséré tel quel que si
+  // l'appelant le déclare explicitement HTML (bodyIsHTML: true).
+  const bodyHTML = bodyIsHTML ? `<div class="modal-body">${body}</div>` : `<p>${esc(body)}</p>`;
   m.innerHTML = `
-    <h3>${title}</h3>
+    <h3>${esc(title)}</h3>
     ${bodyHTML}
-    ${withInput ? `<input type="text" id="modalInput" value="${inputValue.replace(/"/g,'&quot;')}" placeholder="${inputPlaceholder}">` : ''}
+    ${withInput ? `<input type="text" id="modalInput" value="${esc(inputValue)}" placeholder="${esc(inputPlaceholder)}" aria-label="${esc(title)}">` : ''}
     <div class="btn-row">
       ${hideCancel ? '' : `<button id="modalCancel">Annuler</button>`}
-      <button class="${primaryClass}" id="modalOk">${primaryLabel}</button>
+      <button class="${esc(primaryClass)}" id="modalOk">${esc(primaryLabel)}</button>
     </div>
   `;
   bg.classList.add('show');
@@ -4177,7 +4216,7 @@ export function seedJournal() {
   // Mention discrète de la galaxie
   const homeSys = S.galaxy?.systems.find(s => s.distance < 0.8);
   if (homeSys) {
-    log('neutral', `Cartographie locale : nous sommes dans le système <em>${homeSys.name}</em>. Une <em>Antenne longue portée</em> permettra de scanner les voisins.`);
+    log('neutral', `Cartographie locale : nous sommes dans le système <em>${esc(homeSys.name)}</em>. Une <em>Antenne longue portée</em> permettra de scanner les voisins.`);
   }
 }
 
