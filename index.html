@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>DRIFT — Avant-poste</title>
 
+<!-- Sécurité : aucune ressource externe, aucun script inline (tout le JS est
+     dans src/). 'unsafe-inline' pour les styles : l'interface utilise des
+     attributs style="…". -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
+
 <!-- PWA manifest -->
 <link rel="manifest" href="./manifest.json">
 
@@ -306,84 +312,7 @@
 
 <script type="module" src="./src/app.js"></script>
 
-<!-- Service Worker pour la PWA (mode offline + installation) -->
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js')
-        .then((reg) => {
-          console.log('[PWA] Service Worker enregistré, scope :', reg.scope);
-          reg.addEventListener('updatefound', () => {
-            const newWorker = reg.installing;
-            if (!newWorker) return;
-            newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                console.log('[PWA] Nouvelle version disponible. Rechargez pour mettre à jour.');
-              }
-            });
-          });
-        })
-        .catch((err) => console.warn('[PWA] Échec d\'enregistrement du SW :', err));
-    });
-
-    // 0.26 — Quand l'utilisateur clique une notif système, le SW poste un message
-    // pour qu'on navigue vers l'onglet cible
-    navigator.serviceWorker.addEventListener('message', (event) => {
-      if (event.data?.type === 'NOTIF_NAVIGATE' && event.data.target) {
-        const target = event.data.target;
-        // Petit délai pour que l'UI soit prête
-        setTimeout(() => {
-          const tabBtn = document.querySelector(`nav.tabs button[data-tab="${target}"]`);
-          if (tabBtn) tabBtn.click();
-        }, 300);
-      }
-      // Nouvelle version SW installée → rechargement automatique
-      if (event.data?.type === 'SW_UPDATED') {
-        setTimeout(() => window.location.reload(), 800);
-      }
-    });
-  }
-
-  // 0.26 — Si l'app est ouverte avec ?tab=xxx (depuis SW openWindow), bascule sur cet onglet
-  document.addEventListener('DOMContentLoaded', () => {
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    if (tabParam) {
-      setTimeout(() => {
-        const tabBtn = document.querySelector(`nav.tabs button[data-tab="${tabParam}"]`);
-        if (tabBtn) tabBtn.click();
-        // Nettoie l'URL pour ne pas garder le paramètre
-        window.history.replaceState({}, '', window.location.pathname);
-      }, 500);
-    }
-  });
-
-  // Capture l'événement d'installabilité (Android/Chrome principalement)
-  let deferredPrompt = null;
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
-    const btn = document.getElementById('installBtn');
-    if (btn) btn.hidden = false;
-  });
-  document.addEventListener('DOMContentLoaded', () => {
-    const btn = document.getElementById('installBtn');
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        if (!deferredPrompt) return;
-        deferredPrompt.prompt();
-        const result = await deferredPrompt.userChoice;
-        console.log('[PWA] Résultat installation :', result.outcome);
-        deferredPrompt = null;
-        btn.hidden = true;
-      });
-    }
-  });
-  window.addEventListener('appinstalled', () => {
-    console.log('[PWA] DRIFT a été installé.');
-    const btn = document.getElementById('installBtn');
-    if (btn) btn.hidden = true;
-  });
-</script>
+<!-- PWA : service worker, bandeau de mise à jour, notifications, installation -->
+<script type="module" src="./src/pwa.js"></script>
 </body>
 </html>
