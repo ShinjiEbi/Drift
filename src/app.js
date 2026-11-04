@@ -1074,8 +1074,14 @@ export function chronicleEpisodeIntro(body) {
   if (ep.introByFlag) {
     for (const flagKey in ep.introByFlag) {
       const v = flags[flagKey];
-      if (v != null && ep.introByFlag[flagKey][v] != null) {
-        return ep.introByFlag[flagKey][v];
+      const table = ep.introByFlag[flagKey];
+      if (v != null && table[v] != null) {
+        return table[v];
+      }
+      // Flag numérique au-delà des paliers prévus (ex. tone_compris 5) : palier le plus proche en dessous
+      if (typeof v === 'number') {
+        const steps = Object.keys(table).map(Number).filter(n => Number.isFinite(n) && n <= v);
+        if (steps.length) return table[Math.max(...steps)];
       }
     }
   }
@@ -1124,9 +1130,13 @@ export function resolveChronicleText(scene, body) {
   return scene.text || '';
 }
 
-// Marque l'épisode courant comme terminé et passe au suivant
-function endChronicleEpisode(body) {
-  if (!body.chronicle) return;
+// Marque l'épisode courant comme terminé et passe au suivant.
+// exp (optionnel) : l'expédition qui a joué l'épisode — évite de sauter un épisode
+// si une autre expédition a déjà conclu le même entre-temps.
+function endChronicleEpisode(body, exp) {
+  if (!body.chronicle || body.chronicle.completed) return;
+  const playedIdx = exp?.chronicleRef?.episodeIdx;
+  if (typeof playedIdx === 'number' && playedIdx !== body.chronicle.episodeIdx) return;
   body.chronicle.episodeIdx++;
   body.chronicle.currentSceneId = null;
   const c = CHRONICLES[body.chronicle.id];
@@ -1147,8 +1157,9 @@ function endChronicleEpisode(body) {
 
 // Marque la chronique comme terminée avec une fin spécifique
 function endChronicleWith(body, endingId) {
-  if (!body.chronicle) return;
+  if (!body.chronicle || body.chronicle.completed) return;
   body.chronicle.completed = true;
+  body.chronicle.currentSceneId = null;
   body.chronicle.ending = endingId;
   const c = CHRONICLES[body.chronicle.id];
   if (c) {
@@ -1159,39 +1170,54 @@ function endChronicleWith(body, endingId) {
   }
 }
 
-// Construit la séquence de scènes pour l'épisode courant d'une chronique.
-// La séquence démarre par une scène-intro synthétique, puis pose la première
-// scène de l'épisode. Les scènes suivantes seront résolues dynamiquement par
-// le moteur d'expédition via les outcome.next.
-function buildChronicleEpisodeScenes(body, episode) {
-  const introText = chronicleEpisodeIntro(body);
-  // Scène-intro synthétique (générée à la volée)
-  const introScene = {
-    id: '__chron_intro__',
+// Id de la scène-intro synthétique d'un épisode de chronique. Elle n'existe ni
+// dans SCENES ni dans CHRONICLE_SCENES : l'expédition ne stocke que cet id et
+// currentScene() la reconstruit à partir du corps céleste (y compris pour les
+// sauvegardes faites avant ce correctif).
+const CHRON_INTRO_ID = '__chron_intro__';
+
+// Construit la scène-intro de l'épisode courant d'une chronique (ou null)
+function chronicleIntroScene(body) {
+  const episode = currentChronicleEpisode(body);
+  if (!episode) return null;
+  return {
+    id: CHRON_INTRO_ID,
     tags: ['__chronicle_intro__'],
-    text: introText,
+    text: chronicleEpisodeIntro(body) || episode.title || '',
     choices: [
-      { label: "Avancer", outcome: { log: '', next: episode.firstScene } }
+      { label: "Avancer", outcome: { next: episode.firstScene } }
     ]
   };
-  // Marque la chronique pour qu'on sache la première scène à charger
-  body.chronicle.currentSceneId = '__chron_intro__';
-  // La séquence ne contient que l'intro — la suite est résolue dynamiquement
+}
+
+// Vrai si l'expédition joue (ou va jouer) un épisode de chronique
+function isChronicleExpedition(exp) {
+  return !!exp && (!!exp.chronicleSceneId || exp.scenes?.[0] === CHRON_INTRO_ID);
+}
+
+// Construit la séquence de scènes pour l'épisode courant d'une chronique.
+// La séquence ne contient que la scène-intro synthétique : la première scène
+// de l'épisode puis les suivantes sont résolues dynamiquement par le moteur
+// d'expédition via les outcome.next (exp.chronicleSceneId).
+function buildChronicleEpisodeScenes(body) {
+  const introScene = chronicleIntroScene(body);
+  if (!introScene) return null;
+  body.chronicle.currentSceneId = CHRON_INTRO_ID;
   return [introScene];
 }
 
 
 // ---- Sélection des scènes pour une expédition ----
 // Détermine les tags actifs d'une planète et tire 5-10 scènes cohérentes
-function selectExpeditionScenes(body, rng) {
+function selectExpeditionScenes(body, rng, opts = {}) {
   // 0.24 — D'abord, on tente d'attribuer une chronique si pas déjà fait
-  tryAssignChronicle(body);
+  if (!opts.skipChronicle) tryAssignChronicle(body);
   
   // Si la planète a une chronique active avec un épisode à jouer,
   // on remplace la sélection normale par la séquence de l'épisode.
-  const chronEp = currentChronicleEpisode(body);
-  if (chronEp) {
-    return buildChronicleEpisodeScenes(body, chronEp);
+  const chronScenes = opts.skipChronicle ? null : buildChronicleEpisodeScenes(body);
+  if (chronScenes) {
+    return chronScenes;
   }
   
   const tags = [];
@@ -1286,8 +1312,8 @@ function weightedPick(arr, rng) {
 }
 
 // Substitue les variables dans le texte d'une scène
-export function fillTemplate(text, ctx) {
-  return text
+export function fillTemplate(text, ctx = {}) {
+  return String(text ?? '')
     .replace(/\{vaisseau\}/g, ctx.vesselName || 'le vaisseau')
     .replace(/\{planete\}/g, ctx.bodyName || 'la planète')
     .replace(/\{biomeFrag\}/g, BIOMES[ctx.body?.biome]?.frag || '')
@@ -4098,7 +4124,7 @@ export function launchExpedition(args) {
   const scenes = selectExpeditionScenes(r.body, sceneRng);
   // Crée l'expédition
   const exp = {
-    id: 'e_' + Date.now().toString(36),
+    id: 'e_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36) + S.expeditions.length,
     vesselId: args.vesselId,
     bodyId: args.bodyId,
     systemId: r.sys.id,
@@ -4119,6 +4145,11 @@ export function launchExpedition(args) {
     sceneThreatMod: 0,
     equipment: { ...equipment }   // 0.15 — items embarqués
   };
+  // Épisode de chronique : on retient lequel, pour ne pas en sauter un si
+  // plusieurs expéditions visent le même corps
+  if (exp.scenes[0] === CHRON_INTRO_ID) {
+    exp.chronicleRef = { id: r.body.chronicle.id, episodeIdx: r.body.chronicle.episodeIdx };
+  }
   S.expeditions.push(exp);
   const equipNote = equipUnits > 0 ? ` · ${equipUnits} équipement(s) embarqué(s)` : '';
   log('neutral', `Décollage : <em>${r.vessel.name}</em> en route vers <em>${r.body.name}</em>. Voyage : ${fmtMin(r.oneWayMin)}${equipNote}.`);
@@ -4129,7 +4160,19 @@ export function launchExpedition(args) {
 export function tickExpeditions() {
   if (S.expeditions.length === 0) return;
   const completed = [];
-  for (const exp of S.expeditions) {
+  for (const exp of [...S.expeditions]) {
+    if (exp.phase === 'sur_place' && !exp.combat?.active) {
+      // Sur place, l'expédition ne peut qu'attendre une décision
+      if (!exp.awaitingChoice) exp.awaitingChoice = true;
+      // Scène introuvable (données changées, sauvegarde ancienne…) : plutôt que de
+      // bloquer vaisseau et équipage pour toujours, l'équipe rentre.
+      if (!currentScene(exp)) {
+        exp.accumulatedLog.push("Plus rien à explorer ici : l'équipe regagne le vaisseau.");
+        log('warn', `<em>${vesselNameOf(exp)}</em> : mission interrompue sur <em>${bodyOfExpedition(exp)?.name || 'site inconnu'}</em>, retour à l'avant-poste.`);
+        startReturn(exp);
+        continue;
+      }
+    }
     // On ne fait pas avancer le temps quand on attend un choix joueur
     if (exp.phase === 'sur_place' && exp.awaitingChoice) continue;
 
@@ -4159,6 +4202,17 @@ function onArrival(exp) {
   body.visited = true;
   sys.explored = true;
   log('neutral', `<em>${vesselNameOf(exp)}</em> arrive sur <em>${body.name}</em>. Exploration en cours.`);
+  // Épisode de chronique prévu au départ : on vérifie qu'il est toujours jouable
+  // (une autre expédition a pu le conclure ou être en train de le jouer).
+  if (exp.scenes[0] === CHRON_INTRO_ID) {
+    const busy = S.expeditions.some(o => o !== exp && o.bodyId === exp.bodyId && o.phase === 'sur_place' && isChronicleExpedition(o));
+    if (currentChronicleEpisode(body) && !busy) {
+      exp.chronicleRef = { id: body.chronicle.id, episodeIdx: body.chronicle.episodeIdx };
+    } else {
+      exp.scenes = selectExpeditionScenes(body, rngFor(`${exp.seed}|arrivee`), { skipChronicle: true }).map(s => s.id);
+      delete exp.chronicleRef;
+    }
+  }
   // Active la première scène
   exp.sceneIdx = 0;
   exp.awaitingChoice = true;
@@ -4313,14 +4367,14 @@ function vesselNameOf(exp) {
 
 // Récupère la scène active d'une expédition
 export function currentScene(exp) {
+  if (!exp) return null;
   // 0.24 — Support des scènes de chronique : exp.chronicleSceneId peut
   // pointer vers une scène spécifique (résolue dynamiquement par next)
-  if (exp.chronicleSceneId) {
-    const cs = CHRONICLE_SCENES.find(s => s.id === exp.chronicleSceneId);
-    if (cs) return cs;
-  }
-  if (exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
+  if (exp.chronicleSceneId) return findChronicleScene(exp.chronicleSceneId);
+  if (!Array.isArray(exp.scenes) || exp.sceneIdx < 0 || exp.sceneIdx >= exp.scenes.length) return null;
   const sceneId = exp.scenes[exp.sceneIdx];
+  // Scène-intro synthétique d'un épisode de chronique : reconstruite à partir du corps
+  if (sceneId === CHRON_INTRO_ID) return chronicleIntroScene(bodyOfExpedition(exp));
   // Chercher d'abord dans CHRONICLE_SCENES (pour les ID qui y sont)
   const cs = CHRONICLE_SCENES.find(s => s.id === sceneId);
   if (cs) return cs;
@@ -4332,7 +4386,7 @@ export function currentScene(exp) {
 export function isChronicleScene(scene) {
   if (!scene) return false;
   if (scene.chronicleEpisode) return true;
-  if (scene.id === '__chron_intro__') return true;
+  if (scene.id === CHRON_INTRO_ID) return true;
   return false;
 }
 
@@ -4389,8 +4443,8 @@ export function evaluateChoice(exp, choice) {
     for (const k in choice.consume) {
       // L'item est traité plus bas
       if (k === 'item') continue;
-      if (S.res[k] < choice.consume[k]) {
-        return { available: false, reason: `Manque ${RES_LABELS[k]} (${choice.consume[k]})` };
+      if ((S.res[k] || 0) < choice.consume[k]) {
+        return { available: false, reason: `Manque ${RES_LABELS[k] || k} (${choice.consume[k]})` };
       }
     }
   }
@@ -4444,6 +4498,8 @@ export function playChoice(expId, choiceIdx) {
 
   // Détermine l'outcome final
   let outcome = choice.outcome;
+  // Clé de scène pour les tirages (les scènes de chronique gardent toutes sceneIdx = 0)
+  const sceneKey = exp.chronicleSceneId || `sc${exp.sceneIdx}`;
   if (choice.risky) {
     // Jet : 1d10 + meilleur stat dans l'équipe ≥ dc
     const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(c => c && c.statut !== 'mort');
@@ -4494,7 +4550,7 @@ export function playChoice(expId, choiceIdx) {
   }
   // Blueprint : tire un schéma de l'origine demandée et l'ajoute aux items + bibliothèque
   if (outcome.blueprint) {
-    const rng = rngFor(`${exp.seed}|sc${exp.sceneIdx}|${choiceIdx}|bp`);
+    const rng = rngFor(`${exp.seed}|${sceneKey}|${choiceIdx}|bp`);
     let originPool;
     if (outcome.blueprint === 'auto') {
       // tire selon les ruines du corps
@@ -4605,7 +4661,7 @@ export function playChoice(expId, choiceIdx) {
       }
       // Terminer l'épisode (passer au suivant à la prochaine visite)
       if (outcome.endChronicleEpisode) {
-        endChronicleEpisode(body);
+        endChronicleEpisode(body, exp);
         // Fin de l'expé : on rentre
         startReturn(exp);
         render();
@@ -4631,8 +4687,11 @@ function advanceScene(exp) {
   // Si on arrive ici sans next, c'est qu'on est sur une scène intro de chronique
   // ou qu'on doit terminer (cas géré ailleurs).
   if (exp.chronicleSceneId) {
-    // L'outcome ne contenait pas de next : on considère que l'épisode est fini.
-    exp.awaitingChoice = true;
+    // L'outcome ne contenait pas de next : on considère que l'épisode est fini
+    // (rejouer la même scène bloquerait l'équipe dans une boucle).
+    const body = bodyOfExpedition(exp);
+    if (body) endChronicleEpisode(body, exp);
+    startReturn(exp);
     render();
     return;
   }
@@ -5025,6 +5084,9 @@ export function abandonExpedition(expId) {
     return;
   }
   exp.accumulatedLog.push("Retraite décidée par le commandement.");
+  if (isChronicleExpedition(exp) && currentChronicleEpisode(bodyOfExpedition(exp))) {
+    log('neutral', `Chronique interrompue : l'épisode reprendra à la prochaine expédition sur <em>${bodyOfExpedition(exp).name}</em>.`);
+  }
   startReturn(exp);
   render();
 }
