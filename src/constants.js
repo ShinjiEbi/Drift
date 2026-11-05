@@ -91,8 +91,11 @@ export const PACING = {
   LEGACY_GAME_MIN: 10,
 
   // ---- Recrutement et équipage ----
-  RECRUIT_INTERVAL: 5 * HEURE, // un candidat toutes les ~5 h au niveau 1 de la balise
-  RECRUIT_LEVEL_SPEEDUP: 0.3,  // intervalle ÷ (1 + 0,3 × (niveau − 1)) : niv 6 = 2 h
+  // Recrutement lent : 3 candidats par jour au niveau 1 de la balise, 5 au niveau 6.
+  // (Simulation : à 5 h ÷ (1 + 0,3 × (niv − 1)), un joueur régulier comptait 172 colons
+  // au 21e jour et les noms perdaient leur poids.)
+  RECRUIT_INTERVAL: 8 * HEURE, // un candidat toutes les ~8 h au niveau 1 de la balise
+  RECRUIT_LEVEL_SPEEDUP: 0.12, // intervalle ÷ (1 + 0,12 × (niveau − 1)) : niv 6 = 5 h
   RECRUIT_QUEUE: [0, 2, 2, 2, 3, 3, 3], // candidats en attente au plus, par niveau de balise
   RECRUIT_JITTER: 0.25,        // ± 25 % sur l'intervalle
   SALARY_PER_POINT: 40,        // salaire : biomasse par jour réel et par point de prétention
