@@ -47,7 +47,8 @@ export function parseDuree(v) {
 // ============================================================
 //   CONDITIONS — mini-langage interprété
 // ============================================================
-// Littéraux : 12, 0.5, 'texte', vrai/faux (true/false), nul (null), ['a', 'b']
+// Littéraux : 12, 0.5, 'texte', vrai/faux (true/false), nul (null), ['a', 'b'],
+//             durées en temps réel : 45s, 30min, 18h, 3j, 1j12h, 2h30 (en ticks)
 // Opérateurs : == != >= <= > <  dans  &&/et  ||/ou  !/non  ( )
 // Identifiants : drapeau (nu), equipe.science, corps.biome, colonie.res.metal…
 
@@ -58,7 +59,7 @@ const PREC = { '||': 1, '&&': 2, '==': 3, '!=': 3, '>=': 3, '<=': 3, '>': 3, '<'
 export class ErreurCondition extends Error {}
 
 function tokenize(src) {
-  const re = /\s*(?:(-?\d+(?:\.\d+)?)|'([^']*)'|(==|!=|>=|<=|&&|\|\||[<>!()[\],])|([A-Za-z_][\w.:]*))/y;
+  const re = /\s*(?:((?:\d+(?:\.\d+)?(?:min|j|h|s))+\d*)(?![\w.])|(-?\d+(?:\.\d+)?)|'([^']*)'|(==|!=|>=|<=|&&|\|\||[<>!()[\],])|([A-Za-z_][\w.:]*))/y;
   const out = [];
   re.lastIndex = 0;
   while (re.lastIndex < src.length) {
@@ -68,12 +69,17 @@ function tokenize(src) {
       if (/^\s*$/.test(src.slice(at))) break;
       throw new ErreurCondition(`caractère inattendu « ${src.slice(at).trim()[0]} » (position ${at + 1}) dans « ${src} »`);
     }
-    if (m[1] !== undefined) out.push({ t: 'lit', v: Number(m[1]) });
-    else if (m[2] !== undefined) out.push({ t: 'lit', v: m[2] });
-    else if (m[3]) out.push({ t: 'op', v: m[3] });
-    else if (m[4] in LITTERAUX) out.push({ t: 'lit', v: LITTERAUX[m[4]] });
-    else if (m[4] in MOTS) out.push({ t: 'op', v: MOTS[m[4]] });
-    else out.push({ t: 'id', v: m[4] });
+    const [, duree, nombre, texte, op, ident] = m;
+    if (duree !== undefined) {
+      const v = parseDuree(duree);
+      if (!Number.isFinite(v)) throw new ErreurCondition(`durée invalide « ${duree} » dans « ${src} »`);
+      out.push({ t: 'lit', v });
+    } else if (nombre !== undefined) out.push({ t: 'lit', v: Number(nombre) });
+    else if (texte !== undefined) out.push({ t: 'lit', v: texte });
+    else if (op) out.push({ t: 'op', v: op });
+    else if (ident in LITTERAUX) out.push({ t: 'lit', v: LITTERAUX[ident] });
+    else if (ident in MOTS) out.push({ t: 'op', v: MOTS[ident] });
+    else out.push({ t: 'id', v: ident });
   }
   return out;
 }
