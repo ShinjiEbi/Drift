@@ -66,8 +66,9 @@ export const PACING = {
 
   // ---- Expéditions ----
   // aller = EXPED_BASE + distance × EXPED_PER_PC × vitesse du vaisseau
-  // Vedette, système d'origine (0,6 pc) ≈ 11 min l'aller ; navette à 3 pc ≈ 37 min l'aller.
-  EXPED_BASE: 420,
+  // Vedette, système voisin (0,6 pc) ≈ 8 min l'aller : avec le prologue, la
+  // première scène arrive vers la 10e minute. Navette à 3 pc ≈ 33 min l'aller.
+  EXPED_BASE: 180,
   EXPED_PER_PC: 600,
   EXPED_ONSITE: 10 * MIN,      // temps estimé sur place (scènes), pour l'affichage et les vivres
   EXPED_BIO_PER_MEMBER_HOUR: 30, // vivres nominaux (× indice de production, cf. prodIndex)

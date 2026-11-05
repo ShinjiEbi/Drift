@@ -110,7 +110,7 @@ try {
         treatment: frac(S.treatments[0]), vessel: frac(S.vesselBuild), exp: exp ? exp.elapsedMin / exp.oneWayMin : null },
       totals: { build: S.build?.totalMin === st.buildTime(S.build.id, S.build.targetLevel), research: S.research[0]?.totalMin === app.researchDuration(S.research[0].techId),
         vessel: S.vesselBuild?.totalMin === app.vesselBuildDuration(S.vesselBuild.type), fab: S.fabrication[0]?.totalMin === cat.FABRICATIONS[S.fabrication[0].fabId].time * 12,
-        exp: exp?.oneWayMin >= 420 && exp?.oneWayMin <= 6000, training: S.training[0]?.totalMin >= 4 * oldTot.training, treatment: S.treatments[0]?.totalMin >= 4 * oldTot.treatment },
+        exp: exp?.oneWayMin >= 180 && exp?.oneWayMin <= 6000, training: S.training[0]?.totalMin >= 4 * oldTot.training, treatment: S.treatments[0]?.totalMin >= 4 * oldTot.treatment },
       ages: Object.fromEntries(S.crew.map(m => [m.id, app.currentAge(m)])),
       crew: S.crew.map(m => ({ id: m.id, label: app.ancienneteBonus(m).label })),
       timers: S.nextIncidentMin > S.meta.gameMin && S.nextEventMin > S.meta.gameMin
