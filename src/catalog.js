@@ -32,11 +32,15 @@ export const MODULES = {
     // V1 : un filet de métal et de cristal (récupération, recyclage) — aucune
     // ouverture ne peut plus bloquer la partie faute de mine. Pas d'entretien.
     // prodFixed : unités par HEURE RÉELLE (non indexées sur PROD_MULT, sans personnel).
-    prodFixed: () => ({ metal: 250, cristal: 150 }),
+    // Rations de la capsule : 25 biomasse/h couvrent à peu près les salaires de
+    // l'équipage de départ. Simulation d'un joueur qui passe deux fois par jour :
+    // sans elles, la biomasse tombait à zéro dès le premier jour (moral à 0,
+    // soins impayés, morts).
+    prodFixed: () => ({ metal: 250, cristal: 150, biomasse: 25 }),
     // V1 : les couchettes de la capsule d'atterrissage logent l'équipage de départ
     // (3 colons) et un premier renfort ; l'Habitat prend le relais.
     capCrew: () => 4,
-    effect: () => `+250 métal · +150 cristal /h (récupération) · 4 couchettes · débloque les autres modules`
+    effect: () => `+250 métal · +150 cristal · +25 biomasse /h (récupération, rations) · 4 couchettes · débloque les autres modules`
   },
   generateur_solaire: {
     nom: 'Générateur solaire',

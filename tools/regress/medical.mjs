@@ -298,6 +298,23 @@ try {
     ticks(S.treatments[0]?.totalMin || 0);
     return { auto, reserved, cured: worker.statuts.length === 0, backToWork: worker.statut === 'travail', idle: S2pat.statut === 'libre' };
   });
+
+  // V1 — absence juste : un soin vital n'est jamais bloqué par un stock vide
+  await scenario('V1 : blessure grave soignée même sans biomasse ni datacubes', () => {
+    const { app, fresh, mk, ticks } = window.__t;
+    const S = fresh();
+    S.modules.infirmerie = { level: 2 };
+    S.modules.mine_surface = { level: 1 };
+    const doc = mk({ skills: { medecine: 3 } });
+    app.assignMember(doc.id, 'infirmerie', 0);
+    const hurt = mk({ skills: { survie: 1 } });
+    hurt.statuts = [{ key: 'blessure_grave', since: S.meta.gameMin, revealed: true, diagnosed: true, statMod: {} }];
+    S.res.biomasse = 0; S.res.datacubes = 0;
+    const grave = app.canTreat(hurt.id, 'blessure_grave', { assumeAdmitted: true });
+    ticks(60);
+    const treated = !!app.treatmentOf(hurt.id, 'blessure_grave');
+    return { vitalOk: grave.ok === true, treated, noNegative: S.res.biomasse >= 0 };
+  });
 } catch (e) {
   failed++; console.error('  ✗ exception du test : ' + e.message);
 } finally {

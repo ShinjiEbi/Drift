@@ -2204,8 +2204,11 @@ export function canDiagnose(memberId, statusRef, opts = {}) {
   if (waitMin > 0) return { ok:false, reason:`Nouvel examen possible dans ${fmtDuree(waitMin)}`, waitMin };
   // Coût simple : 2 datacubes pour usage labo, sinon 0
   const cost = det.needLab ? { datacubes: 2 } : {};
-  for (const k in cost) {
-    if ((S.res[k] || 0) < cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+  // Statut mortel : l'examen se fait même sans stock (absence juste)
+  if (!estVital(def)) {
+    for (const k in cost) {
+      if ((S.res[k] || 0) < cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+    }
   }
   return { ok:true, member, status, statusIdx, def, doctor, cost };
 }
@@ -2218,7 +2221,7 @@ export function startDiagnostic(memberId, statusRef) {
     return;
   }
   const { member, status, def, doctor, cost } = r;
-  for (const k in cost) S.res[k] -= cost[k];
+  for (const k in cost) S.res[k] = Math.max(0, (S.res[k] || 0) - cost[k]);
   // Diagnostic instantané : le médecin garde son statut (et son poste)
   const success = rollDiagnostic(member.id, status.key, doctor);
   if (success) {
@@ -2263,10 +2266,19 @@ export function canTreat(memberId, statusRef, opts = {}) {
   if ((doctor.skills.medecine || 0) < tdef.requiresMedSkill) {
     return { ok:false, reason:`Médecin avec Médecine ≥ ${tdef.requiresMedSkill} requis` };
   }
-  for (const k in tdef.cost) {
-    if (S.res[k] < tdef.cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+  // Soin vital (statut mortel sans soin) : jamais bloqué par un stock vide ; on
+  // puise ce qui reste (réserves de l'infirmerie). Les autres soins attendent.
+  if (!estVital(def)) {
+    for (const k in tdef.cost) {
+      if (S.res[k] < tdef.cost[k]) return { ok:false, reason:`Ressources insuffisantes (${RES_LABELS[k]})` };
+    }
   }
   return { ok:true, treatment:tdef, doctor, def, status, statusIdx };
+}
+
+// Statut qui tue s'il n'est pas soigné (blessure grave, infection, pathogène…)
+function estVital(def) {
+  return def?.untreated?.become === 'mort';
 }
 
 // statusRef : index dans member.statuts (UI) ou clé du statut
@@ -2287,7 +2299,7 @@ export function startTreatment(memberId, statusRef) {
   duration *= techEffectsAccumulated().treatmentSpeedMult;
   duration = Math.round(duration);
   // Débite les ressources une fois tous les calculs faits (rien n'est perdu en cas d'erreur)
-  for (const k in r.treatment.cost) S.res[k] -= r.treatment.cost[k];
+  for (const k in r.treatment.cost) S.res[k] = Math.max(0, S.res[k] - r.treatment.cost[k]);
   S.treatments.push({
     id: uid('tr'),
     memberId,
