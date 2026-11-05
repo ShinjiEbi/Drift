@@ -226,8 +226,8 @@ jet) **avant** la scène suivante.
 ## 5. Les effets
 
 Une liste **ordonnée** ; chaque effet est un objet à **une seule clé**. Le
-même vocabulaire sert partout (scènes, histoires, et en vague 2 événements,
-incidents, fils rouges).
+même vocabulaire sert partout (scènes, histoires, événements, incidents,
+fils rouges).
 
 | Effet | Exemple | Notes |
 |---|---|---|

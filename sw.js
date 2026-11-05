@@ -27,8 +27,8 @@
 // nouveau cache, même si on oublie de changer la version.
 
 // @generated-start — tools/sw-version.mjs (npm run sw:write)
-const APP_VERSION = '0.33.0';
-const CONTENT_HASH = 'a834397cdfb2';
+const APP_VERSION = '1.0.0';
+const CONTENT_HASH = 'd6f3220432b6';
 const PRECACHE_URLS = [
   './index.html',
   './favicon.ico',

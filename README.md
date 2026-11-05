@@ -18,9 +18,9 @@ src/
   util.js                RNG seedé, $/$$, formats, esc() (échappement HTML), uid()
   catalog.js             données : MODULES, VESSELS, ITEMS, BLUEPRINTS, TECH_TREE,
                          FABRICATIONS, BIOMES, TRAITS, ENEMY_TYPES… (SCENES : réexport du contenu)
-  content/               contenu narratif en données pures (histoires, scènes d'expédition ;
-                         événements, incidents, fils rouges, lore en vague 2) — voir
-                         docs/ecrire-pour-drift.md
+  content/               contenu narratif en données pures : histoires (chroniques),
+                         scènes d'expédition, événements, incidents, fils rouges,
+                         personnages, pages d'archives — voir docs/ecrire-pour-drift.md
   engine/narration.js    moteur narratif : conditions (mini-langage), textes, effets, choix
   chronicles.js          passerelle vers les histoires de content/histoires/
   data-arcs-factions.js  ARCS et FACTION_TYPES

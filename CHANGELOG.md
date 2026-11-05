@@ -1,5 +1,102 @@
 # CHANGELOG
 
+## 1.0.0 — V1
+
+Refonte de la jouabilité, de l'ergonomie et du moteur narratif. DRIFT se joue
+désormais en temps réel, à ouvrir quelques minutes plusieurs fois par jour,
+et tout le contenu (histoires, événements, personnages, lore) est écrit en
+données pures, prêt à être enrichi sans toucher au moteur. Les sauvegardes
+0.33 se chargent et sont converties (schéma 2) : travaux en cours, âges,
+décisions en attente et chroniques sont conservés.
+
+### Prise en main
+
+- Partie neuve : la commandante, 3 colons (pilote, ingénieur, médecin) et une
+  vedette prête à décoller, sans hangar. La première scène arrive vers la
+  10e minute (avant : 2 à 3 h).
+- Prologue « L'atterrissage » : 3 scènes qui apprennent à construire,
+  affecter et envoyer une équipe. On peut le passer.
+- Objectifs visibles (3 au plus), chacun avec un bouton qui mène à l'action.
+- Le Centre de commandement produit un filet de métal, de cristal et de
+  biomasse et offre 4 couchettes : plus aucun début de partie bloqué
+  (avant : 3 ouvertures sur 7).
+
+### Rythme en temps réel
+
+- 1 seconde réelle = 1 tick ; toutes les durées sont réglées dans une seule
+  table (`PACING`). Chantiers d'une minute à plusieurs heures, avec une file
+  de 3 ; recherche de 36 min à 5 h, avec 1 en file ; expéditions d'environ
+  20 à 90 min aller-retour ; épisodes de chronique espacés de 18 h
+  (« La suite est prête »).
+- Un incident toutes les 1 à 2,5 h, un événement toutes les 3 à 6 h.
+- Recrutement lent (3 à 5 candidats par jour) et salaire réellement prélevé :
+  accueillir un colon est une décision.
+
+### Absence juste
+
+- Pendant une absence, seuls les incidents mineurs sont tranchés ; les autres
+  et tous les événements attendent le joueur (file de 3). Un événement est
+  garanti au retour.
+- « Reprise du contact » raconte l'absence : noms, décès et leur cause,
+  chantiers, retours d'expédition (avec leur bilan).
+- Soins automatiques si un soignant est en poste ; un soin vital n'est jamais
+  bloqué par un stock vide ; délais mortels en heures réelles ; une année
+  dure 7 jours.
+- Simulation d'un joueur qui passe 4 fois par jour pendant 21 jours :
+  0 à 1 mort (avant : plus de 100) et environ 5 incidents tranchés par jour
+  (avant : 74 à 105).
+
+### Économie
+
+- Aucun coût au-dessus du stockage atteignable (vérifié par un outil) ;
+  plafonds qui suivent les modules ; techs centrales sans schéma tiré au
+  hasard ; une pénurie d'énergie ralentit réellement la base et s'affiche.
+- Un module endommagé pendant son chantier ne fait plus perdre le niveau
+  payé.
+
+### Expéditions
+
+- Écran de scène : vrais titres, chance de réussite de chaque choix
+  (« 60 % — Vigueur de Vikram »), raison d'un choix indisponible, coûts.
+- Le résultat d'un choix s'affiche avant la scène suivante, et reste lisible
+  si l'app est fermée entre-temps.
+- Bilan au retour : lieu, équipe, gains, blessés, faits marquants.
+- Combat en un geste (« Résolution automatique », ou réglage par défaut) ;
+  le tour par tour reste possible.
+- Lancement en 2 touchers : vaisseau, équipe adaptée au lieu et équipement
+  proposés d'office, durée réelle, coût et risque affichés.
+- Scènes choisies selon le lieu (plus de tempête sans atmosphère) et jamais
+  répétées tant qu'il en reste d'autres.
+
+### Interface
+
+- 5 onglets : Base (tableau de bord « À faire », construction, postes),
+  Équipage, Expéditions, Récits, Labo. Menu « ⋯ » pour les réglages
+  (taille du texte, animations, combat automatique) et la sauvegarde.
+- Messages courts pour les fins de chantier, de recherche et les retours ;
+  badge quand une équipe attend des ordres.
+- Cartes compactes, filtres, « Jour N », durées lisibles (« 2 h 05 »),
+  fenêtres du jeu à la place des `confirm()` du navigateur.
+
+### Récits et lore
+
+- Contenu en données pures dans `src/content/` : 82 scènes d'expédition,
+  6 chroniques, 17 incidents, 25 événements, 5 fils rouges, 3 personnages
+  qui reviennent (Ilya Brenner, Seren Adebayo, Maud Kessler) et 20 pages
+  d'archives.
+- Récits › Archives (pages débloquées par les découvertes) et Annales
+  (mémoire de la partie : fondation, arrivées, décès, premiers contacts,
+  fins de chronique).
+- Les textes s'accordent selon les pronoms des colons.
+- Pour écrire : guide `docs/ecrire-pour-drift.md`, validateur
+  (`npm run check:content`) et lecteur en terminal (`npm run histoire`).
+
+### Outils
+
+- 38 tests de non-régression dans un vrai navigateur, contrôle de
+  l'économie (`tools/check-economy.mjs`), simulateur de joueur
+  (`tools/sim.mjs`) ; la CI vérifie aussi le contenu narratif.
+
 ## 0.33.0 — Grande réparation
 
 Version de correction issue d'un audit complet du jeu (54 problèmes
