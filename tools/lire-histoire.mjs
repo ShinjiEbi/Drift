@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // tools/lire-histoire.mjs — jouer ou parcourir une histoire dans le terminal,
-// sans lancer le jeu ni attendre une expédition.
+// sans lancer le jeu ni attendre une expédition. Un id d'événement, d'incident,
+// de fil rouge ou de page d'archives est lu par tools/lire-colonie.mjs.
 //
 // Usage :
 //   node tools/lire-histoire.mjs                    liste des histoires
@@ -22,17 +23,24 @@ const { contenu: C, vocab: V, N } = await chargerContenu();
 const args = process.argv.slice(2);
 const opt = nom => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : undefined; };
 const flag = nom => args.includes(nom);
-const id = args.find((a, i) => !a.startsWith('--') && !['--equipe', '--objets', '--choix', '--max'].includes(args[i - 1]));
+const id = args.find((a, i) => !a.startsWith('--') && !['--equipe', '--objets', '--choix', '--max', '--monde', '--fois'].includes(args[i - 1]));
 
 const H = C.HISTOIRES;
 if (!id) {
   console.log('Histoires :');
   for (const h of Object.values(H)) console.log(`  ${h.id.padEnd(20)} ${h.titre} — ${h.episodes.length} épisodes, ${Object.keys(h.scenes).length} scènes, ${Object.keys(h.fins).length} fins`);
-  console.log('\nnpm run histoire -- <id> [--tout] [--choix 1,2,1] [--equipe science=3] [--drapeaux]');
+  console.log(await (await import('./lire-colonie.mjs')).listeColonie());
+  console.log('\nnpm run histoire -- <id> [--tout] [--choix 1,2,1] [--equipe science=3] [--drapeaux] [--monde x=1]');
   process.exit(0);
 }
 const h = H[id];
-if (!h) { console.error(`Histoire inconnue « ${id} ». Histoires : ${Object.keys(H).join(', ')}`); process.exit(1); }
+if (!h) {
+  // Événement, incident, fil rouge ou page d'archives (tools/lire-colonie.mjs)
+  const { lireContenuColonie } = await import('./lire-colonie.mjs');
+  if (await lireContenuColonie(id, args)) process.exit(0);
+  console.error(`Contenu inconnu « ${id} ». Histoires : ${Object.keys(H).join(', ')} (npm run histoire pour tout lister)`);
+  process.exit(1);
+}
 
 // ---- Mise en forme terminal ----
 const TTY = process.stdout.isTTY;
