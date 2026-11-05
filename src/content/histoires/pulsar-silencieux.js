@@ -119,7 +119,7 @@ export default histoire({
       texte: "La passerelle est vide, mais les écrans tournent encore. Tu remontes le fil. La station n'orbitait pas pour rien : elle surveillait *quelque chose en bas*. Un signal venait de la surface. Le journal s'arrête net trois mois plus tôt — quelqu'un est descendu et n'est jamais remonté.",
       choix: [
         {
-          label: 'Triangulater la source du signal au sol',
+          label: 'Trianguler la source du signal au sol',
           requiert: 'equipe.science >= 2',
           effets: [
             { texte: "Le signal vient d'un bunker abandonné, dans l'hémisphère sud." },
@@ -154,7 +154,7 @@ export default histoire({
       texte: "La passerelle est vide. Les écrans tournent encore mais tu ne sais pas quoi en faire. Un signal pulse depuis quelque part — surface ou orbite, difficile à dire sans plus d'analyse.",
       choix: [
         {
-          label: 'Triangulater le signal',
+          label: 'Trianguler le signal',
           requiert: 'equipe.science >= 2',
           effets: [
             { texte: 'Source au sol, dans un bunker.' },

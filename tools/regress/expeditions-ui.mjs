@@ -228,6 +228,25 @@ try {
   t.check(!/\b1 dégâts\b/.test(resume.log) && !/\b([2-9]|\d{2,}) dégât\b/.test(resume.log) && /dégâts?/.test(resume.log), 'journal de combat : « 1 dégât », « 3 dégâts »');
   await page.click('#sceneInner [data-scene-continue]');
 
+  // ---- 3b. Choix sans conséquence suivi d'une scène : pas d'écran « Rien de notable » ----
+  {
+    // Scène au format 0.33, convertie à la volée par le moteur : un seul choix, sans effet
+    await page.evaluate(async () => {
+      const cat = await import('./src/catalog.js');
+      if (!cat.SCENES.some(x => x.id === '__avancer__')) cat.SCENES.push({ id: '__avancer__', tags: ['__test__'], text: 'Un couloir.', choices: [{ label: 'Avancer', outcome: {} }] });
+    });
+    const id3 = await prepare(page, ['__avancer__', 'combat_drone_gardien', 'outro_retour']);
+    const vide = await page.evaluate(async id => {
+      const app = await import('./src/app.js');
+      app.playChoice(id, 0);
+      const st = await import('./src/state.js');
+      const e = st.S.expeditions.find(x => x.id === id);
+      return { vu: e?.dernierResultat?.vu, etape: app.sceneStep(id) };
+    }, id3);
+    t.check(vide.vu === true && vide.etape === 'scene', `choix sans conséquence : on passe directement à la scène suivante (${JSON.stringify(vide)})`);
+    await page.evaluate(id => import('./src/app.js').then(app => { const v = app.getSceneView(id); if (v) app.playChoice(id, v.choix.find(c => c.disponible)?.index ?? 0); }), id3);
+  }
+
   // ---- 4. Préférence « combat automatique » : résumé dès l'ouverture ----
   const exp2 = await prepare(page, ['combat_drone_gardien', 'outro_retour'], { ingenierie: 0 });
   await page.evaluate(async id => {

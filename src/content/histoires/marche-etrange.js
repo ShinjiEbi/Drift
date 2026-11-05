@@ -66,7 +66,7 @@ export default histoire({
     {
       titre: 'Le bazar',
       debut: 'ep1_arrivee',
-      intro: "Tu te poses à proximité du signal. Ce n'est pas une ville ni une ruine — c'est un marché. Des tentes hybrides, des stalls de matière non-identifiée, et un mouvement de figures hétéroclites entre les allées. Personne ne semble surpris de te voir. Au contraire : trois marchands s'avancent immédiatement vers ton vaisseau, comme s'ils t'attendaient.",
+      intro: "Tu te poses à proximité du signal. Ce n'est pas une ville ni une ruine — c'est un marché. Des tentes hybrides, des étals de matières non identifiées, et un mouvement de figures hétéroclites entre les allées. Personne ne semble surpris de te voir. Au contraire : trois marchands s'avancent immédiatement vers ton vaisseau, comme s'ils t'attendaient.",
     },
     {
       titre: 'Les transactions',

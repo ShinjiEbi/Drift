@@ -5888,6 +5888,12 @@ export function playChoice(expId, choiceIdx) {
   };
 
   suivreIssue(exp, issue, ctx);
+  // Choix sans texte, sans gain ni perte, sans jet (« Avancer ») et suivi d'une
+  // scène ordinaire : rien à lire, on passe directement à la suite plutôt que
+  // d'afficher « Rien de notable ». (Un combat ou un départ garde son annonce.)
+  const r = exp.dernierResultat;
+  if (r && !r.texte.length && !r.gains.length && !r.pertes.length && !r.jet
+      && exp.phase === 'sur_place' && !exp.combat?.active && exp.awaitingChoice) r.vu = true;
   render();
 }
 
