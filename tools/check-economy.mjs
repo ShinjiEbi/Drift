@@ -179,6 +179,18 @@ for (const t of Object.values(TECH_TREE)) {
   if (t.cost.datacubes > maxCaps.datacubes) violations.push(`Tech ${t.nom} : ${t.cost.datacubes} datacubes > stockage maximal ${maxCaps.datacubes}`);
 }
 for (const t of randomGatedTechs) violations.push(`Tech derrière un schéma aléatoire : ${t}`);
+// Un module qui produit de la biomasse ou de l'énergie n'en coûte pas : ce sont
+// les ressources qu'une colonie peut voir tomber à zéro sans remonter (salaires,
+// entretien), et on doit toujours pouvoir agrandir ce qui en produit. (Métal et
+// cristal ont le filet du Centre de commandement.)
+for (const d of Object.values(MODULES)) {
+  if (!d.prod) continue;
+  for (let l = 1; l <= (d.maxLevel || 1); l++) {
+    const produit = Object.keys(d.prod(l)).filter(k => ['biomasse', 'energie'].includes(k) && (d.prod(l)[k] || 0) > 0);
+    const cout = d.cost(l);
+    for (const k of produit) if ((cout[k] || 0) > 0) violations.push(`${d.nom} niv ${l} : coûte ${cout[k]} ${k}, la ressource qu'il produit`);
+  }
+}
 
 console.log(`Économie : ${items.length} éléments (modules, techs, vaisseaux, fabrications), ${done.size} acquis dans la progression.`);
 console.log(`Stockage maximal atteint : ${RES.map(k => `${k} ${maxCaps[k]}`).join(' · ')}`);

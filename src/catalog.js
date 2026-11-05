@@ -76,11 +76,11 @@ export const MODULES = {
     nom: 'Hydroponie',
     desc: "Bacs scellés, lampes UV, mousses comestibles. L'odeur s'accroche aux vêtements.",
     maxLevel: 6,
-    // 0.27.2 : niv 1 gratuit en biomasse (les graines suffisent). Niv 2+ : 10*(l-1) biomasse.
+    // V1 : aucun coût en biomasse — une colonie à court de vivres doit toujours
+    // pouvoir agrandir ce qui la nourrit (règle vérifiée par check-economy).
     cost: l => ({
       metal: Math.round(60*triCost(l)),
-      cristal: Math.round(30*triCost(l)),
-      biomasse: l > 1 ? 10*(l-1) : 0
+      cristal: Math.round(30*triCost(l))
     }),
     time: buildCurve('hydroponie'),
     prereq: () => ({ commandement: 1 }),
@@ -265,7 +265,8 @@ export const MODULES = {
     maxLevel: 3,
     tier: 2,
     requireTech: 'tech_bioreacteur',
-    cost: l => ({ metal: Math.round(600*triCost(l)/3), cristal: Math.round(500*triCost(l)/3), biomasse: 30*l }),
+    // V1 : pas de biomasse dans le coût (module qui en produit, cf. hydroponie)
+    cost: l => ({ metal: Math.round(600*triCost(l)/3), cristal: Math.round(500*triCost(l)/3) }),
     time: buildCurve('bioreacteur'),
     prereq: () => ({ commandement: 3, hydroponie: 3, laboratoire: 2 }),
     // Production hybride biomasse + datacubes

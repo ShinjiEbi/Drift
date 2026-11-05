@@ -117,6 +117,9 @@ try {
       for (const k of Object.keys(S.res)) S.res[k] = st.capOf(k) * 0.6;
       S.nextIncidentMin = S.meta.gameMin;
       S.nextEventMin = S.meta.gameMin;
+      // Un incident mineur garanti pendant l'absence (le tirage, lui, s'arrête
+      // quand la file des décisions est pleine) : il doit être tranché seul
+      S.pendingChainIncidents.push({ incidentId: 'habitat_anniversaire', triggerAt: S.meta.gameMin + 3600 });
       S.meta.lastTickRealMs = Date.now() - 12 * 3600e3;
       st.save();
       st.lockSaves('test');   // la page ne réécrit plus rien avant le rechargement
