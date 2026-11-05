@@ -112,8 +112,15 @@ try {
     out.shortage = document.querySelector('#dashResources .rs-alert')?.textContent || '';
     out.alertBar = document.querySelector('#alertText').textContent;
     out.recitsBadge = document.querySelector('#recitsBadge').textContent;
-    document.querySelector('#dashAttention [data-goto-body]')?.click();
-    out.chronGo = { v: ui.currentView(), body: document.querySelector('#galaxyContent .bname-big')?.textContent, card: document.querySelector('#galaxyContent .body-chron .bc-title')?.textContent };
+    // « Lancer » : la fenêtre de lancement s'ouvre vers la planète de la chronique
+    document.querySelector('#dashAttention [data-launch-body]')?.click();
+    const chronBody = S.galaxy.systems.find(x => x.distance > 0.8).bodies[0];
+    out.chronGo = {
+      shown: document.querySelector('#modalBg').classList.contains('show') && document.querySelector('#modal').classList.contains('launch-modal'),
+      titre: document.querySelector('#modal h3')?.textContent, body: chronBody.name,
+      card: document.querySelector('#modal .lx-chron')?.textContent.replace(/\s+/g, ' ').trim(),
+    };
+    document.querySelector('#modalBg').classList.remove('show');
     // Équipage : « Soigner » en un geste
     const m = S.crew[0];
     m.statuts.push({ key: Object.keys(app.STATUTS)[0], since: S.meta.gameMin, revealed: true, diagnosed: true });
@@ -149,7 +156,8 @@ try {
   t.check(/Mettre en file/.test(r.queueBtn || '') && r.queue.length === 1 && /Hydroponie/.test(r.queue[0]) && r.queueMax === 'file 1/3', '« Mettre en file » pendant un chantier, file affichée', JSON.stringify([r.queueBtn, r.queue, r.queueMax]));
   t.check(r.queueAfter === 0, 'annulation d\'un chantier en file (cancelQueuedBuild)');
   t.check(r.attn.some(x => /La suite est prête : La Chronique simulée/.test(x.replace(/ /g, ' '))) && r.recitsBadge === '1', 'chronique « La suite est prête » (listChronicles) sur le tableau de bord et en badge', JSON.stringify(r.attn));
-  t.check(r.chronGo.v.sub === 'carte' && !!r.chronGo.body && /Chronique simulée/.test(r.chronGo.card || ''), '« Voir » mène à la planète de la chronique', JSON.stringify(r.chronGo));
+  t.check(r.chronGo.shown && (r.chronGo.titre || '').includes(r.chronGo.body) && /Chronique simulée/.test(r.chronGo.card || '') && /épisode 2\/3/.test(r.chronGo.card || ''),
+    '« Lancer » ouvre le lancement vers la planète de la chronique', JSON.stringify(r.chronGo));
   t.check(/Pénurie d.énergie/.test(r.shortage) && /Pénurie d.énergie/.test(r.alertBar), 'pénurie (shortages) signalée dans les ressources et le bandeau', JSON.stringify([r.shortage, r.alertBar]));
   t.check(r.careBtn === 'Soigner' && r.soigner, '« Soigner » en un geste (soigner)', JSON.stringify(r.careBtn));
   t.check(r.freeAlert && !r.freeAlertVol, 'alerte « sans poste » : les colons volontairement libres sont ignorés (isVoluntarilyFree)');

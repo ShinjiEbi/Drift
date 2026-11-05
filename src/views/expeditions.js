@@ -3,21 +3,22 @@
 // diplomatie.
 
 import { $ } from '../util.js';
-import { RES_LABELS, SKILL_LABELS, BUILD_TIME_MULT } from '../constants.js';
+import { RES_LABELS, SKILL_LABELS, BUILD_TIME_MULT, PACING } from '../constants.js';
 import { VESSELS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS } from '../catalog.js';
 import { FACTION_TYPES } from '../data-arcs-factions.js';
 import {
   S, aliveCrew, describeBody, bodyThreatLevel, bodyRewardLevel, BODY_TYPES, GRAVITES, VIES,
 } from '../state.js';
 import {
-  staffRoleCount, hangarBonuses, canBuildVessel, startVesselBuild,
+  staffRoleCount, hangarBonuses, canBuildVessel, startVesselBuild, fleetCapacity,
   factionStatus, toggleFactionTrade, launchDiplomaticMission, offerGift,
   tradeRequirement, allianceRequirement,
+  sceneStep, unreadReports, expeditionEstimate,
 } from '../app.js';
 import {
   esc, fmtDuree, setHTML, progressHTML, emptyState, nomOf, vesselDef, dayOf, plur,
 } from './common.js';
-import { render, toast, showLaunchModal, openSceneOverlay } from '../ui.js';
+import { render, toast, showLaunchModal, openSceneOverlay, showExpeditionReport } from '../ui.js';
 import { renderStaffPanel } from './equipage.js';
 import { expeditionPhase, chroniclesList } from './base.js';
 
@@ -25,6 +26,72 @@ import { expeditionPhase, chroniclesList } from './base.js';
 //   MISSIONS (expéditions en cours et historique)
 // ============================================================
 const isChronExp = exp => !!exp.chronicleSceneId || exp.scenes?.[0] === '__chron_intro__';
+const colonsDispo = () => (S.crew || []).filter(c => c.statut === 'libre' || c.statut === 'travail').length;
+const RISQUE = ['', 'faible', 'modéré', 'sérieux', 'élevé', 'extrême'];
+const CHRON_ETAT_COURT = { decouverte: 'à découvrir', en_cours: 'en cours', prete: 'la suite est prête', en_attente: 'en attente', terminee: 'achevée' };
+
+// Destinations proposées quand un vaisseau attend à quai : chronique prête ou
+// à découvrir d'abord, puis les sites proches jamais visités ; un site fouillé
+// récemment (butin réduit) passe après.
+export function nearbyDestinations(n = 3) {
+  const chrons = chroniclesList();
+  const busy = new Set((S.expeditions || []).map(e => e.bodyId));
+  const now = S.meta?.gameMin || 0;
+  const out = [];
+  for (const sys of S.galaxy?.systems || []) {
+    if (!sys.scanned) continue;
+    for (const body of sys.bodies || []) {
+      if (busy.has(body.id)) continue;
+      const ch = chrons.find(c => c.lieu?.bodyId === body.id && c.etat !== 'terminee') || null;
+      let score = sys.distance + bodyThreatLevel(body) * 0.25;
+      if (ch?.etat === 'prete' || ch?.etat === 'decouverte') score -= 10;
+      if (!body.visited) score -= 0.5;
+      if (typeof body.lootedAt === 'number' && now - body.lootedAt < PACING.LOOT_RECOVERY) score += 4;
+      out.push({ sys, body, ch, score });
+    }
+  }
+  return out.sort((a, b) => a.score - b.score).slice(0, n);
+}
+
+// Bloc « Destinations proches » : un toucher ouvre le lancement (équipe déjà
+// proposée), un second fait décoller.
+function destinationsHTML(titre) {
+  const vessel = (S.fleet || []).find(v => v.available);
+  if (!vessel || !colonsDispo()) return '';
+  const list = nearbyDestinations(3);
+  if (!list.length) return '';
+  return `<h2 class="eyebrow">${esc(titre)}</h2>
+    <p class="dest-intro">${esc(vessel.name)} (${esc(vesselDef(vessel.type).nom.toLowerCase())}) est prêt${['vedette', 'navette'].includes(vessel.type) ? 'e' : ''} à décoller.</p>
+    <div class="dest-list">${list.map(({ sys, body, ch }) => {
+      const est = expeditionEstimate({ vesselId: vessel.id, bodyId: body.id, crewCount: 2 });
+      const threat = bodyThreatLevel(body);
+      const meta = [esc(sys.name), est ? `aller-retour ${fmtDuree(est.allerRetour)}` : '', `risque ${RISQUE[threat] || threat}`].filter(Boolean).join(' · ');
+      return `<div class="dest-card${ch?.etat === 'prete' ? ' ready' : ''}" data-id="dest:${esc(body.id)}">
+        <div class="dest-main">
+          <div class="dest-name">${esc(body.name)}</div>
+          <div class="dest-meta">${meta}</div>
+          ${ch ? `<div class="dest-chron">Chronique · ${esc(ch.titre)} — ${esc(CHRON_ETAT_COURT[ch.etat] || ch.etat)}</div>` : ''}
+        </div>
+        <button type="button" class="cta-btn dest-go" data-launch-body="${esc(body.id)}" aria-label="Envoyer une équipe vers ${esc(body.name)}">Envoyer</button>
+      </div>`;
+    }).join('')}</div>`;
+}
+
+// Bouton principal d'une mission sur place : ce qui attend le joueur
+function missionAction(exp) {
+  const step = sceneStep(exp.id);
+  const id = esc(exp.id);
+  if (step === 'resultat') return `<button class="cta-btn" data-resume-exp="${id}">Lire le résultat</button>`;
+  if (step === 'bilanCombat') return `<button class="cta-btn" data-resume-exp="${id}">Voir l'issue du combat</button>`;
+  if (step === 'combat') {
+    return `<button class="cta-btn cbt-btn" data-resume-exp="${id}">⚔ Combat en cours · round ${esc(exp.combat.round)}</button>`;
+  }
+  if (step === 'scene' && exp.awaitingChoice) {
+    const where = isChronExp(exp) ? 'chronique' : `scène ${esc(Number(exp.sceneIdx) + 1)} sur ${esc(exp.scenes?.length || '?')}`;
+    return `<button class="cta-btn" data-resume-exp="${id}">Reprendre · ${where}</button>`;
+  }
+  return '';
+}
 
 export function renderExpeditions() {
   const sub = $('#expSub');
@@ -32,57 +99,101 @@ export function renderExpeditions() {
   const histHead = $('#expHistoryHead');
   const hist = $('#expHistoryList');
   const exps = S.expeditions || [];
-  const waiting = exps.filter(e => e.phase === 'sur_place' && e.awaitingChoice);
+  // Attend le joueur : décision sur place, ou résultat pas encore lu
+  const attend = exp => (exp.phase === 'sur_place' && exp.awaitingChoice) || ['resultat', 'bilanCombat'].includes(sceneStep(exp.id));
+  const waiting = exps.filter(attend);
+  const unread = unreadReports();
 
-  if (exps.length === 0) {
-    setHTML(sub, S.modules.hangar ? 'Aucune expédition en cours.' : 'Il faut un hangar et un vaisseau pour partir.');
-    setHTML(active, S.modules.hangar
-      ? emptyState('Aucune équipe dehors. Choisis une destination sur la carte.', { goto: 'expeditions/carte', label: 'Ouvrir la carte' })
-      : emptyState('Aucun hangar : l\'avant-poste reste cloué au sol.', { goto: 'base/construction', cible: 'hangar', label: 'Construire le hangar' }));
-  } else {
-    setHTML(sub, `${plur(exps.length, 'expédition')} en cours${waiting.length ? ` · <b class="warn-txt">${plur(waiting.length, 'décision attendue', 'décisions attendues')}</b>` : ''}`);
-    // Celles qui attendent une décision d'abord
-    const sorted = exps.slice().sort((a, b) => (b.awaitingChoice && b.phase === 'sur_place') - (a.awaitingChoice && a.phase === 'sur_place'));
-    setHTML(active, sorted.map(exp => {
+  const subParts = [];
+  if (exps.length) subParts.push(`${plur(exps.length, 'expédition')} en cours`);
+  else subParts.push('Aucune expédition en cours');
+  if (waiting.length) subParts.push(`<b class="warn-txt">${plur(waiting.length, 'équipe attend', 'équipes attendent')} tes ordres</b>`);
+  if (unread.length) subParts.push(`${plur(unread.length, 'bilan', 'bilans')} à lire`);
+  setHTML(sub, subParts.join(' · '));
+
+  let html = '';
+  // Retours pas encore lus (y compris pendant une absence) : bilan en un toucher
+  if (unread.length) {
+    html += `<div class="return-list">${unread.slice(0, 4).map(h => `
+      <div class="return-card" data-id="ret:${esc(h.expId)}">
+        <div class="rc-text">
+          <div class="rc-kicker">Retour · bilan à lire</div>
+          <div class="rc-title">${esc(h.bodyName)}</div>
+          <div class="rc-meta">${esc(h.vesselName)} · Jour ${dayOf(h.finishedAt)}${h.result?.outcomeKind === 'warn' ? ' · <span class="warn-txt">pertes</span>' : ''}</div>
+        </div>
+        <button type="button" class="cta-btn rc-go" data-bilan="${esc(h.expId)}">Lire le bilan</button>
+      </div>`).join('')}</div>`;
+  }
+  if (exps.length) {
+    // Celles qui attendent le joueur d'abord, puis par temps restant
+    const reste = exp => {
+      const ph = expeditionPhase(exp);
+      return exp.phase === 'aller' ? ph.remaining + (exp.oneWayMin || 0) : exp.phase === 'retour' ? ph.remaining : 0;
+    };
+    const sorted = exps.slice().sort((a, b) => (attend(b) - attend(a)) || (reste(a) - reste(b)));
+    html += sorted.map(exp => {
       const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
       const body = sys?.bodies.find(b => b.id === exp.bodyId);
       const vessel = S.fleet.find(v => v.id === exp.vesselId);
       const ph = expeditionPhase(exp);
       const crewNames = exp.crewIds.map(id => esc(S.crew.find(c => c.id === id)?.name || '?')).join(', ');
-      const chron = isChronExp(exp);
-      const sceneLabel = chron ? 'chronique' : `scène ${esc(Number(exp.sceneIdx) + 1)}/${exp.scenes?.length || '?'}`;
-      const awaiting = exp.phase === 'sur_place' && exp.awaitingChoice;
-      let actionBtn = '';
-      if (awaiting) {
-        actionBtn = exp.combat?.active
-          ? `<button class="cta-btn cbt-btn" data-resume-exp="${esc(exp.id)}">⚔ Combat en cours · round ${esc(exp.combat.round)} · ${exp.combat.phase === 'player' ? 'à toi de jouer' : 'phase ennemie'}</button>`
-          : `<button class="cta-btn" data-resume-exp="${esc(exp.id)}">Reprendre la mission · ${sceneLabel}</button>`;
+      const awaiting = attend(exp);
+      let phase, progress = '';
+      if (exp.phase === 'aller') {
+        phase = 'En route';
+        progress = progressHTML(ph.pct, `Arrivée dans ${fmtDuree(ph.remaining)}`);
+      } else if (exp.phase === 'retour') {
+        phase = 'Retour';
+        progress = progressHTML(ph.pct, `De retour à l'avant-poste dans ${fmtDuree(ph.remaining)}`);
+      } else {
+        phase = awaiting ? 'Attend tes ordres' : 'Sur place';
+        const lbl = exp.combat?.active ? `Combat · round ${esc(exp.combat.round)}`
+          : isChronExp(exp) ? 'Chronique' : `Scène ${esc(Number(exp.sceneIdx) + 1)} sur ${esc(exp.scenes?.length || '?')}`;
+        progress = `<div class="eprog"><div class="lbl">${lbl}${awaiting ? ' · l\'équipe attend ta décision' : ''}</div></div>`;
       }
-      const progress = exp.phase === 'sur_place'
-        ? `<div class="eprog"><div class="lbl">${exp.combat?.active ? `⚔ Combat · round ${esc(exp.combat.round)}` : `${chron ? 'Chronique' : `Scène ${esc(Number(exp.sceneIdx) + 1)}/${exp.scenes?.length || '?'}`} · ${awaiting ? 'décision attendue' : 'en cours'}`}</div></div>`
-        : progressHTML(ph.pct, `${Math.floor(ph.pct)} % · reste ${fmtDuree(ph.remaining)}`);
+      const actions = [missionAction(exp)];
+      if (exp.phase === 'retour') actions.push(`<button class="cta-btn ghost" data-bilan="${esc(exp.id)}">Bilan provisoire</button>`);
       return `<div class="expedition-card ${esc(exp.phase)}${awaiting ? ' awaiting' : ''}" data-id="${esc(exp.id)}">
         <div class="ehead">
           <div class="edest">${esc(body?.name || '?')}</div>
-          <div class="ephase">${awaiting ? 'Décision attendue' : ph.label}</div>
+          <div class="ephase">${phase}</div>
         </div>
-        <div class="emeta">${esc(vessel?.name || '?')} · ${sys ? sys.distance.toFixed(2) : '?'} pc · ${plur(exp.crewIds.length, 'membre')}</div>
+        <div class="emeta">${esc(vessel?.name || '?')} · ${sys ? sys.distance.toFixed(2) : '?'} pc · ${plur(exp.crewIds.length, 'membre')}${isChronExp(exp) ? ' · chronique' : ''}</div>
         ${progress}
         <div class="ecrew">${crewNames}</div>
-        ${actionBtn}
+        ${actions.filter(Boolean).join('')}
       </div>`;
-    }).join(''));
+    }).join('');
   }
+  // Un vaisseau à quai : destinations proches, à deux touchers du départ
+  const dest = destinationsHTML(exps.length ? 'Envoyer une autre équipe' : 'Destinations proches');
+  if (dest) {
+    html += dest;
+  } else if (!exps.length) {
+    if (!(S.fleet || []).length) {
+      html += S.modules.hangar
+        ? emptyState('Aucun vaisseau dans la flotte.', { goto: 'expeditions/vaisseaux', label: 'Mettre un vaisseau sur cale' })
+        : emptyState('Plus aucun vaisseau. Un <em>Hangar</em> permet d\'en construire.', { goto: 'base/construction', cible: 'hangar', label: 'Construire le hangar' });
+    } else if (!colonsDispo()) {
+      html += emptyState('Aucun colon disponible pour partir : tous sont occupés, blessés ou en formation.', { goto: 'equipage/personnel', label: 'Voir l\'équipage' });
+    } else {
+      html += emptyState('Aucune destination connue. Une <em>Antenne</em> cartographie les systèmes voisins.', { goto: 'expeditions/carte', label: 'Ouvrir la carte' });
+    }
+  }
+  setHTML(active, html);
+
   if ((S.expHistory || []).length > 0) {
     histHead.hidden = false;
     setHTML(hist, S.expHistory.slice(0, 8).map(h => {
       const cls = h.result?.outcomeKind === 'warn' ? 'warn' : '';
-      return `<div class="exphistory-row ${cls}">
+      const nouveau = h.bilanVu === false;
+      return `<div class="exphistory-row ${cls}${nouveau ? ' unread' : ''}" data-id="h:${esc(h.expId || h.finishedAt)}">
         <div class="h-head">
           <div class="h-dest">${esc(h.bodyName)}</div>
-          <div>Jour ${dayOf(h.finishedAt)}</div>
+          <div>${nouveau ? '<span class="h-new">Nouveau</span> ' : ''}Jour ${dayOf(h.finishedAt)}</div>
         </div>
         <div class="h-summary">${esc(h.vesselName)} · ${plur(Number(h.crewCount) || 0, 'membre')}${h.result?.summary ? ' · ' + esc(h.result.summary) : ''}</div>
+        ${h.bilan && h.expId ? `<button type="button" class="h-bilan" data-bilan="${esc(h.expId)}">Voir le bilan</button>` : ''}
       </div>`;
     }).join(''));
   } else {
@@ -90,7 +201,6 @@ export function renderExpeditions() {
     setHTML(hist, '');
   }
 }
-
 // ============================================================
 //   CARTE (galaxie → système → corps)
 // ============================================================
@@ -99,14 +209,30 @@ function pipBar(value, kind) {
   for (let i = 1; i <= 5; i++) pips.push(`<span class="pip ${i <= value ? 'on' : ''}"></span>`);
   return `<span class="tr-bar ${kind}" role="img" aria-label="${value} sur 5">${pips.join('')}</span>`;
 }
+// Pastille « Chronique » d'un système ou d'un corps, selon l'état le plus
+// pressant de ses chroniques (prête > à découvrir > en cours > en attente > achevée)
+const CHRON_ORDRE = ['prete', 'decouverte', 'en_cours', 'en_attente', 'terminee'];
+const CHRON_CHIP = { prete: 'Chronique : la suite est prête', decouverte: 'Chronique à découvrir', en_cours: 'Chronique en cours', en_attente: 'Chronique en attente', terminee: 'Chronique achevée' };
+function chronChip(chrons) {
+  if (!chrons.length) return '';
+  const etat = CHRON_ORDRE.find(e => chrons.some(c => c.etat === e)) || chrons[0].etat;
+  return `<span class="signal-chip chron ${esc(etat)}">${esc(CHRON_CHIP[etat] || 'Chronique')}</span>`;
+}
+// Système de l'avant-poste : le plus proche (plusieurs systèmes peuvent être à moins de 0,8 pc)
+function homeSystem() {
+  let best = null;
+  for (const s of S.galaxy?.systems || []) if (!best || s.distance < best.distance) best = s;
+  return best;
+}
 function systemChips(sys) {
   const chips = [];
   const hasSignal = sys.bodies.some(b => b.signal && b.signal !== 'aucun');
   const hasRuines = sys.bodies.some(b => b.ruines && b.ruines !== 'aucune');
   const hasDanger = sys.bodies.some(b => b.danger && ['ia_hostile', 'anomalie', 'pathogene'].includes(b.danger));
   const hasLife = sys.bodies.some(b => ['civ_active', 'civ_dechue'].includes(b.vie));
-  const hasChron = sys.bodies.some(b => b.chronicle && !b.chronicle.completed);
-  if (hasChron) chips.push('<span class="signal-chip chron">Chronique</span>');
+  const chrons = chroniclesList().filter(c => c.lieu?.systemId === sys.id);
+  const chip = chronChip(chrons);
+  if (chip) chips.push(chip);
   if (hasSignal) chips.push('<span class="signal-chip signal">Signal</span>');
   if (hasRuines) chips.push('<span class="signal-chip ruins">Ruines</span>');
   if (hasLife) chips.push('<span class="signal-chip life">Vie</span>');
@@ -128,7 +254,7 @@ function renderGalaxyList() {
   const antLvl = S.modules.antenne?.level || 0;
   const range = (1 + antLvl * 1.4).toFixed(1);
   const cards = scanned.map(sys => {
-    const isHome = sys.distance < 0.8;
+    const isHome = sys === homeSystem();
     const cls = isHome ? 'home' : (sys.explored ? 'explored' : '');
     const chips = systemChips(sys);
     return `<div class="system-card ${cls}" data-system-id="${esc(sys.id)}" role="button" tabindex="0">
@@ -151,13 +277,13 @@ function renderGalaxyList() {
 function renderGalaxySystem() {
   const sys = S.galaxy.systems.find(s => s.id === S.ui.currentSystemId);
   if (!sys) { S.ui.galaxyView = 'list'; return renderGalaxyList(); }
-  const isHome = sys.distance < 0.8;
+  const isHome = sys === homeSystem();
   const bodyCards = sys.bodies.map(b => {
     const summary = [
       BIOMES[b.biome]?.nom, ATMOSPHERES[b.atmosphere]?.nom,
       GRAVITES[b.gravite] ? `gravité ${GRAVITES[b.gravite].nom.toLowerCase()}` : null,
     ].filter(Boolean).join(' · ');
-    const chron = b.chronicle && !b.chronicle.completed ? '<span class="signal-chip chron">Chronique</span>' : '';
+    const chron = chronChip(chroniclesList().filter(c => c.lieu?.bodyId === b.id));
     return `<div class="body-card ${b.visited ? 'visited' : ''} ${b.looted ? 'looted' : ''}" data-body-id="${esc(b.id)}" data-type="${esc(b.type)}" role="button" tabindex="0">
       <div class="bcard-head">
         <div class="bname">${esc(b.name)}</div>
@@ -205,17 +331,22 @@ function renderGalaxyBody() {
       ${chron.episodes ? `<div class="bc-meta">Épisode ${esc(chron.episode)}/${esc(chron.episodes)}${chron.prochainDans ? ` · suite dans ${fmtDuree(chron.prochainDans)}` : ''}</div>` : ''}
     </div>`;
   }
+  // Le départ ne demande qu'un vaisseau à quai (la vedette de départ attend sur
+  // l'aire de fortune) ; le hangar ne sert qu'à en construire d'autres.
   let actionHTML;
-  if (!S.modules.hangar) {
-    actionHTML = emptyState('Il faut un <em>Hangar</em> pour engager des expéditions.', { goto: 'base/construction', cible: 'hangar', label: 'Construire le hangar' });
-  } else if (S.fleet.length === 0 && !S.vesselBuild) {
-    actionHTML = emptyState('Aucun vaisseau dans la flotte.', { goto: 'expeditions/vaisseaux', label: 'Mettre un vaisseau sur cale' });
+  if (S.fleet.length === 0 && !S.vesselBuild) {
+    actionHTML = S.modules.hangar
+      ? emptyState('Aucun vaisseau dans la flotte.', { goto: 'expeditions/vaisseaux', label: 'Mettre un vaisseau sur cale' })
+      : emptyState('Plus aucun vaisseau. Un <em>Hangar</em> permet d\'en construire.', { goto: 'base/construction', cible: 'hangar', label: 'Construire le hangar' });
   } else {
     const availV = S.fleet.filter(v => v.available).length;
-    const freeC = S.crew.filter(c => c.statut === 'libre' || c.statut === 'travail').length;
+    const freeC = colonsDispo();
+    const onSite = (S.expeditions || []).some(e => e.bodyId === body.id);
+    const label = chron && (chron.etat === 'prete' || chron.etat === 'decouverte') && !onSite
+      ? `Lancer l'épisode ${chron.episode}` : 'Lancer une expédition';
     if (availV === 0) actionHTML = '<div class="body-action-area">Tous les vaisseaux sont en mission.</div>';
     else if (freeC === 0) actionHTML = '<div class="body-action-area">Aucun membre d\'équipage disponible.</div>';
-    else actionHTML = `<button class="cta-btn" data-galaxy-action="launch" data-body-id="${esc(body.id)}">Lancer une expédition</button>`;
+    else actionHTML = `<button class="cta-btn" data-galaxy-action="launch" data-body-id="${esc(body.id)}">${esc(label)}</button>`;
   }
   return `
     <button class="back-btn" data-galaxy-action="system">${esc(sys.name)}</button>
@@ -271,18 +402,22 @@ export function renderFleet() {
   const list = $('#fleetList');
   const catalogHead = $('#fleetCatalogHead');
   const catalog = $('#fleetCatalog');
+  // Sans hangar, la vedette de départ attend sur l'aire de fortune et peut
+  // partir ; le hangar ne sert qu'à construire d'autres vaisseaux.
   const hangar = S.modules.hangar;
-  if (!hangar) {
-    setHTML(sub, 'Aucun hangar.');
-    setHTML(status, '');
-    setHTML(list, emptyState('Un <em>Hangar</em> abrite les vaisseaux. Il demande un atelier.', { goto: 'base/construction', cible: 'hangar', label: 'Construire le hangar' }));
-    catalogHead.hidden = true;
-    setHTML(catalog, '');
-    return;
-  }
-  const cap = hangar.level;
+  const cap = fleetCapacity();
   const cur = S.fleet.length + (S.vesselBuild ? 1 : 0);
-  setHTML(sub, `Hangar niv. ${esc(cap)} · ${esc(cur)}/${esc(cap)} place${cap > 1 ? 's' : ''} occupée${cur > 1 ? 's' : ''}`);
+  const quai = `<div class="fleet-status">
+    À quai : <b>${S.fleet.filter(v => v.available).length}</b> · En mission : <b>${S.fleet.filter(v => !v.available).length}</b>${S.vesselBuild ? ' · Un vaisseau sur cale' : ''}
+  </div>`;
+  if (!hangar) {
+    setHTML(sub, `Aire de fortune · ${esc(cur)}/${esc(cap)} place${cap > 1 ? 's' : ''} occupée${cur > 1 ? 's' : ''}`);
+    setHTML(status, quai);
+    catalogHead.hidden = true;
+    setHTML(catalog, emptyState('Construire d\'autres vaisseaux demande un <em>Hangar</em> (il demande un atelier).', { goto: 'base/construction', cible: 'hangar', label: 'Construire le hangar' }));
+  } else {
+    setHTML(sub, `Hangar niv. ${esc(hangar.level)} · ${esc(cur)}/${esc(cap)} place${cap > 1 ? 's' : ''} occupée${cur > 1 ? 's' : ''}`);
+  }
   const hb = hangarBonuses();
   const parts = [];
   if (hb.fuelMult < 1) parts.push(`Carburant <b>−${Math.round((1 - hb.fuelMult) * 100)} %</b>`);
@@ -290,9 +425,7 @@ export function renderFleet() {
   const secCount = staffRoleCount('hangar', 'securite');
   if (secCount > 0) parts.push(`Sécurité hangar <b>+${secCount}</b>`);
   const bonusText = parts.length ? parts.join(' · ') : '<span class="none">Aucun bonus actif. Affecte un Mécano de bord ou un Chef pilote.</span>';
-  setHTML(status, renderStaffPanel('hangar', { title: 'Équipe au sol', bonusText }) + `<div class="fleet-status">
-    À quai : <b>${S.fleet.filter(v => v.available).length}</b> · En mission : <b>${S.fleet.filter(v => !v.available).length}</b>${S.vesselBuild ? ' · Un vaisseau sur cale' : ''}
-  </div>`);
+  if (hangar) setHTML(status, renderStaffPanel('hangar', { title: 'Équipe au sol', bonusText }) + quai);
   let html = '';
   if (S.vesselBuild) {
     const def = vesselDef(S.vesselBuild.type);
@@ -333,7 +466,8 @@ export function renderFleet() {
     }).join('');
   }
   setHTML(list, html);
-  const eligible = Object.entries(VESSELS).filter(([, d]) => d.hangarReq <= cap);
+  if (!hangar) return;
+  const eligible = Object.entries(VESSELS).filter(([, d]) => d.hangarReq <= hangar.level);
   if (eligible.length > 0 && cur < cap && !S.vesselBuild) {
     catalogHead.hidden = false;
     setHTML(catalog, eligible.map(([key, def]) => {
@@ -606,9 +740,13 @@ export const ACTIONS = [
       ui.galaxyView = 'system'; ui.currentBodyId = null;
       renderGalaxyAndFocus();
     } else if (act === 'launch') {
-      showLaunchModal(el.dataset.bodyId);
+      showLaunchModal({ bodyId: el.dataset.bodyId });
     }
   }],
+  // Lancement direct vers un corps (destinations proches, chronique prête du tableau de bord…)
+  ['[data-launch-body]', el => showLaunchModal({ bodyId: el.dataset.launchBody })],
+  // Bilan d'une expédition (rentrée ou sur le retour)
+  ['[data-bilan]', el => showExpeditionReport(el.dataset.bilan)],
   ['[data-system-id]', el => {
     const ui = galaxyUI();
     ui.galaxyView = 'system';
