@@ -73,6 +73,9 @@ export const PACING = {
   EXPED_BIO_PER_MEMBER_HOUR: 30, // vivres nominaux (× indice de production, cf. prodIndex)
   FUEL_SCALE: 2,               // carburant nominal (× indice de production)
   LOOT_RECOVERY: 3 * JOUR,     // un site fouillé se reconstitue en 3 jours
+  // Scènes d'exploration par expédition, entre l'arrivée et le départ
+  EXP_SCENES_MIN: 2,
+  EXP_SCENES_MAX: 4,
 
   // ---- Incidents et événements ----
   INCIDENT_FIRST: 25 * MIN,    // premier incident possible (partie neuve)

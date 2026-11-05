@@ -5787,6 +5787,8 @@ h2.eyebrow { margin-top: 22px; }
 .confirm-modal { max-width: 400px; }
 .confirm-modal p { color: var(--text-dim); font-size: 16px; line-height: 1.5; }
 .confirm-modal .btn-row button { flex: 1; }
+.catchup-bilans { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.catchup-bilans button { min-height: 44px; text-align: left; }
 
 /* ----- Taille du texte « grand » (réglage) ----- */
 /* Les tailles du jeu sont en px : on agrandit l'ensemble par zoom (sur body :

@@ -7,7 +7,7 @@ import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import { CHRONICLES, CHRONICLE_SCENES } from './chronicles.js';
 import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$, esc, uid } from './util.js';
 import { S, setS, freshState, computeRates, capOf, buildTime, crewCap, canBuild, startBuild, finishBuild, GRAVITES, VIES, BODY_TYPES, SYS_PREFIXES, GREEK, CONSTELL, genSystemName, POETIC_NAMES, genBodyName, genBody, genSystem, genGalaxy, describeBody, bodyThreatLevel, bodyRewardLevel, FIRST_NAMES, LAST_NAMES, ORIGINS, rollPick, rollWeighted, gaussInt, genName, genStats, genSkills, genTraits, genCandidate, crewUsage, aliveCrew, tickCount, tickOnce, tick, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind, trainingTargetLevel, findInstructor, formationBonuses, save, load, exportSave, importSave, resetGame } from './state.js';
-import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers } from './ui.js';
+import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers, showExpeditionReport } from './ui.js';
 import { notif } from './notifications.js';
 'use strict';
 
@@ -1659,7 +1659,7 @@ function selectExpeditionScenes(body, rng, opts = {}) {
   const picks = [tirer('arrivee') || sceneParId('intro_atterrissage')];
   // Embuscade (faction hostile…) : juste après l'arrivée
   for (const s of compatibles) if (momentDe(s) === 'embuscade' && !used.has(s.id)) { picks.push(s); used.add(s.id); }
-  const n = 2 + Math.floor(rng() * 3);
+  const n = PACING.EXP_SCENES_MIN + Math.floor(rng() * (PACING.EXP_SCENES_MAX - PACING.EXP_SCENES_MIN + 1));
   for (let i = 0; i < n; i++) {
     const s = tirer('exploration');
     if (!s) break;
@@ -7331,6 +7331,12 @@ function showCatchupModal(report) {
          Note : simulation plafonnée à ${OFFLINE_MAX_HOURS} h.
        </p>`
     : '';
+  // Bilans des expéditions rentrées pendant l'absence : un bouton chacun
+  const bilans = unreadReports().slice(-4);
+  const bilansHTML = bilans.length
+    ? `<div class="catchup-bilans">${bilans.map(h =>
+        `<button type="button" class="cta-btn ghost" data-catchup-bilan="${esc(h.expId)}">Bilan : ${esc(h.bilan?.lieu || 'expédition')}</button>`).join('')}</div>`
+    : '';
 
   $('#modal').className = 'modal';   // pas de classe héritée d'une autre fenêtre (incident-modal…)
   showModal({
@@ -7344,6 +7350,7 @@ function showCatchupModal(report) {
       </span>
       ${recitHTML}
       ${summaryHTML}
+      ${bilansHTML}
       ${cappedHTML}
     `,
     bodyIsHTML: true,
@@ -7351,6 +7358,9 @@ function showCatchupModal(report) {
     primaryLabel: "Reprendre",
     onPrimary: () => {}
   });
+  for (const btn of document.querySelectorAll('#modal [data-catchup-bilan]')) {
+    btn.addEventListener('click', () => showExpeditionReport(btn.dataset.catchupBilan));
+  }
 }
 
 // ============================================================
