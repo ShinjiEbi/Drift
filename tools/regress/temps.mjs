@@ -45,6 +45,12 @@ try {
     check(g2 - g1 >= 0 && g2 - g1 <= 2, `retour au premier plan : pas de double simulation (+${g2 - g1})`);
 
     console.log('2. Page gelée 3 h, réveillée en arrière-plan puis affichée');
+    // Un bilan d'expédition pas encore lu : la reprise du contact doit y mener
+    await page.evaluate(async () => {
+      const { S } = await import('./src/state.js');
+      S.expHistory.push({ expId: 'e_bilan_test', bilanVu: false, bilan: { expId: 'e_bilan_test', lieu: 'Lune de test', systeme: 'Test', duree: 1800,
+        equipe: [], gains: { metal: 40 }, objets: [], schemas: [], blesses: [], morts: [], chronique: null, faits: [], final: true } });
+    });
     await setHidden(page, true);
     await page.clock.fastForward(3 * 3600e3);
     const g3 = await gameMin(page);
@@ -56,7 +62,12 @@ try {
     check(Math.abs(g4 - g3 - 3 * 3600) <= 5, `retour : rattrapage des 3 h (+${g4 - g3} min de jeu, attendu ≈ 10800)`);
     const title = await page.textContent('#modal h3').catch(() => '');
     check(/Reprise du contact/.test(title) && await page.$('#modalBg.show'), '« Reprise du contact » affichée');
-    await page.click('#modalOk');
+    const bilanBtn = await page.$('#modal [data-catchup-bilan="e_bilan_test"]');
+    check(!!bilanBtn && /Lune de test/.test(await bilanBtn.textContent()), 'bouton vers le bilan non lu dans la reprise du contact');
+    await bilanBtn?.click();
+    await page.waitForTimeout(200);
+    check(/Lune de test/.test(await page.textContent('#modal').catch(() => '')), 'le bouton ouvre le bilan');
+    await page.evaluate(() => document.querySelector('#modalBg')?.classList.remove('show'));
 
     console.log('3. Horloge système qui recule');
     const g5 = await gameMin(page);

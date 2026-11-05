@@ -181,13 +181,27 @@ export function attentionItems() {
       btn: { label: 'Reprendre', attrs: `data-reprendre="${esc(exp.id)}"` },
     });
   }
+  // Chronique prête : le bouton ouvre directement le lancement vers sa planète
   for (const c of chroniclesList()) {
     if (c.etat !== 'prete') continue;
     items.push({
       key: 'chron:' + c.id,
       titre: `La suite est prête : ${c.titre}`,
       detail: `${c.lieu?.nom || ''}${c.episode ? ` · épisode ${c.episode}${c.episodes ? '/' + c.episodes : ''}` : ''}`,
-      btn: { label: 'Voir', attrs: `data-goto-body="${esc(c.lieu?.bodyId || '')}"` },
+      btn: { label: 'Lancer', attrs: `data-launch-body="${esc(c.lieu?.bodyId || '')}"` },
+    });
+  }
+  // Retours d'expédition (pendant une absence aussi) : bilan à lire
+  const bilans = appCall('unreadReports', [], []) || [];
+  if (bilans.length) {
+    const h = bilans[0];
+    items.push({
+      key: 'bilan:' + h.expId,
+      titre: bilans.length > 1 ? `${bilans.length} retours d'expédition` : `Retour d'expédition : ${h.bodyName}`,
+      detail: bilans.length > 1 ? bilans.slice(0, 3).map(x => x.bodyName).join(', ') : 'Le bilan t\'attend.',
+      btn: bilans.length > 1
+        ? { label: 'Voir', attrs: 'data-goto="expeditions/missions"' }
+        : { label: 'Bilan', attrs: `data-bilan="${esc(h.expId)}"` },
     });
   }
   const wounded = woundedUntreated();

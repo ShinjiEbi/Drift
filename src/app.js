@@ -7,7 +7,7 @@ import { ARCS, FACTION_TYPES } from './data-arcs-factions.js';
 import { CHRONICLES, CHRONICLE_SCENES } from './chronicles.js';
 import { fmt, fmtMin, hashSeed, mulberry32, rngFor, rPick, rWeighted, rInt, $, $$, esc, uid } from './util.js';
 import { S, setS, freshState, computeRates, capOf, buildTime, crewCap, canBuild, startBuild, finishBuild, GRAVITES, VIES, BODY_TYPES, SYS_PREFIXES, GREEK, CONSTELL, genSystemName, POETIC_NAMES, genBodyName, genBody, genSystem, genGalaxy, describeBody, bodyThreatLevel, bodyRewardLevel, FIRST_NAMES, LAST_NAMES, ORIGINS, rollPick, rollWeighted, gaussInt, genName, genStats, genSkills, genTraits, genCandidate, crewUsage, aliveCrew, tickCount, tickOnce, tick, acceptCandidate, refuseCandidate, traitDesc, traitNom, traitKind, trainingTargetLevel, findInstructor, formationBonuses, save, load, exportSave, importSave, resetGame } from './state.js';
-import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers } from './ui.js';
+import { render, toast, log, seedJournal, showLaunchModal, showTrainingModal, showModal, setupNotifHandlers, showExpeditionReport } from './ui.js';
 import { notif } from './notifications.js';
 'use strict';
 
@@ -1663,7 +1663,7 @@ function selectExpeditionScenes(body, rng, opts = {}) {
   const picks = [tirer('arrivee') || sceneParId('intro_atterrissage')];
   // Embuscade (faction hostile…) : juste après l'arrivée
   for (const s of compatibles) if (momentDe(s) === 'embuscade' && !used.has(s.id)) { picks.push(s); used.add(s.id); }
-  const n = 2 + Math.floor(rng() * 3);
+  const n = PACING.EXP_SCENES_MIN + Math.floor(rng() * (PACING.EXP_SCENES_MAX - PACING.EXP_SCENES_MIN + 1));
   for (let i = 0; i < n; i++) {
     const s = tirer('exploration');
     if (!s) break;
@@ -4798,6 +4798,41 @@ export function finishVesselBuild() {
 //                 phase 2c remplacera onsite par scènes interactives
 // ============================================================
 
+// Corps céleste et système d'un id de corps
+function locateBody(bodyId) {
+  for (const sys of S.galaxy?.systems || []) {
+    const body = sys.bodies?.find(b => b.id === bodyId);
+    if (body) return { sys, body };
+  }
+  return null;
+}
+
+// Durées et coûts d'un départ, sans vérifier la disponibilité (écran de lancement).
+// { vesselId | vesselType, bodyId, crewCount } → { oneWayMin, onSiteMin, allerRetour,
+//   totalMin, fuel, bio, def, body, sys } | null. Durées en ticks (secondes réelles).
+// Bonus du hangar et des techs compris ; carburant et vivres indexés sur la production.
+export function expeditionEstimate({ vesselId = null, vesselType = null, bodyId, crewCount = 1 }) {
+  const vessel = vesselId ? S.fleet.find(v => v.id === vesselId) : null;
+  const def = VESSELS[vessel?.type || vesselType];
+  const loc = locateBody(bodyId);
+  if (!def || !loc) return null;
+  const { sys, body } = loc;
+  const hb = hangarBonuses();
+  const tech = techEffectsAccumulated();
+  const oneWaySec = PACING.EXPED_BASE + sys.distance * EXPED_TIME_PER_PC * def.speed * hb.speedMult * tech.vesselSpeedMult;
+  const totalHours = (oneWaySec * 2 + EXPED_ONSITE_MIN) / 3600;
+  const fuel = Math.ceil(sys.distance * def.fuelPerPc * 2 * hb.fuelMult * tech.vesselFuelMult * PACING.FUEL_SCALE * PROD_INDEX);
+  const bio = Math.ceil(totalHours * EXPED_BIOMASSE_PER_HOUR * Math.max(1, crewCount) * tech.expeditionBiomasseMult);
+  return {
+    def, body, sys,
+    oneWayMin: Math.round(oneWaySec),
+    onSiteMin: EXPED_ONSITE_MIN,
+    allerRetour: 2 * Math.round(oneWaySec),
+    totalMin: Math.round(totalHours * 3600),
+    fuel, bio,
+  };
+}
+
 // Pré-vol : valide qu'on peut lancer une expédition
 export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
   const vessel = S.fleet.find(v => v.id === vesselId);
@@ -4806,12 +4841,9 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
   const def = VESSELS[vessel.type];
 
   // Trouve la planète et son système
-  let body = null, sys = null;
-  for (const s of S.galaxy.systems) {
-    const b = s.bodies.find(b => b.id === bodyId);
-    if (b) { body = b; sys = s; break; }
-  }
-  if (!body) return { ok:false, why:'Destination introuvable' };
+  const loc = locateBody(bodyId);
+  if (!loc) return { ok:false, why:'Destination introuvable' };
+  const { body, sys } = loc;
   if (!sys.scanned) return { ok:false, why:'Système non cartographié' };
 
   if (!Array.isArray(crewIds) || crewIds.length === 0) return { ok:false, why:'Aucun équipage sélectionné' };
@@ -4827,25 +4859,140 @@ export function canLaunchExpedition({ vesselId, bodyId, crewIds }) {
     if (isTreatingDoctor(m.id)) return { ok:false, why:`${m.name} assure un traitement en cours` };
   }
 
-  // Calcul coûts (avec bonus Hangar et tech) — V1 : durées en secondes réelles
-  // (décollage + trajet), carburant et vivres indexés sur la production (PROD_INDEX)
-  const hb = hangarBonuses();
-  const tech = techEffectsAccumulated();
-  const oneWaySec = PACING.EXPED_BASE + sys.distance * EXPED_TIME_PER_PC * def.speed * hb.speedMult * tech.vesselSpeedMult;
-  const totalHours = (oneWaySec * 2 + EXPED_ONSITE_MIN) / 3600;
-  const fuel = Math.ceil(sys.distance * def.fuelPerPc * 2 * hb.fuelMult * tech.vesselFuelMult * PACING.FUEL_SCALE * PROD_INDEX);
-  const bio  = Math.ceil(totalHours * EXPED_BIOMASSE_PER_HOUR * crewIds.length * tech.expeditionBiomasseMult);
-
+  // Coûts (bonus du hangar et des techs compris) : cf. expeditionEstimate
+  const est = expeditionEstimate({ vesselId, bodyId, crewCount: crewIds.length });
+  const { fuel, bio } = est;
   if (S.res.energie < fuel) return { ok:false, why:`Carburant insuffisant (${fuel} énergie requis)` };
   if (S.res.biomasse < bio) return { ok:false, why:`Biomasse insuffisante (${bio} requis)` };
 
   return {
     ok: true,
     vessel, def, body, sys,
-    oneWayMin: Math.round(oneWaySec),
-    onSiteMin: EXPED_ONSITE_MIN,
+    oneWayMin: est.oneWayMin,
+    onSiteMin: est.onSiteMin,
     fuel, bio,
-    totalMin: Math.round(totalHours * 3600)
+    totalMin: est.totalMin
+  };
+}
+
+// ---- Départ proposé par défaut (écran de lancement) ----
+// Ce que demandent les scènes possibles d'un lieu : caractéristiques et compétences
+// testées ou exigées, objets consommés ou exigés, risque de combat. Chaque scène
+// compte selon son poids (affinités comprises) ; une histoire en cours sur le
+// corps ajoute toutes ses scènes.
+function besoinsDuLieu(body) {
+  const lire = id => lireEtat(id, { body });
+  const besoins = { carac: {}, competence: {}, objet: {}, combat: 0 };
+  const ajouter = (table, id, w) => { if (id) table[id] = (table[id] || 0) + w; };
+  const scenes = scenesCompatibles(body).map(s => [s, poidsScene(s, lire)]);
+  const h = body?.chronicle?.id && !body.chronicle.completed ? CHRONICLES[body.chronicle.id] : null;
+  if (h) for (const sc of Object.values(h.scenes || {})) scenes.push([sc, 3]);
+  const total = scenes.reduce((n, [, w]) => n + w, 0) || 1;
+  for (const [s, w0] of scenes) {
+    const w = w0 / total;
+    for (const c of s.choix || []) {
+      if (c.test) { ajouter(besoins.carac, c.test.carac, w); ajouter(besoins.competence, c.test.competence, w); }
+      const req = typeof c.requiert === 'string' ? c.requiert : '';
+      for (const m of req.matchAll(/equipe\.carac\.(\w+)/g)) ajouter(besoins.carac, m[1], w);
+      for (const m of req.matchAll(/equipe\.objet\.(\w+)/g)) ajouter(besoins.objet, m[1], w);
+      for (const m of req.matchAll(/equipe\.(\w+)\s*>/g)) if (SKILL_LABELS[m[1]]) ajouter(besoins.competence, m[1], w);
+      for (const id of [].concat(c.consomme || [])) ajouter(besoins.objet, id, w);
+      const effets = [...(c.effets || []), ...(c.test?.reussite || []), ...(c.test?.echec || [])];
+      if (effets.some(e => e && typeof e === 'object' && e.combat)) besoins.combat += w;
+    }
+  }
+  return besoins;
+}
+
+// Apport d'un colon à un besoin : le bonus qu'il aurait au jet (cf. bonusTest du moteur)
+const apportCarac = (m, k) => Math.floor(((m.stats?.[k] ?? 5) - 5) / 2);
+const apportCompetence = (m, k) => m.skills?.[k] || 0;
+
+// Valeur d'une équipe pour un lieu : pour chaque besoin, le meilleur de l'équipe
+// (c'est lui qui fera le jet), plus la force au combat et l'état de santé.
+function valeurEquipe(team, besoins) {
+  if (!team.length) return 0;
+  let v = 0;
+  for (const [k, w] of Object.entries(besoins.carac)) v += w * Math.max(...team.map(m => apportCarac(m, k)));
+  for (const [k, w] of Object.entries(besoins.competence)) v += w * Math.max(...team.map(m => apportCompetence(m, k)));
+  v += besoins.combat * (team.length * 0.6 + Math.max(...team.map(m => apportCompetence(m, 'combat'))) * 0.4);
+  for (const m of team) {
+    v += ((m.sante ?? 100) - 100) / 60;          // un blessé pèse moins
+    if ((m.statuts || []).length) v -= 0.5;
+    if (m.statut === 'libre') v += 0.05;         // sans poste : n'arrête pas un atelier
+  }
+  return v;
+}
+
+// Objets d'équipement utiles au lieu : ceux qu'une scène consomme ou exige,
+// puis (si un combat est possible) trousses de soins, explosifs et armes.
+function equipementUtile(besoins, slots) {
+  const out = {};
+  if (!(slots > 0)) return out;
+  const scores = [];
+  for (const [id, n] of Object.entries(S.inventory || {})) {
+    const def = ITEMS[id];
+    if (!(n > 0) || !def || !['consumable', 'tool', 'weapon'].includes(def.type)) continue;
+    let score = (besoins.objet[id] || 0) * 10;
+    const c = def.combat;
+    if (c && besoins.combat > 0) score += besoins.combat * (c.heal ? 3 : c.aoe ? 2 : 1);
+    else if (c?.heal) score += 0.05;   // une trousse sert toujours
+    if (score > 0) scores.push({ id, score });
+  }
+  scores.sort((a, b) => b.score - a.score);
+  for (const { id } of scores.slice(0, slots)) out[id] = 1;
+  return out;
+}
+
+// Proposition de départ vers un corps : vaisseau disponible, équipe adaptée au
+// lieu, équipement utile. → { vesselId, crewIds, equipment, atouts: [libellés], combat }
+// L'équipe vise 3 colons (dans la limite des places), en laisse si possible un à
+// l'avant-poste, et se réduit si les vivres manquent.
+export function suggestLaunch(bodyId) {
+  const loc = locateBody(bodyId);
+  const vide = { vesselId: null, crewIds: [], equipment: {}, atouts: [], combat: false };
+  if (!loc) return vide;
+  const besoins = besoinsDuLieu(loc.body);
+  const atouts = [
+    ...Object.entries(besoins.carac).map(([k, w]) => [STAT_LABELS[k] || k, w]),
+    ...Object.entries(besoins.competence).map(([k, w]) => [SKILL_LABELS[k] || k, w]),
+  ].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([nom]) => nom);
+  const dispo = S.crew.filter(c => (c.statut === 'libre' || c.statut === 'travail') && !isTreatingDoctor(c.id));
+  const vessels = S.fleet.filter(v => v.available && VESSELS[v.type]);
+  if (!vessels.length) return { ...vide, atouts, combat: besoins.combat > 0 };
+  const cible = places => Math.max(1, Math.min(places, 3, dispo.length > 1 ? dispo.length - 1 : dispo.length));
+  // Vaisseau : carburant suffisant, assez de places pour l'équipe visée, puis le moins gourmand
+  const choix = vessels.map(v => {
+    const def = VESSELS[v.type];
+    const est = expeditionEstimate({ vesselId: v.id, bodyId, crewCount: cible(def.places) });
+    const fuel = est ? est.fuel : Infinity;
+    return { v, def, fuel, ok: fuel <= (S.res.energie || 0) };
+  }).sort((a, b) => (b.ok - a.ok) || (cible(b.def.places) - cible(a.def.places)) || (a.fuel - b.fuel))[0];
+  // Équipe : ajout glouton du colon qui améliore le plus la valeur de l'équipe
+  const team = [];
+  const taille = cible(choix.def.places);
+  while (team.length < taille) {
+    let best = null, bestV = -Infinity;
+    for (const m of dispo) {
+      if (team.includes(m)) continue;
+      const v = valeurEquipe([...team, m], besoins);
+      if (v > bestV) { best = m; bestV = v; }
+    }
+    if (!best) break;
+    team.push(best);
+  }
+  // Vivres insuffisants pour toute l'équipe : on la réduit
+  while (team.length > 1) {
+    const est = expeditionEstimate({ vesselId: choix.v.id, bodyId, crewCount: team.length });
+    if (!est || est.bio <= (S.res.biomasse || 0)) break;
+    team.pop();
+  }
+  return {
+    vesselId: choix.v.id,
+    crewIds: team.map(m => m.id),
+    equipment: equipementUtile(besoins, choix.def.equipSlots || 0),
+    atouts,
+    combat: besoins.combat > 0,
   };
 }
 
@@ -5138,6 +5285,7 @@ function onReturn(exp) {
   S.expHistory.unshift({
     expId: exp.id,
     bilan: exp.bilan,
+    bilanVu: false,     // bilan à lire (liste des missions, tableau de bord) ; cf. markReportRead
     finishedAt: S.meta.gameMin,
     bodyName: body?.name || '?',
     body: body ? { biome: body.biome, ruines: body.ruines, vie: body.vie, type: body.type, atmosphere: body.atmosphere } : null,
@@ -5685,6 +5833,8 @@ export function playChoice(expId, choiceIdx) {
     }
   }
   if (sc.type === 'histoire') exp.histoireEtape = (exp.histoireEtape || 0) + 1;
+  // Un résumé de combat resté non lu ne doit pas réapparaître après ce choix
+  if (exp.combat && !exp.combat.active) exp.combat.vu = true;
   const avant = { loot: { ...exp.accumulatedLoot }, items: exp.accumulatedItems.length };
   const pertes = [];
 
@@ -5733,6 +5883,8 @@ export function playChoice(expId, choiceIdx) {
     pertes: ctx.pertes,
     jet: jet ? { stat: jet.libelle, jet: jet.jet, bonus: jet.bonus, valeur: jet.total, difficulte: jet.difficulte, reussite: jet.reussite, chance: jet.chance, colon: jet.colon?.nom || null } : null,
     acteur: acteur?.nom || null,
+    // L'écran de scène montre ce résultat avant la suite ; marquerResultatVu le passe à true
+    vu: false,
   };
 
   suivreIssue(exp, issue, ctx);
@@ -5750,11 +5902,22 @@ function appliquerSuiteCombat(exp, cas) {
   const effets = suite[cas] || [];
   if (cas === 'victoire') compter('combats_gagnes');
   const ctx = { exp, body, histoire, scene: null, sceneKey: suite.sceneKey, choiceIdx: suite.choiceIdx, lootMult: histoire ? 1 : (exp.lootMult ?? 1), textes: [], gains: [], pertes: [] };
+  const avant = { loot: { ...exp.accumulatedLoot }, items: exp.accumulatedItems.length };
   const issue = appliquerEffets(effets, ctx);
   const envT = envTexte(exp, { body, histoire }, ctx);
+  const source = [];
   for (const t of ctx.textes) {
-    const brut = N.rendreTexte(t, envT).brut.replace(/\n+/g, ' ');
+    const r = N.rendreTexte(t, envT);
+    source.push(...r.paragraphes.map(p => p.source));
+    const brut = r.brut.replace(/\n+/g, ' ');
     if (brut) { exp.accumulatedLog.push(brut); (exp.faits ||= []).push(brut); }
+  }
+  // Récit et gains de la suite, montrés avec le résumé du combat
+  const resume = exp.combat?.resume;
+  if (resume && cas === 'victoire') {
+    resume.texte = source;
+    resume.gains = [...gainsDepuis(avant, exp), ...ctx.gains];
+    resume.pertes = ctx.pertes;
   }
   if (cas === 'defaite') {
     // L'équipe rentre de toute façon ; seule la suite de l'histoire est appliquée
@@ -5863,6 +6026,75 @@ export function expeditionSummary(expId) {
   const exp = S.expeditions.find(e => e.id === expId);
   if (exp) return exp.bilan || construireBilan(exp);
   return (S.expHistory || []).find(h => h.expId === expId)?.bilan || null;
+}
+
+// Bilans de retour pas encore lus (le plus récent d'abord). bilanVu est posé à
+// false au retour (onReturn) ; un historique plus ancien compte comme lu.
+export function unreadReports() {
+  return (S.expHistory || []).filter(h => h && h.bilanVu === false && h.bilan);
+}
+export function markReportRead(expId) {
+  const h = (S.expHistory || []).find(x => x?.expId === expId);
+  if (!h || h.bilanVu !== false) return false;
+  h.bilanVu = true;
+  return true;
+}
+
+// ---- Enchaînement de l'écran de scène ----
+// Étape à montrer pour une expédition :
+//  'resultat'    résultat du dernier choix pas encore lu (exp.dernierResultat.vu === false) ;
+//  'bilanCombat' résumé d'un combat terminé pas encore lu (exp.combat.vu === false) ;
+//  'combat'      combat en cours ;  'scene' scène à jouer ;  null : rien à montrer.
+// Le résultat passe avant tout : il reste affiché (et sauvegardé) tant que le
+// joueur n'a pas touché « Continuer », même si l'équipe est déjà repartie.
+export function sceneStep(expId) {
+  const exp = S.expeditions.find(e => e.id === expId);
+  if (!exp) return null;
+  if (exp.dernierResultat && exp.dernierResultat.vu === false) return 'resultat';
+  if (exp.combat && !exp.combat.active && exp.combat.vu === false) return 'bilanCombat';
+  if (exp.phase !== 'sur_place') return null;
+  if (exp.combat?.active) return 'combat';
+  return sceneCourante(exp) ? 'scene' : null;
+}
+
+// « Continuer » : le résultat (ou le résumé du combat) a été lu. → étape suivante
+export function marquerResultatVu(expId) {
+  const exp = S.expeditions.find(e => e.id === expId);
+  if (!exp) return null;
+  if (exp.dernierResultat && exp.dernierResultat.vu === false) exp.dernierResultat.vu = true;
+  else if (exp.combat && !exp.combat.active && exp.combat.vu === false) exp.combat.vu = true;
+  return sceneStep(expId);
+}
+
+// Résultat du dernier choix, pour l'écran de résultat (même si l'équipe est repartie) :
+// exp.dernierResultat + texteHTML (paragraphes du moteur, déjà sûrs).
+export function lastChoiceResult(expId) {
+  const exp = S.expeditions.find(e => e.id === expId);
+  const r = exp?.dernierResultat;
+  return r ? { ...r, texteHTML: N.htmlDepuisSource(r.texte || []) } : null;
+}
+
+// Résumé d'un combat terminé : { outcome, rounds, butin: [{ id, nom, n }], objets, blesses,
+//   texteHTML (suite de la victoire), gains, pertes, equipe: [{ nom, pv, pvMax }],
+//   ennemis: [{ nom, neutralise }], journal: [lignes marquantes] } | null
+export function combatSummary(expId) {
+  const exp = S.expeditions.find(e => e.id === expId);
+  const cbt = exp?.combat;
+  if (!cbt || cbt.active) return null;
+  const r = cbt.resume || { outcome: cbt.outcome, rounds: cbt.round, butin: {}, objets: [], blesses: [] };
+  return {
+    outcome: r.outcome || cbt.outcome,
+    rounds: r.rounds || cbt.round || 1,
+    butin: Object.entries(r.butin || {}).map(([k, n]) => ({ id: k, nom: RES_LABELS[k] || k, n })),
+    objets: r.objets || [],
+    blesses: r.blesses || [],
+    texteHTML: N.htmlDepuisSource(r.texte || []),
+    gains: r.gains || [],
+    pertes: r.pertes || [],
+    equipe: (cbt.allies || []).map(a => ({ nom: a.name, pv: Math.max(0, a.hp), pvMax: a.maxHp })),
+    ennemis: (cbt.enemies || []).map(e => ({ nom: e.nom, neutralise: e.hp <= 0 })),
+    journal: (cbt.log || []).filter(l => /neutralisé|à terre|soigne|lance|Victoire|Défaite|Retraite/.test(l)).slice(-8),
+  };
 }
 
 // ============================================================
@@ -6091,6 +6323,9 @@ function combatRng(exp, ...parts) {
 
 const isStunned = enemy => (enemy.effects || []).some(e => e.type === 'stunned' && e.turnsLeft > 0);
 
+// « 1 dégât », « 3 dégâts » (journal de combat)
+const degats = n => `${n} dégât${Math.abs(n) > 1 ? 's' : ''}`;
+
 // V1 : l'armure absorbe au plus la moitié d'un coup (fini les combats à coups de 1)
 const armorReduce = (raw, armor) => Math.max(1, Math.ceil(raw / 2), raw - Math.max(0, armor || 0));
 
@@ -6125,7 +6360,7 @@ export function combatAllyAction(expId, allyId, action, targetIdx) {
       const effectiveDmg = armorReduce(rawDmg, effectiveArmor);
       target.hp = Math.max(0, target.hp - effectiveDmg);
       const penNote = (ally.armorPen || 0) > 0 ? ` (pénètre ${ally.armorPen})` : '';
-      cbt.log.push(`${ally.name} → ${target.nom} : ${effectiveDmg} dégâts${penNote}${target.hp <= 0 ? ' — neutralisé !' : '.'}`);
+      cbt.log.push(`${ally.name} → ${target.nom} : ${degats(effectiveDmg)}${penNote}${target.hp <= 0 ? ' — neutralisé !' : '.'}`);
     } else {
       cbt.log.push(`${ally.name} vise ${target.nom} : raté !`);
     }
@@ -6314,10 +6549,10 @@ function _enemyAttack(cbt, enemy, rng) {
       target.shieldHp -= shieldAbsorb;
       const overflow = effectiveDmg - shieldAbsorb;
       if (overflow > 0) target.hp = Math.max(0, target.hp - overflow);
-      cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
+      cbt.log.push(`${enemy.nom} → ${target.name} : ${degats(effectiveDmg)} (bouclier ${shieldAbsorb > 0 ? `absorbe ${shieldAbsorb}` : 'brisé'})${target.hp <= 0 ? ' — à terre !' : '.'}`);
     } else {
       target.hp = Math.max(0, target.hp - effectiveDmg);
-      cbt.log.push(`${enemy.nom} → ${target.name} : ${effectiveDmg} dégâts${target.hp <= 0 ? ' — à terre !' : '.'}`);
+      cbt.log.push(`${enemy.nom} → ${target.name} : ${degats(effectiveDmg)}${target.hp <= 0 ? ' — à terre !' : '.'}`);
     }
   } else {
     cbt.log.push(`${enemy.nom} attaque ${target.name} : ${dodgeChance > 0 && roll < dodgeChance ? 'esquivé !' : 'raté !'}`);
@@ -6381,6 +6616,11 @@ function _addCombatLoot(into, loot) {
 function resolveCombatEnd(exp) {
   const cbt = exp.combat;
   cbt.active = false;
+  // Résumé de fin de combat, montré par l'écran de scène avant la suite
+  // (cbt.vu passe à true via marquerResultatVu). Gardé dans la sauvegarde.
+  const resume = { outcome: cbt.outcome, rounds: cbt.round, butin: {}, objets: [], blesses: [] };
+  cbt.resume = resume;
+  cbt.vu = false;
 
   if (cbt.outcome === 'victory') {
     // Butin : récompense de la scène + dépouilles des ennemis vaincus
@@ -6413,6 +6653,7 @@ function resolveCombatEnd(exp) {
       for (const drop of (def?.itemLoot || [])) {
         if (rng() < drop.chance) {
           exp.accumulatedItems.push(drop.item);
+          resume.objets.push(ITEMS[drop.item]?.nom || drop.item);
           exp.accumulatedLog.push(`Loot : ${ITEMS[drop.item]?.nom || drop.item} récupéré sur ${enemy.nom}.`);
         }
       }
@@ -6421,6 +6662,7 @@ function resolveCombatEnd(exp) {
       const m = S.crew.find(c => c.id === id);
       if (m) m.moral = Math.min(100, m.moral + 5);
     }
+    resume.butin = taken;
     const lootDesc = Object.entries(taken).map(([k, v]) => `+${v} ${RES_LABELS[k]}`).join(', ');
     exp.accumulatedLog.push(`Combat gagné${lootDesc ? ' : ' + lootDesc : ' — zone sécurisée'}.`);
     advanceScene(exp);
@@ -6429,18 +6671,26 @@ function resolveCombatEnd(exp) {
     for (const allyState of cbt.allies) {
       const m = S.crew.find(c => c.id === allyState.id);
       if (!m) continue;
+      let statut = null;
       if (allyState.hp <= 0) {
-        inflictStatus(m, 'blessure_grave', 'combat');
+        statut = 'blessure_grave';
+        inflictStatus(m, statut, 'combat');
         m.sante = Math.max(5, m.sante - 30);
       } else if (allyState.hp < allyState.maxHp * 0.4) {
-        inflictStatus(m, 'blessure_legere', 'combat');
+        statut = 'blessure_legere';
+        inflictStatus(m, statut, 'combat');
         m.sante = Math.max(20, m.sante - 15);
+      }
+      if (statut) {
+        const blesse = { nom: m.name, statut: STATUTS[statut]?.nom || statut };
+        resume.blesses.push(blesse);
+        (exp.blesses ||= []).push(blesse);   // bilan d'expédition
       }
     }
     exp.accumulatedLog.push(cbt.outcome === 'defeat'
       ? "Combat perdu — retraite forcée avec blessés."
       : "Retraite tactique.");
-    startReturn(exp);
+    partir(exp);
   }
 }
 
@@ -6791,6 +7041,12 @@ function showCatchupModal(report) {
          Note : simulation plafonnée à ${OFFLINE_MAX_HOURS} h.
        </p>`
     : '';
+  // Bilans des expéditions rentrées pendant l'absence : un bouton chacun
+  const bilans = unreadReports().slice(-4);
+  const bilansHTML = bilans.length
+    ? `<div class="catchup-bilans">${bilans.map(h =>
+        `<button type="button" class="cta-btn ghost" data-catchup-bilan="${esc(h.expId)}">Bilan : ${esc(h.bilan?.lieu || 'expédition')}</button>`).join('')}</div>`
+    : '';
 
   $('#modal').className = 'modal';   // pas de classe héritée d'une autre fenêtre (incident-modal…)
   showModal({
@@ -6804,6 +7060,7 @@ function showCatchupModal(report) {
       </span>
       ${recitHTML}
       ${summaryHTML}
+      ${bilansHTML}
       ${cappedHTML}
     `,
     bodyIsHTML: true,
@@ -6811,6 +7068,9 @@ function showCatchupModal(report) {
     primaryLabel: "Reprendre",
     onPrimary: () => {}
   });
+  for (const btn of document.querySelectorAll('#modal [data-catchup-bilan]')) {
+    btn.addEventListener('click', () => showExpeditionReport(btn.dataset.catchupBilan));
+  }
 }
 
 // ============================================================

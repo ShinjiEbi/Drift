@@ -11,6 +11,7 @@
 //   → monter en niveau devient économiquement intéressant à chaque palier
 // Ces formules sont utilisées dans les cost: et prod: ci-dessous.
 import { PACING } from './constants.js';
+import { fmtDuree } from './util.js';
 
 const triCost = l => l * (l + 1) / 2;
 // Durée d'un chantier (secondes réelles) : base × croissance^(niveau − 1), cf. PACING.
@@ -156,7 +157,7 @@ export const MODULES = {
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 1*l }),
     flag: 'recrutement',
-    effect: l => `~1 candidat / ${Math.round(24/l)}h jeu · file max ${2*l}`
+    effect: l => `~1 candidat toutes les ${fmtDuree(PACING.RECRUIT_INTERVAL / (1 + PACING.RECRUIT_LEVEL_SPEEDUP * (l - 1)))} · ${PACING.RECRUIT_QUEUE[Math.min(l, PACING.RECRUIT_QUEUE.length - 1)]} en attente au plus`
   },
   quartiers_residentiels: {
     nom: 'Quartiers résidentiels',
