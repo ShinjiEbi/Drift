@@ -99,6 +99,7 @@ try {
     st.S.fleet.forEach(v => { v.available = true; });
     st.S.crew.forEach(m => { if (m.statut === 'travail') m.statut = 'libre'; });
     ui.showLaunchModal(st.S.galaxy.systems[0].bodies[0].id);
+    document.querySelector('#modal .lx-details > summary').click();   // réglages fins (repliés par défaut)
     const big = st.S.fleet.reduce((a, v) => (a && a.type === 'cargo') ? a : v, null);
     document.querySelector(`#modal [data-pick-vessel="${big.id}"]`)?.click();
     const m = document.querySelector('#modal');

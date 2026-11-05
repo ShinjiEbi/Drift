@@ -262,9 +262,10 @@ try {
     overlayShown = await page.evaluate(() => document.querySelector('#sceneOverlay')?.classList.contains('show'));
     if (!overlayShown) break;
     await page.evaluate(() => window.__t.refill());
-    // Clic dans la page : l'overlay peut être redessiné entre la recherche et le clic
+    // Clic dans la page : l'overlay peut être redessiné entre la recherche et le clic.
+    // Un choix, puis son résultat (« Continuer ») avant la scène suivante.
     const clicked = await page.evaluate(() => {
-      const btn = document.querySelector('#sceneInner button[data-choice]:not([disabled])');
+      const btn = document.querySelector('#sceneInner [data-scene-continue], #sceneInner button[data-choice]:not([disabled])');
       if (btn) btn.click();
       return !!btn;
     });

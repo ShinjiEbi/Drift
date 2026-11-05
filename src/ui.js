@@ -11,25 +11,25 @@
 //   common.js       outils partagés (setHTML, formats, accès tolérant à app.js)
 
 import { $, $$, fmt, fmtDuree, esc } from './util.js';
-import { VERSION, RES_LABELS, RESOURCES, SKILL_LIST, SKILL_LABELS, STAT_LABELS } from './constants.js';
-import { MODULES, ITEMS, ITEM_ORIGINS, TECH_TREE, FABRICATIONS, BIOMES, TRAITS } from './catalog.js';
+import { VERSION, RES_LABELS, RESOURCES, SKILL_LIST, SKILL_LABELS } from './constants.js';
+import { MODULES, ITEMS, ITEM_ORIGINS, TECH_TREE, FABRICATIONS, BIOMES } from './catalog.js';
 import {
   getNotifPermission, requestNotifPermission, isPushEnabled, setPushEnabled,
 } from './notifications.js';
 import {
-  S, capOf, crewUsage, bodyThreatLevel, bodyRewardLevel, BODY_TYPES, isCatchingUp,
+  S, capOf, crewUsage, bodyThreatLevel, bodyRewardLevel, BODY_TYPES, isCatchingUp, save,
 } from './state.js';
 // Imports croisés depuis app.js — résolus au runtime grâce aux live bindings
 import {
   memberAssignment, jobsForModule, itemDef,
-  canLaunchExpedition, launchExpedition, abandonExpedition,
-  playChoice, currentScene, evaluateChoice, fillTemplate,
-  activeChronicle, currentChronicleEpisode,
-  combatAllyAction, combatEndTurn, pumpDecisions,
+  canLaunchExpedition, launchExpedition, abandonExpedition, expeditionEstimate, suggestLaunch,
+  playChoice, getSceneView, sceneStep, marquerResultatVu, lastChoiceResult,
+  expeditionSummary, markReportRead,
+  combatAllyAction, combatEndTurn, combatAutoResolve, combatSummary, pumpDecisions,
 } from './app.js';
 import {
   setHTML, safeHTML, nomOf, vesselDef, calendar, pad2,
-  toggleOpen, setFilter, typo,
+  toggleOpen, setFilter, typo, plainText,
 } from './views/common.js';
 import * as Base from './views/base.js';
 import * as Equipage from './views/equipage.js';
@@ -677,6 +677,8 @@ export function prefersReducedMotion() {
 // secondes. Trois au plus à la fois ; un message identique n'est pas répété.
 // Non bloquants : ils ne captent pas les touchers (le contenu dessous reste
 // utilisable) ; le détail est dans le tableau de bord et le journal.
+// opts.action = { label, run } ajoute un bouton (seule zone tactile du
+// message), par exemple « Bilan » au retour d'une expédition.
 const TOAST_MAX = 3;
 export function toast(msg, opts = {}) {
   const host = $('#toast');
@@ -692,10 +694,22 @@ export function toast(msg, opts = {}) {
   span.className = 'toast-text';
   span.textContent = typo(text);
   el.appendChild(span);
+  if (opts.action?.label && typeof opts.action.run === 'function') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-act';
+    btn.textContent = opts.action.label;
+    btn.addEventListener('click', () => {
+      el.remove();
+      opts.action.run();
+    });
+    el.classList.add('has-act');
+    el.appendChild(btn);
+  }
   host.appendChild(el);
   while (host.children.length > TOAST_MAX) host.firstElementChild.remove();
   requestAnimationFrame(() => el.classList.add('show'));
-  const ms = opts.ms || (opts.kind === 'crit' ? 6000 : 4200);
+  const ms = opts.ms || (opts.action ? 9000 : opts.kind === 'crit' ? 6000 : 4200);
   setTimeout(() => {
     el.classList.remove('show');
     setTimeout(() => el.remove(), 350);
@@ -789,17 +803,19 @@ function detectChanges() {
   } else if (newCands.length > 1) {
     msgs.push({ text: `${newCands.length} nouveaux candidats` });
   }
-  // Expéditions : retour, ou décision attendue
+  // Expéditions : retour (avec accès au bilan), ou décision attendue — sauf
+  // pour l'expédition déjà ouverte à l'écran de scène
   for (const [id, p] of Object.entries(prev.exps)) {
     const c = cur.exps[id];
     if (!c) {
-      msgs.push({ text: `Retour d'expédition : ${bodyName(p.bodyId)}` });
-    } else if (c.waiting && !p.waiting) {
+      const back = (S.expHistory || []).some(h => h?.expId === id);
+      msgs.push({ text: `Retour d'expédition : ${bodyName(p.bodyId)}`, kind: 'ok', action: back ? { label: 'Bilan', run: () => showExpeditionReport(id) } : null });
+    } else if (c.waiting && !p.waiting && id !== _activeSceneExpId) {
       msgs.push({ text: `${bodyName(c.bodyId)} : l'équipe attend tes ordres`, kind: 'warn' });
     }
   }
   for (const [id, c] of Object.entries(cur.exps)) {
-    if (!prev.exps[id] && c.waiting) msgs.push({ text: `${bodyName(c.bodyId)} : l'équipe attend tes ordres`, kind: 'warn' });
+    if (!prev.exps[id] && c.waiting && id !== _activeSceneExpId) msgs.push({ text: `${bodyName(c.bodyId)} : l'équipe attend tes ordres`, kind: 'warn' });
   }
   // Chronique : la suite est prête
   for (const [id, c] of Object.entries(cur.chron)) {
@@ -817,7 +833,7 @@ function detectChanges() {
     toast(`${msgs.length} nouvelles de la colonie — le journal en garde la trace`);
     return;
   }
-  for (const m of msgs) toast(m.text, { kind: m.kind });
+  for (const m of msgs) toast(m.text, { kind: m.kind, action: m.action || undefined });
 }
 
 // ============================================================
@@ -955,12 +971,25 @@ export function maybeWelcome({ force = false } = {}) {
 // ============================================================
 //   OVERLAY DE SCÈNE — UI plein écran narratif
 // ============================================================
+// L'écran enchaîne, pour l'expédition ouverte, les étapes données par
+// App.sceneStep : scène à jouer → résultat du choix (« Continuer ») → scène
+// suivante, combat ou départ. Le résultat est gardé dans la sauvegarde
+// (exp.dernierResultat.vu) : rouvrir l'app le remontre tant qu'il n'est pas lu.
+// Chaque nouvel écran repart du haut, donne le focus à son titre et annonce
+// le résultat dans une région aria-live (#sceneLive).
 let _activeSceneExpId = null;
+let _sceneOpener = null;
+let _sceneScreenKey = null;   // écran affiché : un autre écran remet le défilement en haut
+let _combatShown = null;      // combat déjà montré : la résolution auto (préférence) ne joue qu'à l'ouverture
+
+const expById = id => (S.expeditions || []).find(e => e.id === id);
 
 export function openSceneOverlay(expId) {
-  const exp = S.expeditions.find(e => e.id === expId);
-  if (!exp || exp.phase !== 'sur_place' || !exp.awaitingChoice) return;
+  const exp = expById(expId);
+  if (!exp || !sceneStep(expId)) return;
   _activeSceneExpId = expId;
+  _sceneScreenKey = null;
+  _combatShown = null;
   const active = document.activeElement;
   _sceneOpener = active && active !== document.body ? active : null;
   $('#sceneOverlay').classList.add('show');
@@ -969,20 +998,352 @@ export function openSceneOverlay(expId) {
   syncInert();
   renderSceneOverlay();
 }
-let _sceneOpener = null;
 
 // Garde le focus clavier dans l'overlay après chaque ré-affichage
-function focusSceneOverlay() {
+function focusSceneOverlay(target = null) {
   const inner = $('#sceneInner');
-  if (inner && overlayShown() && !modalShown() && !inner.contains(document.activeElement)) {
-    inner.focus({ preventScroll: true });
+  if (!inner || !overlayShown() || modalShown()) return;
+  if (target?.isConnected) { target.focus({ preventScroll: true }); return; }
+  if (!inner.contains(document.activeElement)) inner.focus({ preventScroll: true });
+}
+
+// Région aria-live de l'écran de scène (hors de #sceneInner, qui est réécrit)
+function announce(text) {
+  const overlay = $('#sceneOverlay');
+  if (!overlay) return;
+  let live = $('#sceneLive');
+  if (!live) {
+    live = document.createElement('div');
+    live.id = 'sceneLive';
+    live.className = 'scene-live';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    overlay.appendChild(live);
   }
+  live.textContent = typo(text);
+}
+
+// Affiche un écran ; renvoie true si c'est un nouvel écran (pas un simple
+// ré-affichage). Le focus d'un bouton redessiné est rendu à son équivalent.
+function sceneScreen(key, html, label) {
+  const inner = $('#sceneInner');
+  const active = document.activeElement;
+  let focusSel = null;
+  if (active && inner.contains(active) && active !== inner) {
+    const attr = Array.from(active.attributes).find(a => a.name.startsWith('data-'));
+    if (attr) focusSel = `[${attr.name}="${CSS.escape(attr.value)}"]`;
+  }
+  inner.innerHTML = typo(html);
+  const changed = key !== _sceneScreenKey;
+  _sceneScreenKey = key;
+  if (label) $('#sceneOverlay').setAttribute('aria-label', typo(label));
+  if (changed) $('#sceneOverlay').scrollTop = 0;
+  else if (focusSel) focusSceneOverlay(inner.querySelector(focusSel));
+  return changed;
+}
+
+// « de Vikram », « d’Ana »
+const deNom = nom => (/^[aeiouyàâäéèêëîïôöùûü]/i.test(String(nom)) ? 'd’' : 'de ') + nom;
+const pct = x => `${Math.round((Number(x) || 0) * 100)} %`;
+
+// Système et corps de l'expédition
+function lieuDe(exp) {
+  const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
+  return { sys, body: sys?.bodies.find(b => b.id === exp.bodyId) };
+}
+
+// En-tête commun : lieu, chronique (« Le Pulsar Silencieux · épisode 2/3 »),
+// titre, progression (« Scène 2 sur 5 ») et vaisseau
+function sceneHeaderHTML(exp, { titre, chronique = null, progression = null, sous = '' } = {}) {
+  const { sys, body } = lieuDe(exp);
+  const vessel = S.fleet.find(v => v.id === exp.vesselId);
+  let prog = sous;
+  let dots = '';
+  if (progression?.n) {
+    prog = `Scène ${progression.i} sur ${progression.n}`;
+    dots = Array.from({ length: progression.n }, (_, i) =>
+      `<span class="dot${i + 1 < progression.i ? ' done' : i + 1 === progression.i ? ' current' : ''}"></span>`).join('');
+  } else if (progression?.i) {
+    prog = `Étape ${progression.i}`;
+  }
+  const chronHTML = chronique
+    ? `<div class="sh-chron">${esc(chronique.titre)} · épisode ${esc(chronique.episode)}/${esc(chronique.episodes)}${chronique.titreEpisode ? ` — ${esc(chronique.titreEpisode)}` : ''}</div>`
+    : '';
+  return `<header class="scene-header">
+      <div class="sh-loc">${esc(sys?.name || '?')} › ${esc(body?.name || '?')}</div>
+      ${chronHTML}
+      <h2 class="sh-title" id="sceneTitle" tabindex="-1">${esc(titre || 'Expédition')}</h2>
+      <div class="sh-sub">${[prog, vessel?.name].filter(Boolean).map(x => esc(x)).join(' · ')}</div>
+      ${dots ? `<div class="sh-progress" aria-hidden="true">${dots}</div>` : ''}
+    </header>`;
+}
+
+// Ce qui suit l'écran de résultat (ou le résumé d'un combat)
+function suiteTexte(exp) {
+  if (exp.combat?.active) return 'Contact ennemi : un combat suit.';
+  if (exp.phase !== 'sur_place') {
+    const reste = Math.max(0, (exp.oneWayMin || 0) - (exp.elapsedMin || 0));
+    return `L'équipe regagne le vaisseau · retour dans ${fmtDuree(reste)}.`;
+  }
+  const v = getSceneView(exp.id);
+  if (!v) return '';
+  if (v.progression?.n) return `Ensuite : scène ${v.progression.i} sur ${v.progression.n}.`;
+  return 'La suite de l’histoire t’attend.';
+}
+
+// Gains (vert) et pertes (rouge) d'un choix ou d'un combat
+function effetTexte(e, gain) {
+  const s = gain ? '+' : '−';
+  switch (e.type) {
+    case 'ressource': return `${s}${e.n} ${e.nom}`;
+    case 'objet': return gain ? `Objet : ${e.nom}` : `Objet utilisé : ${e.nom}`;
+    case 'schema': return /^Schéma/.test(e.nom) ? e.nom : `Schéma : ${e.nom}`;
+    case 'moral': return `Moral ${s}${e.n}`;
+    case 'reputation': return `Réputation (${e.nom}) ${s}${e.n}`;
+    case 'recrue': return `Recrue : ${e.nom}`;
+    case 'statut': return e.colon ? `${e.colon} : ${e.nom}` : e.nom;
+    default: return `${e.nom || e.id || '?'}${e.n ? ` ${s}${e.n}` : ''}`;
+  }
+}
+function effetsListe(gains = [], pertes = []) {
+  return [...gains.map(e => ({ gain: true, txt: effetTexte(e, true) })), ...pertes.map(e => ({ gain: false, txt: effetTexte(e, false) }))];
+}
+function effetsHTML(items) {
+  if (!items.length) return '';
+  return `<ul class="sr-effects" aria-label="Conséquences">${items.map(it =>
+    `<li class="${it.gain ? 'gain' : 'perte'}">${esc(it.txt)}</li>`).join('')}</ul>`;
+}
+
+// Bouton « Continuer » et ligne d'actions de bas d'écran
+function suiteHTML(exp) {
+  return `<div class="scene-next">
+      <button type="button" class="scene-continue" data-scene-continue>Continuer</button>
+      <div class="sn-hint">${esc(suiteTexte(exp))}</div>
+    </div>
+    <div class="scene-actions">
+      <span class="scene-info">Le temps de la colonie continue de tourner</span>
+      <button type="button" class="scene-close" data-action-scene="close">Plus tard</button>
+    </div>`;
+}
+
+function renderSceneOverlay() {
+  const expId = _activeSceneExpId;
+  if (!expId) return;
+  const exp = expById(expId);
+  const step = exp ? sceneStep(expId) : null;
+  if (!step) { closeSceneOverlay(); return; }
+  if (step === 'resultat') { renderResultScreen(exp); return; }
+  if (step === 'bilanCombat') { renderCombatSummary(exp); return; }
+  if (step === 'combat') {
+    // Préférence « combat automatique » : résolu dès l'ouverture, puis résumé
+    if (_combatShown !== exp.combat && getPrefs().autoCombat) {
+      _combatShown = exp.combat;
+      autoResolveCombat(expId);
+      return;
+    }
+    _combatShown = exp.combat;
+    renderCombatOverlay(exp);
+    return;
+  }
+  renderSceneScreen(exp);
+}
+
+// ---- Scène à jouer ----
+function choiceHTML(c) {
+  const meta = [];
+  if (c.chance !== null && c.chance !== undefined) {
+    const p = Math.round(c.chance * 100);
+    const cls = p >= 70 ? 'hi' : p >= 40 ? 'mid' : 'lo';
+    const qui = c.test ? `${c.test.libelle}${c.acteur ? ' ' + deNom(c.acteur) : ''}` : (c.acteur || '');
+    meta.push(`<span class="sc-chance ${cls}">${p} % — ${esc(qui)}</span>`);
+  }
+  if (c.cout?.length) {
+    meta.push(`<span class="sc-cost${c.cout.some(x => x.manque) ? ' ko' : ''}">Coût : ${c.cout.map(x => `${esc(x.n)} ${esc(String(x.nom).toLowerCase())}`).join(', ')}</span>`);
+  }
+  if (c.consomme?.length) {
+    const manque = c.consomme.filter(x => !x.embarque);
+    meta.push(`<span class="sc-use${manque.length ? ' ko' : ''}">${manque.length ? 'Nécessite' : 'Consomme'} : ${c.consomme.map(x => esc(x.nom)).join(', ')}${manque.length ? ' (non embarqué)' : ''}</span>`);
+  }
+  if (!c.disponible) {
+    // Raison lisible, sans répéter le coût ni l'objet déjà signalés en rouge
+    const dejaDit = new Set((c.consomme || []).map(x => `Nécessite : ${x.nom}`));
+    const parts = String(c.raison || '').split(' · ').filter(r => r && !dejaDit.has(r) && !(c.cout?.length && /^Manque /.test(r)));
+    if (parts.length || (!c.cout?.some(x => x.manque) && !c.consomme?.some(x => !x.embarque))) {
+      meta.push(`<span class="sc-reason">${esc(parts.join(' · ') || 'Indisponible')}</span>`);
+    }
+  }
+  return `<button type="button" class="scene-choice${c.disponible ? '' : ' locked'}" data-choice="${esc(c.index)}"${c.disponible ? '' : ' disabled'}>
+      <span class="sc-label">${esc(c.label)}</span>${meta.length ? `<span class="sc-meta">${meta.join('')}</span>` : ''}
+    </button>`;
+}
+
+function renderSceneScreen(exp) {
+  const v = getSceneView(exp.id);
+  if (!v) { closeSceneOverlay(); return; }
+  // Équipe : santé de chacun, sur une ligne
+  const team = exp.crewIds.map(id => S.crew.find(c => c.id === id)).filter(Boolean);
+  const teamHTML = team.map(m => {
+    const dead = m.statut === 'mort';
+    return `<span class="st-m${dead ? ' dead' : m.sante < 40 ? ' warn' : ''}">${esc(m.name)} <b>${dead ? 'mort' : esc(m.sante) + ' %'}</b></span>`;
+  }).join('');
+  const equip = Object.entries(exp.equipment || {}).filter(([, n]) => n > 0)
+    .map(([id, n]) => `${esc(ITEMS[id]?.nom || id)}${n > 1 ? ` ×${esc(n)}` : ''}`);
+  const loot = Object.entries(exp.accumulatedLoot || {}).filter(([, n]) => n > 0)
+    .map(([k, n]) => `${RES_LABELS[k] || esc(k)} <b>+${esc(n)}</b>`);
+  const items = (exp.accumulatedItems || []).map(i => esc(itemDef(i)?.nom || i));
+  const journal = (exp.accumulatedLog || []).slice(-6);
+  const html = `
+    ${sceneHeaderHTML(exp, { titre: v.titre, chronique: v.chronique, progression: v.progression })}
+    <div class="scene-body">${v.texteHTML}</div>
+    <div class="scene-choices" role="group" aria-label="Choix">${v.choix.map(choiceHTML).join('')}</div>
+    <div class="scene-status">
+      <div class="ss-row"><span class="lbl">Équipe</span><span class="ss-team">${teamHTML}</span></div>
+      ${equip.length ? `<div class="ss-row"><span class="lbl">Équipement</span><span>${equip.join(' · ')}</span></div>` : ''}
+      <div class="ss-row"><span class="lbl">Cargaison</span><span class="ss-loot">${loot.length || items.length ? [...loot, ...items].join(' · ') : 'rien pour l’instant'}</span></div>
+    </div>
+    ${journal.length ? `<details class="scene-mini-journal"><summary>Journal de mission</summary>${journal.map(l => `<div class="mj-line">› ${safeHTML(l)}</div>`).join('')}</details>` : ''}
+    <div class="scene-actions">
+      <button type="button" class="scene-abandon" data-action-scene="abandon">Retraite anticipée</button>
+      <button type="button" class="scene-close" data-action-scene="close">Reprendre plus tard</button>
+    </div>`;
+  const changed = sceneScreen(`scene:${exp.id}:${v.id}:${exp.sceneIdx}:${exp.histoireEtape || 0}`, html, `Scène : ${v.titre}`);
+  const inner = $('#sceneInner');
+  inner.querySelectorAll('button[data-choice]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      const id = _activeSceneExpId;
+      playChoice(id, parseInt(btn.dataset.choice, 10));
+      save();   // le résultat survit à une fermeture immédiate de l'app
+      renderSceneOverlay();
+    });
+  });
+  hookSceneActions();
+  focusSceneOverlay(changed ? $('#sceneTitle') : null);
+}
+
+// ---- Résultat d'un choix (avant la suite) ----
+function renderResultScreen(exp) {
+  const r = lastChoiceResult(exp.id);
+  if (!r) { closeSceneOverlay(); return; }
+  const v = exp.phase === 'sur_place' ? getSceneView(exp.id) : null;
+  const j = r.jet;
+  const jetHTML = j ? `<div class="sr-jet ${j.reussite ? 'ok' : 'ko'}">
+      <span class="sr-verdict">${j.reussite ? 'Réussi' : 'Raté'}</span>
+      <span class="sr-jet-detail">Jet ${esc(deNom(j.stat))}${j.colon ? ` — ${esc(j.colon)}` : ''} : ${esc(j.jet)} ${j.bonus < 0 ? '−' : '+'} ${esc(Math.abs(j.bonus))} = ${esc(j.valeur)}, il fallait ${esc(j.difficulte)}</span>
+      ${j.chance !== null && j.chance !== undefined ? `<span class="sr-jet-chance">${pct(j.chance)} de chances</span>` : ''}
+    </div>` : '';
+  const effets = effetsListe(r.gains, r.pertes);
+  const html = `
+    ${sceneHeaderHTML(exp, { titre: r.titre, chronique: v?.chronique, sous: 'Résultat' })}
+    <section class="scene-result" aria-labelledby="resChoice">
+      <div class="sr-kicker">Ton choix</div>
+      <h3 class="sr-choice" id="resChoice" tabindex="-1">${esc(r.label)}</h3>
+      ${jetHTML}
+      ${r.texteHTML ? `<div class="scene-body sr-text">${r.texteHTML}</div>` : ''}
+      ${effetsHTML(effets) || (r.texteHTML ? '' : '<p class="sr-none">Rien de notable.</p>')}
+    </section>
+    ${suiteHTML(exp)}`;
+  const changed = sceneScreen(`res:${exp.id}:${r.at}:${r.sceneId}:${r.label}`, html, `Résultat : ${r.label}`);
+  if (changed) {
+    const verdict = j ? (j.reussite ? 'Réussi. ' : 'Raté. ') : '';
+    announce(`${verdict}${plainText(r.texteHTML)} ${effets.map(e => e.txt).join(', ')}`.trim());
+  }
+  hookContinue();
+  hookSceneActions();
+  focusSceneOverlay(changed ? $('#resChoice') : null);
+}
+
+function hookContinue() {
+  $('#sceneInner [data-scene-continue]')?.addEventListener('click', () => {
+    const next = marquerResultatVu(_activeSceneExpId);
+    save();
+    if (!next) closeSceneOverlay();
+    else renderSceneOverlay();
+  });
+}
+
+function hookSceneActions() {
+  $('#sceneInner').querySelectorAll('button[data-action-scene]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const a = btn.dataset.actionScene;
+      if (a === 'close') {
+        closeSceneOverlay();
+      } else if (a === 'abandon') {
+        const expId = _activeSceneExpId;
+        confirmModal({
+          titre: 'Retraite anticipée ?',
+          texte: "L'équipe rentre immédiatement avec ce qu'elle a déjà récupéré.",
+          confirmer: 'Rentrer', annuler: 'Rester', danger: true,
+        }).then(ok => {
+          if (!ok) return;
+          abandonExpedition(expId);
+          closeSceneOverlay();
+        });
+      }
+    });
+  });
 }
 
 // ============================================================
 //   OVERLAY DE COMBAT
 // ============================================================
+// Résolution automatique en un geste (bouton, ou préférence « combat
+// automatique » du menu ⋯) ; le combat tour par tour reste possible.
+// À la fin, un résumé (issue, état de l'équipe, butin, blessures) précède la suite.
 let _pendingCombatAction = null; // { allyId, action } — attend sélection d'une cible
+
+function autoResolveCombat(expId) {
+  const r = combatAutoResolve(expId);
+  save();
+  if (!r?.ok) toast(r?.why || 'Aucun combat en cours');
+  renderSceneOverlay();
+}
+
+const COMBAT_ISSUE = { victory: 'Victoire', defeat: 'Défaite', retreat: 'Retraite' };
+
+function renderCombatSummary(exp) {
+  const r = combatSummary(exp.id);
+  if (!r) { closeSceneOverlay(); return; }
+  const issue = COMBAT_ISSUE[r.outcome] || 'Combat terminé';
+  const neutralises = r.ennemis.filter(e => e.neutralise).length;
+  const ennemis = r.ennemis.length === 1
+    ? `${r.ennemis[0].nom} ${r.ennemis[0].neutralise ? 'neutralisé' : 'toujours debout'}`
+    : `${neutralises} ennemi${neutralises > 1 ? 's' : ''} neutralisé${neutralises > 1 ? 's' : ''} sur ${r.ennemis.length}`;
+  const teamHTML = r.equipe.map(a => {
+    const p = a.pvMax > 0 ? Math.max(0, Math.min(100, a.pv / a.pvMax * 100)) : 0;
+    const cls = a.pv <= 0 ? 'dead' : p < 30 ? 'crit' : p < 60 ? 'low' : '';
+    return `<li class="cs-ally${a.pv <= 0 ? ' down' : ''}">
+        <span class="cs-name">${esc(a.nom)}</span>
+        <span class="cbt-hp-bar" aria-hidden="true"><span class="cbt-hp-fill ${cls}" style="width:${p.toFixed(0)}%"></span></span>
+        <span class="cs-hp">${a.pv <= 0 ? 'à terre' : `${esc(a.pv)}/${esc(a.pvMax)} PV`}</span>
+      </li>`;
+  }).join('');
+  const effets = [
+    ...r.butin.map(b => ({ gain: true, txt: `+${b.n} ${b.nom}` })),
+    ...r.objets.map(o => ({ gain: true, txt: `Objet : ${o}` })),
+    ...effetsListe(r.gains, r.pertes),
+    ...r.blesses.map(b => ({ gain: false, txt: `${b.nom} : ${b.statut}` })),
+  ];
+  const html = `
+    <div class="cbt-header">
+      <span class="cbt-title">Combat terminé</span>
+      <span class="cbt-phase-lbl ended">${esc(issue)}</span>
+    </div>
+    <section class="cbt-summary ${esc(r.outcome || '')}" aria-labelledby="cbtIssue">
+      <h2 class="cs-issue" id="cbtIssue" tabindex="-1">${esc(issue)}</h2>
+      <div class="cs-meta">${r.rounds > 1 ? `En ${esc(r.rounds)} rounds` : 'En un round'} · ${esc(ennemis)}</div>
+      <ul class="cs-team" aria-label="État de l'équipe">${teamHTML}</ul>
+      ${r.texteHTML ? `<div class="scene-body sr-text">${r.texteHTML}</div>` : ''}
+      ${effetsHTML(effets)}
+      ${r.journal.length ? `<details class="cs-log"><summary>Moments du combat</summary>${r.journal.map(l => `<div class="cbt-log-line">${safeHTML(l)}</div>`).join('')}</details>` : ''}
+    </section>
+    ${suiteHTML(exp)}`;
+  const changed = sceneScreen(`cbt-end:${exp.id}:${r.outcome}:${r.rounds}:${(exp.combat?.log || []).length}`, html, `Combat : ${issue}`);
+  if (changed) announce(`${issue}. ${ennemis}. ${effets.map(e => e.txt).join(', ')}`.trim());
+  hookContinue();
+  hookSceneActions();
+  focusSceneOverlay(changed ? $('#cbtIssue') : null);
+}
 
 function renderCombatOverlay(exp) {
   const cbt = exp.combat;
@@ -1000,7 +1361,7 @@ function renderCombatOverlay(exp) {
       `<span class="cbt-pa-dot ${i < a.pa ? 'active' : ''}"></span>`
     ).join('');
     const sel = a.id === cbt.selectedAllyId ? 'selected' : '';
-    const coverActive = a.effects.some(e => e.type === 'cover');
+    const coverActive = (a.effects || []).some(e => e.type === 'cover');
     const shieldBar = a.maxShieldHp > 0
       ? `<div class="cbt-shield-bar"><div class="cbt-shield-fill" style="width:${Math.max(0, a.shieldHp / a.maxShieldHp * 100)}%"></div></div>
          <div class="cbt-hp-txt cbt-shield-txt">⚡${esc(a.shieldHp)}/${esc(a.maxShieldHp)} Bouclier</div>`
@@ -1027,7 +1388,7 @@ function renderCombatOverlay(exp) {
     </div>`;
   }).join('');
 
-  // Journal (6 dernières lignes)
+  // Journal (7 dernières lignes)
   const logHTML = cbt.log.slice(-7).map(l =>
     `<div class="cbt-log-line">${safeHTML(l)}</div>`
   ).join('');
@@ -1053,7 +1414,7 @@ function renderCombatOverlay(exp) {
         <button class="cbt-action" data-cbt-act="attack" ${ally.pa < 1 ? 'disabled' : ''} title="Attaque standard · 1 PA">
           Attaquer <span class="cbt-act-cost">1 PA</span>
         </button>
-        <button class="cbt-action" data-cbt-act="precise" ${ally.pa < 2 ? 'disabled' : ''} title="+20% précision, +2 dégâts · 2 PA">
+        <button class="cbt-action" data-cbt-act="precise" ${ally.pa < 2 ? 'disabled' : ''} title="+20 % précision, +2 dégâts · 2 PA">
           Tir ciblé <span class="cbt-act-cost">2 PA</span>
         </button>
         <button class="cbt-action" data-cbt-act="cover" ${ally.pa < 1 ? 'disabled' : ''} title="+3 armure ce round · 1 PA">
@@ -1062,8 +1423,8 @@ function renderCombatOverlay(exp) {
         ${canHeal ? `<button class="cbt-action" data-cbt-act="heal" ${ally.pa < 2 ? 'disabled' : ''} title="Soigne le plus blessé · 2 PA">
           Soigner <span class="cbt-act-cost">2 PA</span>
         </button>` : ''}
-        ${aoeLabel ? `<button class="cbt-action cbt-aoe" data-cbt-act="grenade" ${ally.pa < 1 ? 'disabled' : ''} title="${aoeLabel} · 1 PA (consomme l'item)">
-          ${aoeLabel} <span class="cbt-act-cost">1 PA</span>
+        ${aoeLabel ? `<button class="cbt-action cbt-aoe" data-cbt-act="grenade" ${ally.pa < 1 ? 'disabled' : ''} title="${esc(aoeLabel)} · 1 PA (consomme l'objet)">
+          ${esc(aoeLabel)} <span class="cbt-act-cost">1 PA</span>
         </button>` : ''}
         <button class="cbt-action cbt-pass" data-cbt-act="end_turn" title="Passe le reste du tour">
           Passer
@@ -1075,14 +1436,18 @@ function renderCombatOverlay(exp) {
       </div>`;
   }
 
-  $('#sceneInner').innerHTML = `
+  const html = `
     <div class="cbt-header">
-      <span class="cbt-title">⚔ Combat · Round ${esc(cbt.round)}</span>
+      <h2 class="cbt-title" id="cbtTitle" tabindex="-1">⚔ Combat · Round ${esc(cbt.round)}</h2>
       <span class="cbt-phase-lbl ${esc(cbt.phase)}">${
         cbt.phase === 'player' ? 'Tour des alliés' :
         cbt.phase === 'enemy'  ? 'Phase ennemie…' : 'Terminé'
       }</span>
     </div>
+    ${cbt.phase === 'player' ? `<div class="cbt-auto-row">
+      <button type="button" class="cbt-auto" data-cbt-auto>Résolution automatique</button>
+      <span class="cbt-auto-hint">Ou joue tour par tour ci-dessous.</span>
+    </div>` : ''}
     <div class="cbt-arena">
       <div class="cbt-col allies">
         <div class="cbt-col-head">Équipage</div>
@@ -1095,19 +1460,34 @@ function renderCombatOverlay(exp) {
     </div>
     <div class="cbt-log">${logHTML}</div>
     <div class="cbt-actions">${actionsHTML}</div>
+    <div class="scene-actions">
+      <span class="scene-info">L'équipe tient sa position en attendant tes ordres</span>
+      <button type="button" class="scene-close" data-action-scene="close">Plus tard</button>
+    </div>
   `;
 
+  const changed = sceneScreen(`combat:${exp.id}`, html, 'Combat');
   hookCombatOverlay(exp.id);
-  focusSceneOverlay();
+  hookSceneActions();
+  focusSceneOverlay(changed ? $('#cbtTitle') : null);
+}
+
+// Fin d'une action : résumé si le combat est terminé, sinon nouveau tour
+function apresActionCombat(exp) {
+  save();
+  if (exp.combat?.active) renderCombatOverlay(exp);
+  else renderSceneOverlay();
 }
 
 function hookCombatOverlay(expId) {
   const inner = $('#sceneInner');
 
+  inner.querySelector('[data-cbt-auto]')?.addEventListener('click', () => autoResolveCombat(expId));
+
   // Sélection d'un allié
   inner.querySelectorAll('[data-cbt-ally]').forEach(el => {
     el.addEventListener('click', () => {
-      const exp = S.expeditions.find(e => e.id === expId);
+      const exp = expById(expId);
       if (!exp?.combat) return;
       const ally = exp.combat.allies.find(a => a.id === el.dataset.cbtAlly);
       if (!ally || ally.hp <= 0) return;
@@ -1121,7 +1501,7 @@ function hookCombatOverlay(expId) {
   inner.querySelectorAll('[data-cbt-act]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (btn.disabled) return;
-      const exp = S.expeditions.find(e => e.id === expId);
+      const exp = expById(expId);
       if (!exp?.combat) return;
       const action = btn.dataset.cbtAct;
       const allyId = exp.combat.selectedAllyId;
@@ -1134,7 +1514,7 @@ function hookCombatOverlay(expId) {
       } else {
         // Actions sans cible
         combatAllyAction(expId, allyId, action, 0);
-        renderCombatOverlay(exp);
+        apresActionCombat(exp);
       }
     });
   });
@@ -1142,7 +1522,7 @@ function hookCombatOverlay(expId) {
   // Clic sur un ennemi (après sélection d'action d'attaque)
   inner.querySelectorAll('[data-cbt-enemy]').forEach(el => {
     el.addEventListener('click', () => {
-      const exp = S.expeditions.find(e => e.id === expId);
+      const exp = expById(expId);
       if (!exp?.combat || !_pendingCombatAction) return;
       const enemyIdx = parseInt(el.dataset.cbtEnemy, 10);
       const enemy = exp.combat.enemies[enemyIdx];
@@ -1150,49 +1530,38 @@ function hookCombatOverlay(expId) {
       const { allyId, action } = _pendingCombatAction;
       _pendingCombatAction = null;
       combatAllyAction(expId, allyId, action, enemyIdx);
-      // Si le combat est terminé, basculer sur la scène ou fermer
-      if (!exp.combat.active) {
-        const stillInPhase = exp.phase === 'sur_place' && exp.awaitingChoice;
-        if (stillInPhase) renderSceneOverlay();
-        else closeSceneOverlay();
-      } else {
-        renderCombatOverlay(exp);
-      }
+      apresActionCombat(exp);
     });
   });
 
   // Fin de tour
   inner.querySelector('[data-cbt-end-turn]')?.addEventListener('click', () => {
-    const exp = S.expeditions.find(e => e.id === expId);
+    const exp = expById(expId);
     if (!exp?.combat) return;
     combatEndTurn(expId);
-    if (!exp.combat.active) {
-      const stillInPhase = exp.phase === 'sur_place' && exp.awaitingChoice;
-      if (stillInPhase) renderSceneOverlay();
-      else closeSceneOverlay();
-    } else {
-      renderCombatOverlay(exp);
-    }
+    apresActionCombat(exp);
   });
 
   // Retraite
   inner.querySelector('[data-cbt-retreat]')?.addEventListener('click', () => {
-    const exp = S.expeditions.find(e => e.id === expId);
+    const exp = expById(expId);
     if (!exp?.combat) return;
     confirmModal({
       titre: 'Battre en retraite ?',
       texte: "L'équipe rentre immédiatement, avec des pertes possibles : chaque ennemi encore actif porte une attaque d'opportunité.",
       confirmer: 'Retraite', annuler: 'Rester', danger: true,
     }).then(ok => {
-      if (!ok || !exp.combat) return;
+      if (!ok || !exp.combat?.active) return;
       combatAllyAction(expId, exp.combat.selectedAllyId || exp.combat.allies[0]?.id, 'retreat', -1);
-      closeSceneOverlay();
+      if (_activeSceneExpId === expId) apresActionCombat(exp);
     });
   });
 }
 
 function closeSceneOverlay() {
   _activeSceneExpId = null;
+  _sceneScreenKey = null;
+  _combatShown = null;
   $('#sceneOverlay').classList.remove('show');
   document.body.style.overflow = '';
   syncInert();
@@ -1203,247 +1572,147 @@ function closeSceneOverlay() {
   if (back?.isConnected && back.getClientRects().length && !modalShown()) back.focus({ preventScroll: true });
 }
 
-function renderSceneOverlay() {
-  if (!_activeSceneExpId) return;
-  const exp = S.expeditions.find(e => e.id === _activeSceneExpId);
-  if (!exp) {
-    closeSceneOverlay();
-    return;
+// ============================================================
+//   BILAN D'EXPÉDITION
+// ============================================================
+// showExpeditionReport(expId) : bilan d'une expédition rentrée (historique) ou
+// en route vers l'avant-poste (bilan provisoire). Ouvert depuis le message de
+// retour, la liste des missions, l'historique et le tableau de bord ; même
+// fenêtre pour les retours arrivés pendant une absence (bilans non lus).
+export function showExpeditionReport(expId) {
+  const b = expeditionSummary(expId);
+  if (!b) { toast('Bilan introuvable'); return false; }
+  const exp = expById(expId);
+  const hist = (S.expHistory || []).find(h => h.expId === expId);
+  markReportRead(expId);
+  const gains = Object.entries(b.gains || {}).map(([k, n]) => `+${n} ${RES_LABELS[k] || k}`);
+  const rapporte = [
+    ...gains.map(t => `<li class="gain">${esc(t)}</li>`),
+    ...(b.objets || []).map(o => `<li class="gain">Objet : ${esc(o)}</li>`),
+    ...(b.schemas || []).map(s => `<li class="gain">${/^Schéma/.test(s) ? '' : 'Schéma : '}${esc(s)}</li>`),
+  ];
+  const pertes = [
+    ...(b.morts || []).map(n => `<li class="perte mort">Décès : ${esc(n)}</li>`),
+    ...(b.blesses || []).map(x => `<li class="perte">${esc(x.nom)} : ${esc(x.statut)}</li>`),
+  ];
+  let chron = '';
+  if (b.chronique) {
+    chron = b.chronique.fin
+      ? `Chronique achevée : ${esc(b.chronique.titre)} — « ${esc(b.chronique.fin)} »`
+      : `${esc(b.chronique.titre)} · épisode ${esc(b.chronique.episode)} joué`;
   }
-  // Si la mission a quitté la phase sur_place, on ferme
-  if (exp.phase !== 'sur_place') {
-    closeSceneOverlay();
-    return;
-  }
-  // Si un combat est en cours, afficher l'UI de combat
-  if (exp.combat?.active) {
-    renderCombatOverlay(exp);
-    return;
-  }
-
-  const scene = currentScene(exp);
-  if (!scene) {
-    closeSceneOverlay();
-    return;
-  }
-
-  const sys = S.galaxy.systems.find(s => s.id === exp.systemId);
-  const body = sys?.bodies.find(b => b.id === exp.bodyId);
-  const vessel = S.fleet.find(v => v.id === exp.vesselId);
-  const ctx = {
-    // Noms échappés : le texte de scène est du HTML (catalogue) où ils sont insérés
-    vesselName: esc(vessel?.name ?? ''),
-    bodyName: esc(body?.name ?? ''),
-    body
-  };
-  // 0.24 — texte dynamique (fonction des flags de chronique) si applicable
-  let rawText = scene.text;
-  if (typeof rawText === 'function') {
-    rawText = rawText(body?.chronicle?.flags || {});
-  }
-  const text = fillTemplate(rawText, ctx);
-
-  // Progression : pastilles (cachées pour les scènes de chronique, séquence non-linéaire)
-  const isChronScene = scene.chronicleEpisode || scene.id === '__chron_intro__';
-  // Titre : pour une chronique, son nom et celui de l'épisode (pas l'id technique)
-  let sceneTitle = String(scene.id).replace(/_/g, ' ');
-  if (isChronScene) {
-    const chron = activeChronicle(body);
-    const ep = currentChronicleEpisode(body);
-    const parts = [chron?.nom, ep?.title].filter(Boolean);
-    if (parts.length) sceneTitle = parts.join(' · ');
-    else if (scene.id === '__chron_intro__') sceneTitle = 'Chronique';
-  }
-  const dots = isChronScene ? '<span class="chron-badge">CHRONIQUE</span>' : exp.scenes.map((_, i) => {
-    if (i < exp.sceneIdx) return '<span class="dot done"></span>';
-    if (i === exp.sceneIdx) return '<span class="dot current"></span>';
-    return '<span class="dot"></span>';
-  }).join('');
-
-  // Choix
-  const choicesHTML = scene.choices.map((ch, i) => {
-    const evalRes = evaluateChoice(exp, ch);
-    let extraHTML = '';
-    if (ch.req?.trait) {
-      const has = exp.crewIds.some(id => S.crew.find(c => c.id === id)?.traits?.includes(ch.req.trait));
-      extraHTML += `<span class="req ${has ? '' : 'locked'}">REQUIERT TRAIT : ${TRAITS[ch.req.trait]?.nom || ch.req.trait}</span>`;
-    }
-    if (ch.req?.skill) {
-      const has = exp.crewIds.some(id => (S.crew.find(c => c.id === id)?.skills[ch.req.skill.key] || 0) >= ch.req.skill.min);
-      extraHTML += `<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`;
-    }
-    if (ch.req?.item) {
-      const has = (exp.equipment?.[ch.req.item] || 0) > 0;
-      const itDef = ITEMS[ch.req.item];
-      extraHTML += `<span class="req ${has ? '' : 'locked'}">REQUIERT : ${itDef?.nom || ch.req.item}</span>`;
-    }
-    // Consume : sépare ressources et item
-    if (ch.consume) {
-      const resEntries = Object.entries(ch.consume).filter(([k]) => k !== 'item');
-      if (resEntries.length > 0) {
-        const parts = resEntries.map(([k,v]) => {
-          const ko = (S.res[k] || 0) < v;
-          return `<span class="${ko ? 'ko' : ''}">${RES_LABELS[k]} −${v}</span>`;
-        }).join(' · ');
-        extraHTML += `<span class="cost">COÛT : ${parts}</span>`;
-      }
-      if (ch.consume.item) {
-        const itDef = ITEMS[ch.consume.item];
-        const has = (exp.equipment?.[ch.consume.item] || 0) > 0;
-        extraHTML += `<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`;
-      }
-    }
-    if (ch.risky) {
-      extraHTML += `<span class="risk">RISQUÉ · jet de ${STAT_LABELS[ch.risky.stat]} (DC ${ch.risky.dc})</span>`;
-    }
-    return `<button class="scene-choice" data-choice="${i}" ${evalRes.available ? '' : 'disabled'}>
-      ${ch.label}
-      ${extraHTML}
-    </button>`;
-  }).join('');
-
-  // Équipage actif
-  const teamHTML = exp.crewIds.map(id => {
-    const m = S.crew.find(c => c.id === id);
-    if (!m) return '';
-    const dead = m.statut === 'mort';
-    const skillsTop = SKILL_LIST
-      .map(s => ({ s, v: m.skills[s] || 0 }))
-      .filter(x => x.v > 0)
-      .sort((a,b) => b.v - a.v)
-      .slice(0, 2)
-      .map(x => `${SKILL_LABELS[x.s].slice(0,3)}${esc(x.v)}`)
-      .join(' ') || '—';
-    const traits = esc((m.traits || []).slice(0, 2).map(t => TRAITS[t]?.nom || t).join(', ') || '—');
-    const healthCls = m.sante < 40 ? 'warn' : '';
-    return `<div class="scene-team-row ${dead ? 'dead' : ''}">
-      <span>${esc(m.name)}</span>
-      <span class="row-info">santé <span class="v ${healthCls}">${esc(m.sante)}%</span> · ${skillsTop} · ${traits}</span>
-    </div>`;
-  }).join('');
-
-  // Loot accumulé
-  const lootEntries = Object.entries(exp.accumulatedLoot);
-  const lootHTML = lootEntries.length === 0 && exp.accumulatedItems.length === 0
-    ? `<div class="scene-loot empty">Aucune cargaison récoltée pour l'instant.</div>`
-    : `<div class="scene-loot">
-        <div class="lloot">${lootEntries.map(([k,v]) => `<span>${RES_LABELS[k] || esc(k)} <b>+${esc(v)}</b></span>`).join('')}</div>
-        ${exp.accumulatedItems.length > 0 ? `<div class="litems">Items : ${exp.accumulatedItems.map(i => esc(itemDef(i)?.nom || i)).join(', ')}</div>` : ''}
-      </div>`;
-
-  // Équipement embarqué encore disponible (0.15)
-  let equipHTML = '';
-  if (exp.equipment) {
-    const equipList = Object.entries(exp.equipment).filter(([_, n]) => n > 0);
-    if (equipList.length > 0) {
-      const items = equipList.map(([id, n]) => {
-        const itDef = ITEMS[id];
-        const ori = ITEM_ORIGINS[itDef?.origin] || { color: 'var(--text-mute)' };
-        return `<span style="color:${ori.color}">${esc(itDef?.nom || id)}${n > 1 ? ` ×${esc(n)}` : ''}</span>`;
-      });
-      equipHTML = `<div class="scene-equip"><span class="lbl">Équipement embarqué :</span> ${items.join(' · ')}</div>`;
-    }
-  }
-
-  // Mini-journal (3 dernières entrées)
-  const mjHTML = exp.accumulatedLog.length === 0 ? '' : `
-    <div class="scene-mini-journal">
-      ${exp.accumulatedLog.slice(-3).map(line => `<div class="mj-line">› ${safeHTML(line)}</div>`).join('')}
-    </div>
-  `;
-
-  $('#sceneInner').innerHTML = `
-    <div class="scene-header">
-      <div class="sh-loc">${esc(sys?.name || '?')} › ${esc(body?.name || '?')}</div>
-      <div class="sh-title">${esc(sceneTitle)}</div>
-      <div class="sh-sub">${esc(vessel?.name || '?')}${isChronScene ? '' : ` · scène ${esc(Number(exp.sceneIdx) + 1)} / ${exp.scenes.length}`}</div>
-      <div class="sh-progress">${dots}</div>
-    </div>
-    <div class="scene-body">${safeHTML(text)}</div>
-    <div class="scene-choices">${choicesHTML}</div>
-    <div class="scene-team">
-      <h4>Équipage présent</h4>
-      <div class="scene-team-list">${teamHTML}</div>
-    </div>
-    ${equipHTML}
-    ${lootHTML}
-    ${mjHTML}
-    <div class="scene-actions">
-      <button class="scene-abandon" data-action-scene="abandon">Retraite anticipée</button>
-      <span class="scene-info">Le temps de la colonie continue de tourner</span>
-      <button class="scene-close" data-action-scene="close">Reprendre plus tard</button>
-    </div>
-  `;
-
-  // Hooks
-  $('#sceneInner').querySelectorAll('button[data-choice]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.choice, 10);
-      playChoice(_activeSceneExpId, idx);
-      $('#sceneOverlay').scrollTop = 0;   // nouvelle scène : on repart du haut
-      // Rafraîchit l'overlay (la scène a changé) ou ferme s'il a fini
-      const exp = S.expeditions.find(e => e.id === _activeSceneExpId);
-      if (!exp || exp.phase !== 'sur_place') {
-        closeSceneOverlay();
-      } else {
-        renderSceneOverlay();
-      }
-    });
-  });
-  $('#sceneInner').querySelectorAll('button[data-action-scene]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const a = btn.dataset.actionScene;
-      if (a === 'close') {
-        closeSceneOverlay();
-      } else if (a === 'abandon') {
-        const expId = _activeSceneExpId;
-        confirmModal({
-          titre: 'Retraite anticipée ?',
-          texte: "L'équipe rentre immédiatement avec ce qu'elle a déjà récupéré.",
-          confirmer: 'Rentrer', annuler: 'Rester', danger: true,
-        }).then(ok => {
-          if (!ok) return;
-          abandonExpedition(expId);
-          closeSceneOverlay();
-        });
-      }
-    });
-  });
-  focusSceneOverlay();
+  const quand = exp
+    ? `En route · arrivée dans ${fmtDuree(Math.max(0, (exp.oneWayMin || 0) - (exp.elapsedMin || 0)))}`
+    : `Retour d'expédition${hist ? ` · Jour ${calendar(hist.finishedAt).jour}` : ''}`;
+  const m = $('#modal');
+  m.className = 'modal bilan-modal';
+  m.innerHTML = typo(`
+    <div class="incident-eyebrow">${esc(quand)}</div>
+    <h3>${esc(b.lieu)}</h3>
+    <div class="bl-meta">Système ${esc(b.systeme)} · ${b.final ? 'durée' : 'durée prévue'} ${esc(fmtDuree(b.duree))}${hist?.vesselName ? ` · ${esc(hist.vesselName)}` : ''}</div>
+    <div class="bl-team"><span class="lbl">Équipe</span> ${(b.equipe || []).map(n => esc(n)).join(', ') || '—'}</div>
+    ${chron ? `<div class="bl-chron">${chron}</div>` : ''}
+    <h4 class="bl-h">Rapporté</h4>
+    ${rapporte.length ? `<ul class="sr-effects">${rapporte.join('')}</ul>` : '<p class="sr-none">Rien rapporté cette fois.</p>'}
+    ${pertes.length ? `<h4 class="bl-h">Blessés et pertes</h4><ul class="sr-effects">${pertes.join('')}</ul>` : ''}
+    ${(b.faits || []).length ? `<h4 class="bl-h">Faits marquants</h4><ul class="bl-faits">${b.faits.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
+    <div class="btn-row">
+      <button class="primary" id="bilanClose" data-modal-cancel>Fermer</button>
+    </div>`);
+  $('#modalBg').classList.add('show');
+  $('#bilanClose').addEventListener('click', () => { $('#modalBg').classList.remove('show'); });
+  return true;
 }
 
 // ============================================================
 //   Modal de lancement d'expédition
 // ============================================================
-let _launchPick = { bodyId: null, vesselId: null, crewIds: new Set(), equipment: {} };
+// Deux touchers depuis la planète : « Lancer une expédition » puis « Décoller ».
+// La fenêtre propose d'emblée le vaisseau disponible, une équipe adaptée au lieu
+// et l'équipement utile (App.suggestLaunch) ; elle affiche la durée aller-retour
+// réelle, le coût, le risque et la chronique du lieu. Les réglages fins
+// (vaisseau, équipage, équipement) sont repliés sous « Modifier ».
+let _launchPick = { bodyId: null, vesselId: null, crewIds: new Set(), equipment: {}, details: false, atouts: [], combat: false };
 
-export function showLaunchModal(bodyId) {
-  _launchPick = { bodyId, vesselId: null, crewIds: new Set(), equipment: {} };
-  // Pré-sélectionne un vaisseau dispo si un seul
-  const avail = S.fleet.filter(v => v.available);
-  if (avail.length === 1) _launchPick.vesselId = avail[0].id;
+// showLaunchModal(bodyId) ou showLaunchModal({ bodyId })
+export function showLaunchModal(arg) {
+  const bodyId = arg && typeof arg === 'object' ? arg.bodyId : arg;
+  const sug = suggestLaunch(bodyId) || {};
+  _launchPick = {
+    bodyId,
+    vesselId: sug.vesselId || null,
+    crewIds: new Set(sug.crewIds || []),
+    equipment: { ...(sug.equipment || {}) },
+    details: false,
+    atouts: sug.atouts || [],
+    combat: !!sug.combat,
+  };
   const bg = $('#modalBg');
   const m = $('#modal');
-  m.classList.add('launch-modal');
-  m.innerHTML = renderLaunchModal();
+  m.className = 'modal launch-modal';
+  m.innerHTML = typo(renderLaunchModal());
   bg.classList.add('show');
   hookLaunchModal();
 }
 
+const RISQUE = ['', 'Faible', 'Modéré', 'Sérieux', 'Élevé', 'Extrême'];
+const pips = (n, cls = '') => `<span class="lx-pips ${cls}" aria-hidden="true">${'●'.repeat(n)}${'○'.repeat(Math.max(0, 5 - n))}</span>`;
+const CHRON_ETAT_LX = { decouverte: 'à découvrir', en_cours: 'en cours', prete: 'la suite est prête', en_attente: 'en attente' };
+
 function renderLaunchModal() {
-  // Trouve la planète cible
-  let body = null, sys = null;
-  for (const s of S.galaxy.systems) {
-    const b = s.bodies.find(b => b.id === _launchPick.bodyId);
-    if (b) { body = b; sys = s; break; }
-  }
+  const { sys, body } = Base.bodyById(_launchPick.bodyId);
   if (!body) return '<h3>Erreur</h3><p>Destination introuvable.</p><div class="btn-row"><button id="launchClose">Fermer</button></div>';
 
-  // Liste vaisseaux disponibles
   const avail = S.fleet.filter(v => v.available);
+  const vessel = avail.find(v => v.id === _launchPick.vesselId) || null;
+  const vdef = vessel ? vesselDef(vessel.type) : null;
+  const placesMax = vdef ? vdef.places : 0;
+  const crewIds = Array.from(_launchPick.crewIds);
+  const team = crewIds.map(id => S.crew.find(c => c.id === id)).filter(Boolean);
+  const equipUsed = Object.values(_launchPick.equipment).reduce((s, n) => s + n, 0);
+  const equipSlots = vdef ? (vdef.equipSlots || 0) : 0;
+
+  // Estimation (même sans équipage choisi : un colon par défaut)
+  const est = expeditionEstimate({ vesselId: vessel?.id || null, vesselType: vessel ? null : avail[0]?.type || 'vedette', bodyId: body.id, crewCount: Math.max(1, team.length) });
+  let check;
+  if (!avail.length) check = { ok: false, why: S.expeditions.length ? 'Tous les vaisseaux sont en mission.' : 'Aucun vaisseau à quai.' };
+  else if (!vessel) check = { ok: false, why: 'Choisis un vaisseau.' };
+  else if (!team.length) check = { ok: false, why: 'Choisis au moins un colon.' };
+  else if (equipUsed > equipSlots) check = { ok: false, why: `Trop d'équipement (${equipUsed}/${equipSlots}).` };
+  else check = canLaunchExpedition({ vesselId: vessel.id, bodyId: body.id, crewIds });
+
+  const chron = Base.chroniclesList().find(c => c.lieu?.bodyId === body.id && c.etat !== 'terminee');
+  const threat = bodyThreatLevel(body);
+  const reward = bodyRewardLevel(body);
+  const fuelKo = est && (S.res.energie || 0) < est.fuel;
+  const bioKo = est && (S.res.biomasse || 0) < est.bio;
+
+  const factsHTML = est ? `<dl class="lx-facts">
+      <div class="lx-fact"><dt>Aller-retour</dt><dd><b>${fmtDuree(est.allerRetour)}</b><small>${fmtDuree(est.oneWayMin)} par trajet, plus le temps des scènes sur place</small></dd></div>
+      <div class="lx-fact"><dt>Coût</dt><dd><span class="${fuelKo ? 'ko' : ''}">${esc(est.fuel)} énergie</span> · <span class="${bioKo ? 'ko' : ''}">${esc(est.bio)} biomasse</span></dd></div>
+      <div class="lx-fact"><dt>Risque</dt><dd>${pips(threat, threat >= 4 ? 'warn' : '')} ${esc(RISQUE[threat] || '')}${_launchPick.combat ? ' · combat possible' : ''}</dd></div>
+      <div class="lx-fact"><dt>Butin</dt><dd>${pips(reward, 'ok')}</dd></div>
+    </dl>` : '';
+
+  const chronHTML = chron ? `<div class="lx-chron ${esc(chron.etat)}">
+      <span class="lx-k">Chronique · ${esc(CHRON_ETAT_LX[chron.etat] || chron.etat)}</span>
+      <span class="lx-chron-t">${esc(chron.titre)} · épisode ${esc(chron.episode)}/${esc(chron.episodes)}${chron.titreEpisode ? ` — ${esc(chron.titreEpisode)}` : ''}</span>
+      ${chron.etat === 'en_attente' ? `<span class="lx-sub">Suite dans ${fmtDuree(chron.prochainDans)} : en attendant, l'équipe explore le site.</span>` : ''}
+    </div>` : '';
+
+  const equipNames = Object.entries(_launchPick.equipment).filter(([, n]) => n > 0)
+    .map(([id, n]) => `${esc(ITEMS[id]?.nom || id)}${n > 1 ? ` ×${esc(n)}` : ''}`);
+  const teamHTML = `<div class="lx-team">
+      <div class="lx-k">Équipe${vessel ? ` · ${esc(vessel.name)}` : ''}</div>
+      <div class="lx-names">${team.length ? team.map(m => esc(m.name)).join(', ') : 'Personne'}</div>
+      ${vessel ? `<div class="lx-sub">${esc(vdef.nom)} · ${esc(team.length)}/${esc(placesMax)} places${_launchPick.atouts.length ? ` · utile ici : ${_launchPick.atouts.map(a => esc(a)).join(', ')}` : ''}</div>` : ''}
+      <div class="lx-sub">Équipement : ${equipNames.length ? equipNames.join(', ') : 'aucun'}</div>
+    </div>`;
+
+  // ---- Réglages fins (repliés) ----
   let vesselHTML;
   if (avail.length === 0) {
-    vesselHTML = '<div class="empty" style="padding:14px">Aucun vaisseau disponible. Construis-en un.</div>';
+    vesselHTML = '<div class="empty" style="padding:14px">Aucun vaisseau disponible.</div>';
   } else {
     vesselHTML = `<div class="tpicker">${avail.map(v => {
       const def = vesselDef(v.type);
@@ -1455,49 +1724,31 @@ function renderLaunchModal() {
     }).join('')}</div>`;
   }
 
-  // Liste équipage — 0.23 : enrichie avec poste, statut, ETA des indispos
-  // Disponibles : statut 'libre' OU 'travail' (postes persistants — un colon en poste peut partir)
+  // Disponibles : statut 'libre' OU 'travail' (le poste reste réservé pendant la mission)
   const available = S.crew.filter(c => c.statut === 'libre' || c.statut === 'travail');
-  // Indispos : tous les autres sauf 'mort'
   const unavailable = S.crew.filter(c => c.statut !== 'libre' && c.statut !== 'travail' && c.statut !== 'mort');
-  const vessel = avail.find(v => v.id === _launchPick.vesselId);
-  const placesMax = vessel ? vesselDef(vessel.type).places : 0;
 
-  // Fonction helper : ETA approximative selon le statut
+  // Temps restant approximatif d'un colon indisponible
   function eta(c) {
+    let remaining = 0;
     if (c.statut === 'expedition') {
       const exp = (S.expeditions || []).find(e => e.crewIds && e.crewIds.includes(c.id));
-      if (exp) {
-        const remaining = Math.max(0, (exp.totalMin || 0) - (exp.elapsedMin || 0));
-        return remaining > 0 ? ` (${fmtDuree(remaining)})` : '';
-      }
-      return '';
-    }
-    if (c.statut === 'formation') {
+      if (exp) remaining = Math.max(0, (exp.phase === 'aller' ? 2 : exp.phase === 'retour' ? 1 : 0) * (exp.oneWayMin || 0) - (exp.phase === 'sur_place' ? 0 : exp.elapsedMin || 0));
+    } else if (c.statut === 'formation') {
       const t = (S.training || []).find(t => t.memberId === c.id);
-      if (t) {
-        const remaining = Math.max(0, t.duration - (S.meta.gameMin - t.startedAt));
-        return remaining > 0 ? ` (${fmtDuree(remaining)})` : '';
-      }
-      return '';
-    }
-    if (c.statut === 'diplomatie') {
+      if (t) remaining = Math.max(0, t.duration - (S.meta.gameMin - t.startedAt));
+    } else if (c.statut === 'diplomatie') {
       const dip = (S.diplomaticMissions || []).find(d => d.memberId === c.id);
-      if (dip) {
-        const remaining = Math.max(0, dip.duration - (S.meta.gameMin - dip.startedAt));
-        return remaining > 0 ? ` (${fmtDuree(remaining)})` : '';
-      }
-      return '';
+      if (dip) remaining = Math.max(0, dip.duration - (S.meta.gameMin - dip.startedAt));
     }
-    return '';
+    return remaining > 0 ? ` (${fmtDuree(remaining)})` : '';
   }
-  // Affiche le poste de base du colon
+  // Poste de base du colon
   function postLabel(c) {
     const a = memberAssignment(c.id);
     if (!a) return '';
     const def = MODULES[a.modKey];
-    const jobs = jobsForModule(a.modKey);
-    const job = jobs[a.slotIdx];
+    const job = jobsForModule(a.modKey)[a.slotIdx];
     if (!def || !job) return '';
     return `${job.label} · ${def.nom}`;
   }
@@ -1513,20 +1764,20 @@ function renderLaunchModal() {
           const sel = _launchPick.crewIds.has(c.id) ? 'selected' : '';
           const dis = !sel && _launchPick.crewIds.size >= placesMax ? 'disabled' : '';
           const post = postLabel(c);
-          const postHTML = post ? `<div class="pi-post">${post}</div>` : `<div class="pi-post" style="opacity:0.5">sans poste</div>`;
+          const postHTML = post ? `<div class="pi-post">${esc(post)}</div>` : `<div class="pi-post" style="opacity:0.5">sans poste</div>`;
           const topSkills = SKILL_LIST
             .map(s => ({ s, v: c.skills[s] || 0 }))
             .filter(x => x.v > 0)
-            .sort((a,b) => b.v - a.v)
+            .sort((a, b) => b.v - a.v)
             .slice(0, 3)
-            .map(x => `${SKILL_LABELS[x.s].slice(0,3)} ${esc(x.v)}`)
+            .map(x => `${SKILL_LABELS[x.s].slice(0, 3)} ${esc(x.v)}`)
             .join(' · ') || '—';
           return `<div class="crew-picker-item ${sel} ${dis}" data-pick-crew="${esc(c.id)}"${dis ? ' aria-disabled="true"' : ' tabindex="0"'} role="checkbox" aria-checked="${sel ? 'true' : 'false'}">
             <span class="checkbox"></span>
             <div class="pi-main">
               <div class="pi-name">${esc(c.name)}</div>
               ${postHTML}
-              <div class="pi-detail">Santé ${esc(c.sante)}% · Moral ${esc(c.moral)}</div>
+              <div class="pi-detail">Santé ${esc(c.sante)} % · Moral ${esc(c.moral)}</div>
             </div>
             <div class="pi-skills">${topSkills}</div>
           </div>`;
@@ -1534,20 +1785,15 @@ function renderLaunchModal() {
     }
     let unavailList = '';
     if (unavailable.length > 0) {
+      const OU = { expedition: 'en mission', infirmerie: "à l'infirmerie", formation: 'en formation', diplomatie: 'mission diplomatique' };
       unavailList = `<div class="crew-section-label muted">Indisponibles (${unavailable.length})</div>
         <div class="crew-picker muted">${unavailable.map(c => {
-          let where = '';
-          if (c.statut === 'expedition') where = 'en mission';
-          else if (c.statut === 'infirmerie') where = "à l'infirmerie";
-          else if (c.statut === 'formation') where = 'en formation';
-          else if (c.statut === 'diplomatie') where = 'mission diplomatique';
-          else where = c.statut;
           const post = postLabel(c);
           return `<div class="crew-picker-item unavailable" aria-disabled="true">
             <span class="checkbox dot">◌</span>
             <div class="pi-main">
               <div class="pi-name">${esc(c.name)}</div>
-              <div class="pi-detail">${esc(where)}${eta(c)}${post ? ' · ' + post : ''}</div>
+              <div class="pi-detail">${esc(OU[c.statut] || c.statut)}${eta(c)}${post ? ' · ' + esc(post) : ''}</div>
             </div>
           </div>`;
         }).join('')}</div>`;
@@ -1555,108 +1801,80 @@ function renderLaunchModal() {
     crewHTML = availList + unavailList;
   }
 
-  // Section équipement (0.15)
   let equipPickerHTML = '';
   if (vessel) {
-    const def = vesselDef(vessel.type);
-    const slots = def.equipSlots || 0;
-    const used = Object.values(_launchPick.equipment).reduce((s, n) => s + n, 0);
     const fieldItems = Object.entries(S.inventory || {})
-      .filter(([id, n]) => n > 0)
+      .filter(([, n]) => n > 0)
       .map(([id, n]) => ({ id, n, def: ITEMS[id] }))
       .filter(x => x.def && ['consumable', 'tool', 'weapon'].includes(x.def.type));
-    if (slots === 0) {
-      equipPickerHTML = `<div class="empty" style="padding:10px;font-size:11px">Pas de soute d'équipement sur ce vaisseau.</div>`;
+    if (equipSlots === 0) {
+      equipPickerHTML = `<div class="empty lx-empty">Pas de soute d'équipement sur ce vaisseau.</div>`;
     } else if (fieldItems.length === 0) {
-      equipPickerHTML = `<div class="empty" style="padding:10px;font-size:11px">Aucun équipement fabricable en stock. Visite l'Atelier.</div>`;
+      equipPickerHTML = `<div class="empty lx-empty">Aucun équipement en stock. L'Atelier en fabrique.</div>`;
     } else {
-      const itemsList = fieldItems.map(({ id, n, def: itDef }) => {
+      equipPickerHTML = `<div class="equip-picker">${fieldItems.map(({ id, n, def: itDef }) => {
         const taken = _launchPick.equipment[id] || 0;
         const ori = ITEM_ORIGINS[itDef.origin] || { color: 'var(--text-mute)' };
         const typeLabel = itDef.type === 'consumable' ? 'consommable' : itDef.type === 'tool' ? 'outil' : 'arme';
         return `<div class="equip-row">
           <div class="er-info" style="border-left-color:${ori.color}">
-            <div class="er-name">${itDef.nom}</div>
+            <div class="er-name">${esc(itDef.nom)}</div>
             <div class="er-detail">${typeLabel} · stock ${esc(n - taken)}/${esc(n)}</div>
           </div>
           <div class="er-controls">
-            <button class="er-btn" data-equip-minus="${id}" aria-label="Retirer : ${esc(itDef.nom)}" ${taken === 0 ? 'disabled' : ''}>−</button>
+            <button class="er-btn" data-equip-minus="${esc(id)}" aria-label="Retirer : ${esc(itDef.nom)}" ${taken === 0 ? 'disabled' : ''}>−</button>
             <span class="er-count" aria-live="polite">${taken}</span>
-            <button class="er-btn" data-equip-plus="${id}" aria-label="Ajouter : ${esc(itDef.nom)}" ${taken >= n || used >= slots ? 'disabled' : ''}>+</button>
+            <button class="er-btn" data-equip-plus="${esc(id)}" aria-label="Ajouter : ${esc(itDef.nom)}" ${taken >= n || equipUsed >= equipSlots ? 'disabled' : ''}>+</button>
           </div>
         </div>`;
-      }).join('');
-      equipPickerHTML = `<div class="equip-picker">${itemsList}</div>`;
-    }
-  }
-  const equipSlots = vessel ? (vesselDef(vessel.type).equipSlots || 0) : 0;
-  const equipUsed = Object.values(_launchPick.equipment).reduce((s, n) => s + n, 0);
-
-  // Estimation
-  let estimateHTML = '';
-  let canLaunch = false;
-  if (_launchPick.vesselId && _launchPick.crewIds.size > 0) {
-    const r = canLaunchExpedition({
-      vesselId: _launchPick.vesselId,
-      bodyId: _launchPick.bodyId,
-      crewIds: Array.from(_launchPick.crewIds)
-    });
-    if (r.ok) {
-      canLaunch = true;
-      const threat = bodyThreatLevel(body);
-      const reward = bodyRewardLevel(body);
-      estimateHTML = `<div class="estimate">
-        <div class="row"><span class="lbl">Distance</span><span class="val">${sys.distance.toFixed(2)} pc</span></div>
-        <div class="row"><span class="lbl">Voyage aller</span><span class="val">${fmtDuree(r.oneWayMin)}</span></div>
-        <div class="row"><span class="lbl">Sur place</span><span class="val">${fmtDuree(r.onSiteMin)}</span></div>
-        <div class="row"><span class="lbl">Total</span><span class="val">${fmtDuree(r.totalMin)}</span></div>
-        <div class="row"><span class="lbl">Carburant</span><span class="val">${r.fuel} énergie</span></div>
-        <div class="row"><span class="lbl">Vivres</span><span class="val">${r.bio} biomasse</span></div>
-        <div class="row"><span class="lbl">Menace estimée</span><span class="val ${threat>=4?'warn':''}">${'●'.repeat(threat)}${'○'.repeat(5-threat)}</span></div>
-        <div class="row"><span class="lbl">Récompense potentielle</span><span class="val ok">${'●'.repeat(reward)}${'○'.repeat(5-reward)}</span></div>
-      </div>`;
-    } else {
-      estimateHTML = `<div class="estimate"><div class="ko">${esc(r.why)}</div></div>`;
+      }).join('')}</div>`;
     }
   }
 
   return `
-    <h3>Lancer une expédition</h3>
-    <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">Destination</p>
-    <div class="estimate" style="margin-bottom:12px">
-      <div style="font-family:var(--serif);font-style:italic;color:var(--text);font-size:15px">${esc(body.name)}</div>
-      <div style="color:var(--text-mute);font-size:11px;margin-top:2px">${esc(sys.name)} · ${BIOMES[body.biome]?.nom || ''} · ${nomOf(BODY_TYPES, body.type)}</div>
-    </div>
-    <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">Vaisseau</p>
-    ${vesselHTML}
-    <p style="margin-bottom:6px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">
-      Équipage ${vessel ? `(${_launchPick.crewIds.size}/${placesMax})` : ''}
-    </p>
-    ${crewHTML}
-    ${vessel ? `<p style="margin-bottom:6px;margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--text-mute);letter-spacing:0.06em;text-transform:uppercase">
-      Équipement (${equipUsed}/${equipSlots})
-    </p>${equipPickerHTML}` : ''}
-    ${estimateHTML}
+    <h3>Expédition vers ${esc(body.name)}</h3>
+    <div class="lx-dest">${esc(sys.name)} · ${sys.distance.toFixed(2)} pc · ${BIOMES[body.biome]?.nom || ''} · ${nomOf(BODY_TYPES, body.type)}</div>
+    ${chronHTML}
+    ${factsHTML}
+    ${teamHTML}
+    ${check.ok ? '' : `<div class="lx-ko" role="alert">${esc(check.why)}</div>`}
+    <details class="lx-details"${_launchPick.details ? ' open' : ''}>
+      <summary>Modifier l'équipe, le vaisseau ou l'équipement</summary>
+      <p class="lx-label">Vaisseau</p>
+      ${vesselHTML}
+      <p class="lx-label">Équipage ${vessel ? `(${_launchPick.crewIds.size}/${placesMax})` : ''}</p>
+      ${crewHTML}
+      ${vessel ? `<p class="lx-label">Équipement (${equipUsed}/${equipSlots})</p>${equipPickerHTML}` : ''}
+    </details>
     <div class="btn-row">
       <button id="launchClose">Annuler</button>
-      <button class="primary" id="launchGo" ${canLaunch ? '' : 'disabled'}>Décoller</button>
+      <button class="primary" id="launchGo" ${check.ok ? '' : 'disabled'}>Décoller</button>
     </div>
   `;
 }
 
+const rerenderLaunch = () => rerenderModal(typo(renderLaunchModal()), hookLaunchModal);
+
 function hookLaunchModal() {
   const m = $('#modal');
+  m.querySelector('.lx-details')?.addEventListener('toggle', e => { _launchPick.details = e.target.open; });
   m.querySelectorAll('[data-pick-vessel]').forEach(el => {
     el.addEventListener('click', () => {
       _launchPick.vesselId = el.dataset.pickVessel;
-      // Reset équipage si dépassait la capacité du nouveau vaisseau
+      // Équipage et équipement ramenés à la capacité du nouveau vaisseau
       const vessel = S.fleet.find(v => v.id === _launchPick.vesselId);
-      const cap = vesselDef(vessel.type).places;
-      while (_launchPick.crewIds.size > cap) {
+      const def = vesselDef(vessel?.type);
+      while (_launchPick.crewIds.size > def.places) {
         const last = Array.from(_launchPick.crewIds).pop();
         _launchPick.crewIds.delete(last);
       }
-      rerenderModal(renderLaunchModal(), hookLaunchModal);
+      let used = 0;
+      for (const [id, n] of Object.entries(_launchPick.equipment)) {
+        const keep = Math.max(0, Math.min(n, (def.equipSlots || 0) - used));
+        used += keep;
+        if (keep > 0) _launchPick.equipment[id] = keep; else delete _launchPick.equipment[id];
+      }
+      rerenderLaunch();
     });
   });
   m.querySelectorAll('[data-pick-crew]').forEach(el => {
@@ -1665,16 +1883,16 @@ function hookLaunchModal() {
       const id = el.dataset.pickCrew;
       if (_launchPick.crewIds.has(id)) _launchPick.crewIds.delete(id);
       else _launchPick.crewIds.add(id);
-      rerenderModal(renderLaunchModal(), hookLaunchModal);
+      rerenderLaunch();
     });
   });
-  // Hooks +/- équipement
+  // +/- équipement
   m.querySelectorAll('[data-equip-plus]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
       const id = btn.dataset.equipPlus;
       _launchPick.equipment[id] = (_launchPick.equipment[id] || 0) + 1;
-      rerenderModal(renderLaunchModal(), hookLaunchModal);
+      rerenderLaunch();
     });
   });
   m.querySelectorAll('[data-equip-minus]').forEach(btn => {
@@ -1684,24 +1902,27 @@ function hookLaunchModal() {
       if (!_launchPick.equipment[id]) return;
       _launchPick.equipment[id]--;
       if (_launchPick.equipment[id] <= 0) delete _launchPick.equipment[id];
-      rerenderModal(renderLaunchModal(), hookLaunchModal);
+      rerenderLaunch();
     });
   });
   $('#launchClose')?.addEventListener('click', () => {
     $('#modalBg').classList.remove('show');
-    m.classList.remove('launch-modal');
   });
   $('#launchGo')?.addEventListener('click', () => {
-    if (_launchPick.vesselId && _launchPick.crewIds.size > 0) {
-      launchExpedition({
-        vesselId: _launchPick.vesselId,
-        bodyId: _launchPick.bodyId,
-        crewIds: Array.from(_launchPick.crewIds),
-        equipment: { ..._launchPick.equipment }
-      });
-      $('#modalBg').classList.remove('show');
-      m.classList.remove('launch-modal');
-    }
+    if (!_launchPick.vesselId || _launchPick.crewIds.size === 0) return;
+    const before = S.expeditions.length;
+    launchExpedition({
+      vesselId: _launchPick.vesselId,
+      bodyId: _launchPick.bodyId,
+      crewIds: Array.from(_launchPick.crewIds),
+      equipment: { ..._launchPick.equipment }
+    });
+    if (S.expeditions.length === before) { rerenderLaunch(); return; }   // refusé : le motif est affiché
+    $('#modalBg').classList.remove('show');
+    const exp = S.expeditions[S.expeditions.length - 1];
+    const { body } = Base.bodyById(exp.bodyId);
+    save();
+    toast(`Décollage vers ${body?.name || 'la destination'} · arrivée dans ${fmtDuree(exp.oneWayMin)}`, { kind: 'ok' });
   });
 }
 
