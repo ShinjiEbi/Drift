@@ -6,7 +6,7 @@
 import { VERSION, SAVE_KEY, SAVE_SCHEMA_VERSION, SAVE_BACKUP_MAX, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, SKILL_LIST, PACING, YEAR_IN_GAME_MIN } from './constants.js';
 import { MODULES, MODULE_JOBS, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE, FABRICATIONS, VESSELS } from './catalog.js';
 import { rngFor, rPick, rWeighted, rInt, fmtDuree, esc, uid } from './util.js';
-import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits, tickAutoCare, genVesselName, salaryPerDay, normaliserMemoireColonie, convertirDecisionsColonie } from './app.js';
+import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, incidentPossible, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits, tickAutoCare, genVesselName, salaryPerDay, normaliserMemoireColonie, convertirDecisionsColonie } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
 import { notif } from './notifications.js';
 
@@ -434,6 +434,14 @@ function startNextQueuedBuild() {
     const item = q.shift();
     const def = MODULES[item.id];
     const cur = S.modules[item.id]?.level || 0;
+    // Module endommagé depuis la mise en file : le niveau perdu est d'abord
+    // réparé, sans frais ; le niveau payé reste en tête de file.
+    if (def && item.targetLevel > cur + 1 && cur + 1 <= (def.maxLevel || 0)) {
+      q.unshift(item);
+      beginBuild(item.id, cur + 1, {});
+      log('neutral', `Réparation engagée : <em>${def.nom}</em> (niv ${cur + 1}), avant le chantier prévu.`);
+      continue;
+    }
     const target = Math.min(item.targetLevel, cur + 1);
     const maxLvl = (def?.maxLevel || 0) + (techEffectsAccumulated().moduleMaxLevelDelta[item.id] || 0);
     const req = def ? def.prereq(target) : {};
@@ -1097,9 +1105,12 @@ function tickBuffs(silent) {
 function tickChainIncidents(silent) {
   if (!Array.isArray(S.pendingChainIncidents) || S.pendingChainIncidents.length === 0) return;
   const now = S.meta.gameMin || 0;
-  const due = S.pendingChainIncidents.filter(p => p.triggerAt <= now);
+  // File des décisions pleine : l'incident sérieux attend (30 min) au lieu
+  // d'être tranché à la place du joueur
+  const due = S.pendingChainIncidents.filter(p => p.triggerAt <= now && incidentPossible(p.incidentId, silent));
+  for (const p of S.pendingChainIncidents) if (p.triggerAt <= now && !due.includes(p)) p.triggerAt = now + 30 * PACING.MINUTE;
   if (due.length === 0) return;
-  S.pendingChainIncidents = S.pendingChainIncidents.filter(p => p.triggerAt > now);
+  S.pendingChainIncidents = S.pendingChainIncidents.filter(p => !due.includes(p));
   for (const p of due) step('incident en chaîne', id => triggerIncident(id, silent), p.incidentId);
 }
 
@@ -1512,6 +1523,11 @@ function normalizeContainers(d) {
     'research', 'fabrication', 'diplomaticMissions', 'activeBuffs', 'historicalMarks',
     'pendingChainIncidents', 'pendingDecisions', 'journal', 'buildQueue', 'researchQueue']) {
     if (!Array.isArray(d[k])) d[k] = [];
+    // Éléments vides ou d'un autre type (sauvegarde éditée à la main) : retirés,
+    // sinon le rendu et le tick lèveraient une exception à chaque passage
+    d[k] = k === 'researchQueue'
+      ? d[k].filter(x => typeof x === 'string' || (x && typeof x === 'object' && typeof x.techId === 'string'))
+      : d[k].filter(x => x && typeof x === 'object' && !Array.isArray(x));
   }
   for (const k of ['flags', 'modules', 'assignments', 'discoveries', 'techCompleted', 'relations', 'arcs',
     'unlockedLegendaryTechs', 'permanentBonuses', 'factions', 'scenesVues', 'compteurs', 'monde']) {

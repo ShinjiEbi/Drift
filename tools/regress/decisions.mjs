@@ -6,7 +6,7 @@
 //         acteurs revalidés (mort entre-temps)
 //   E1  : incidents en chaîne — en direct : file ; en silencieux : résolution automatique
 //   M2  : coûts vérifiés avant un choix volontaire, montants réels affichés
-//   M6  : dégâts sur un module — postes libérés, chantier ajusté
+//   M6  : dégâts sur un module — postes libérés, chantier repris à zéro (niveau payé acquis)
 //   M11 : une erreur dans un sous-système ne bloque ni les autres ni l'horloge ;
 //         une erreur de rendu ne double pas le temps et n'empêche pas la sauvegarde
 // Usage : NODE_PATH=$(npm root -g) node tools/regress/decisions.mjs
@@ -177,7 +177,7 @@ try {
     const res = {
       level: S.modules.mine_surface.level, slot2: S.assignments['mine_surface:2'] || null,
       thirdPost: a ? `${a.modKey}:${a.slotIdx}` : null, thirdStatut: third.statut, hist: (third.posteHistorique || []).length,
-      target: S.build.targetLevel
+      target: S.build.targetLevel, done: S.build.doneMin
     };
     S.build.doneMin = S.build.totalMin;
     st.tickOnce({ silent: true });
@@ -187,7 +187,8 @@ try {
   check(dmg.level === 2 && !dmg.slot2, 'niveau perdu et poste disparu libéré');
   check(dmg.thirdPost !== 'mine_surface:2' && (dmg.thirdStatut !== 'travail' || dmg.thirdPost) && dmg.hist >= 1,
     `occupant libéré (statut ${dmg.thirdStatut}, poste ${dmg.thirdPost || 'aucun'}), ancienneté archivée`);
-  check(dmg.target === 3 && dmg.afterBuild === 3, `chantier ajusté : reconstruit le niveau perdu (cible ${dmg.target}, après ${dmg.afterBuild})`);
+  // V1 : le niveau payé reste acquis ; les dégâts coûtent du temps (chantier repris à zéro)
+  check(dmg.target === 4 && dmg.done === 0 && dmg.afterBuild === 4, `chantier repris à zéro, niveau payé acquis (cible ${dmg.target}, après ${dmg.afterBuild})`);
 
   // ------------------------------------------------------------------
   console.log('7. Incidents en chaîne (E1)');

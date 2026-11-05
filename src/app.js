@@ -59,6 +59,9 @@ import { notif } from './notifications.js';
 import { PACING, PROD_INDEX } from './constants.js';
 import { refundCost, energyRatio } from './state.js';
 import { fmtDuree } from './util.js';
+// Contrats de docs/V1.md définis dans state.js : les vues les cherchent dans app.js
+// (import * as App). tools/regress/contrats-reels.mjs vérifie qu'aucun ne manque.
+export { enqueueBuild, cancelQueuedBuild, BUILD_QUEUE_MAX, calendarOf } from './state.js';
 
 export const ROLES = {
   production:  { nom: 'Production',   color: '#c8a878', desc: "Augmente le rendement principal du bâtiment." },
@@ -3306,7 +3309,12 @@ function damageModule(modKey) {
     unassignSlot(modKey, idx);
   }
   for (const id of freed) autoAssignMember(id);
-  if (S.build?.id === modKey && S.build.targetLevel > mod.level + 1) S.build.targetLevel = mod.level + 1;
+  // Chantier en cours sur ce module : le niveau payé reste acquis, mais le
+  // travail reprend de zéro (les dégâts coûtent du temps, pas des ressources).
+  if (S.build?.id === modKey) {
+    S.build.doneMin = 0;
+    return `${nom} est endommagé : niveau ramené à ${mod.level}. Le chantier en cours reprend de zéro.`;
+  }
   return `${nom} est endommagé : niveau ramené à ${mod.level}.`;
 }
 
@@ -3730,7 +3738,7 @@ function incidentProbability(modKey) {
 export function tickIncidents(silent = false) {
   if (S.meta.gameMin < S.nextIncidentMin) return;
   const waiting = (S.pendingDecisions || []).filter(d => d.kind === 'incident').length;
-  if (waiting >= PACING.INCIDENT_QUEUE_MAX) {
+  if (waiting >= PACING.INCIDENT_QUEUE_MAX || fileDecisionsPleine()) {
     S.nextIncidentMin = S.meta.gameMin + PACING.INCIDENT_GAP_MIN / 2;
     return;
   }
@@ -3803,16 +3811,29 @@ function enqueueDecision(dec) {
   S.pendingDecisions.push({ id: uid('dec'), createdAt: S.meta.gameMin, v: 1, ...dec });
   while (S.pendingDecisions.length > MAX_PENDING_DECISIONS) {
     // La plus ancienne décision MINEURE (incident de gravité 1) qui n'est pas à
-    // l'écran est tranchée automatiquement ; à défaut, la plus ancienne.
+    // l'écran est tranchée automatiquement. Jamais un incident sérieux ni un
+    // événement : la file peut alors dépasser le plafond (les tirages, eux,
+    // attendent qu'elle redescende — voir fileDecisionsPleine).
     const q = S.pendingDecisions;
     q.forEach(convertirDecision);
-    let idx = q.findIndex(d => d.id !== _shownDecisionId && d.kind === 'incident' && isMinorIncident(d.refId));
-    if (idx < 0) idx = q.findIndex(d => d.id !== _shownDecisionId);
+    const idx = q.findIndex(d => d.id !== _shownDecisionId && d.kind === 'incident' && isMinorIncident(d.refId));
+    if (idx < 0) break;
     const [old] = q.splice(idx, 1);
     autoResolveDecision(old);
   }
   syncPendingFlags();
   save();
+}
+
+// File des décisions pleine : aucun nouvel incident ni événement n'est tiré
+// (ils seraient tranchés à la place du joueur ou empilés sans fin).
+export function fileDecisionsPleine() {
+  return (S.pendingDecisions || []).length >= MAX_PENDING_DECISIONS;
+}
+// Un incident peut-il être déclenché maintenant ? (mineur pendant une absence :
+// tranché sur-le-champ ; sinon il faut une place dans la file)
+export function incidentPossible(incidentId, silent = false) {
+  return (silent && isMinorIncident(incidentId)) || !fileDecisionsPleine();
 }
 
 function removeDecision(id) {
@@ -3884,7 +3905,10 @@ function resoudreSansActeur(dec, def) {
   if (idx < 0) return;
   const c = def.choix[idx];
   ctx.titre = def.titre;
-  const out = appliquerEffetsColonie(c.effets || [], ctx);
+  // Le coût est payé comme pour un choix du joueur ; un test sans personne pour
+  // le tenter est un échec.
+  for (const [k, n] of Object.entries(c.cout || {})) S.res[k] = Math.max(0, (S.res[k] || 0) - n);
+  const out = appliquerEffetsColonie(N.brancheDe(c, null), ctx);
   const label = libelleDe(c, ctx);
   log('warn', `<b>${esc(def.titre)}</b> — décision automatique : « ${esc(label)} ». ${out.effets.filter(x => x.note).map(x => esc(x.text)).join(' · ')}`.trim());
   recordAutoResolution(dec.kind, def.titre, label);
@@ -4000,6 +4024,7 @@ export function tickColonyEvents(silent = false) {
   if (S.meta.gameMin < (S.nextEventMin || 0)) return;
   S.nextEventMin = S.meta.gameMin + PACING.EVENT_GAP_MIN + Math.random() * (PACING.EVENT_GAP_MAX - PACING.EVENT_GAP_MIN);
   if ((S.pendingDecisions || []).filter(d => d.kind === 'event').length >= PACING.EVENT_QUEUE_MAX) return;
+  if (fileDecisionsPleine()) return;
   const pick = pickColonyEvent();
   if (pick) declencherEvenement(pick.ev, pick.acteurs, silent);
 }
@@ -4008,7 +4033,7 @@ export function tickColonyEvents(silent = false) {
 // événement est garanti (s'il y en a un d'éligible et pas déjà un en attente).
 // Renvoie l'identifiant de l'événement déclenché, ou null.
 export function guaranteeReturnEvent() {
-  if ((S.pendingDecisions || []).some(d => d.kind === 'event')) return null;
+  if ((S.pendingDecisions || []).some(d => d.kind === 'event') || fileDecisionsPleine()) return null;
   const pick = pickColonyEvent();
   if (!pick) return null;
   declencherEvenement(pick.ev, pick.acteurs, false);
@@ -5097,7 +5122,7 @@ export function tickExpeditions() {
       if (!exp.awaitingChoice) exp.awaitingChoice = true;
       // Scène introuvable (données changées, sauvegarde ancienne…) : plutôt que de
       // bloquer vaisseau et équipage pour toujours, l'équipe rentre.
-      if (!currentScene(exp)) {
+      if (!sceneCourante(exp)) {   // existence seule : pas de rendu à chaque tick
         exp.accumulatedLog.push("Plus rien à explorer ici : l'équipe regagne le vaisseau.");
         log('warn', `<em>${vesselNameOf(exp)}</em> : mission interrompue sur <em>${bodyOfExpedition(exp)?.name || 'site inconnu'}</em>, retour à l'avant-poste.`);
         startReturn(exp);
@@ -7060,7 +7085,7 @@ function showCatchupModal(report) {
        </p>`
     : '';
   // Bilans des expéditions rentrées pendant l'absence : un bouton chacun
-  const bilans = unreadReports().slice(-4);
+  const bilans = unreadReports().slice(0, 4);   // les plus récents (expHistory : du plus récent au plus ancien)
   const bilansHTML = bilans.length
     ? `<div class="catchup-bilans">${bilans.map(h =>
         `<button type="button" class="cta-btn ghost" data-catchup-bilan="${esc(h.expId)}">Bilan : ${esc(h.bilan?.lieu || 'expédition')}</button>`).join('')}</div>`

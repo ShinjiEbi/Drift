@@ -124,7 +124,9 @@ Le jeu se joue en temps réel : **1 tick = 1 seconde réelle** (`S.meta.gameMin`
 compte les ticks, nom historique). Toutes les durées (chantiers, recherche,
 expéditions, soins, incidents, recrutement, vieillissement…) sont définies dans
 la table `PACING` de `src/constants.js`, source unique du rythme ; « Jour N »
-compte les jours réels depuis la fondation (`calendarOf()` dans `state.js`).
+compte les jours de la colonie depuis sa fondation (`calendarOf()` dans
+`state.js`) : le temps simulé, qui suit le temps réel tant que l'absence ne
+dépasse pas 12 h.
 
 Le temps écoulé pendant que l'onglet est caché ou l'app fermée est rattrapé au
 retour (12 h au plus), par tranches, avec une barre de progression. Pendant ce

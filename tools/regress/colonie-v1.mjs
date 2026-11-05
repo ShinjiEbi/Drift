@@ -171,7 +171,8 @@ try {
     const accueil = vue.choix.find(c => c.recrue);
     out.salaire = accueil?.recrue?.salaire;
     out.salaireAttendu = app.salaryPerDay(dec.recrues[accueil.index]);
-    // File pleine : la plus ancienne (le visiteur) est tranchée automatiquement
+    // File qui déborde : seuls les incidents mineurs sont tranchés ; le visiteur
+    // (un événement) attend le joueur, personne n'entre sans lui
     const n0 = S.crew.length;
     S.pendingDecisions.length = 0;
     S.pendingDecisions.push(dec);
@@ -189,8 +190,8 @@ try {
   });
   check(recrue.vivresOk && recrue.declenche, 'colonie.vivres_ok : couchette libre et vivres en hausse → le visiteur peut venir');
   check(Number.isFinite(recrue.salaire) && recrue.salaire === recrue.salaireAttendu, `le choix d'accueil affiche le salaire réel (${recrue.salaire} biomasse par jour)`);
-  check(recrue.colons === 0 && /Visiteur isolé.*décision automatique : « La renvoyer poliment »/.test(recrue.journal) && !recrue.restants.includes('visiteur_isole'),
-    'résolution automatique : aucun colon accueilli, choix qui n\'ajoute personne');
+  check(recrue.colons === 0 && recrue.restants.includes('visiteur_isole') && !/Visiteur isolé.*décision automatique/.test(recrue.journal),
+    `file qui déborde : le visiteur attend le joueur, aucun colon accueilli (${JSON.stringify(recrue.restants)})`);
   check(recrue.sansVivres === false, 'sans biomasse, aucun visiteur ne se présente');
 
   // Affichage de la fenêtre : titre, texte, choix avec raison / chance / salaire, conséquences
@@ -223,6 +224,60 @@ try {
   await page.click('#consContinue');
   await page.evaluate(async () => (await import('./src/state.js')).setSimPaused(true));
   b.noErrors(page, 'aucune erreur de page (contenu joué)');
+
+  // ------------------------------------------------------------------
+  console.log('2b. File pleine, incident sans personne, module endommagé avant un chantier en file');
+  const file = await page.evaluate(async () => {
+    const st = await import('./src/state.js');
+    const app = await import('./src/app.js');
+    const S = st.S;
+    const out = {};
+    // File pleine (3) : ni incident ni événement tiré, rien de tranché à la place du joueur
+    S.pendingDecisions.length = 0;
+    S.evenements = {};
+    app.triggerColonyEvent('visiteur_isole');
+    app.triggerIncident('mine_predateur', false);
+    app.triggerIncident('mine_predateur', false);
+    out.pleine = app.fileDecisionsPleine();
+    const avant = S.pendingDecisions.map(d => d.id).join();
+    S.nextIncidentMin = 0; S.nextEventMin = 0;
+    app.tickIncidents(true);
+    app.tickColonyEvents(true);
+    out.inchangee = S.pendingDecisions.map(d => d.id).join() === avant;
+    // Un incident sérieux de plus (incident en chaîne, contenu) : la file déborde
+    // mais rien n'est tranché à la place du joueur
+    app.triggerIncident('mine_predateur', false);
+    out.deborde = S.pendingDecisions.length === 4 && S.pendingDecisions.some(d => d.refId === 'visiteur_isole');
+    // Incident sans personne à la base : le choix retenu est payé
+    S.pendingDecisions.length = 0;
+    S.modules.habitat = { level: 3 };
+    for (const m of S.crew) if (m.statut !== 'mort') m.statut = 'expedition';
+    S.res.biomasse = 300;
+    S.pendingDecisions.push({ id: 'dec_vide', kind: 'incident', refId: 'habitat_anniversaire', acteurs: {}, createdAt: S.meta.gameMin, v: 1 });
+    document.querySelector('#modalBg')?.classList.remove('show');   // aucune fenêtre ouverte
+    st.setSimPaused(false); app.pumpDecisions(); st.setSimPaused(true);   // (synchrone : aucun tick entre les deux)
+    const ligne = S.journal.slice(-12).map(e => e.txt).find(t => /Anniversaire<\/b> — décision automatique/.test(t)) || '(aucune décision automatique « Anniversaire »)';
+    out.fete = /Organiser une fête/.test(ligne) ? S.res.biomasse <= 241 : /Geste discret|Trop occupés/.test(ligne);
+    out.fete = out.fete && !S.pendingDecisions.some(d => d.id === 'dec_vide');
+    out.ligne = ligne.slice(0, 160);
+    for (const m of S.crew) if (m.statut === 'expedition') m.statut = 'libre';
+    // Module endommagé alors qu'un niveau est en file : réparation gratuite d'abord
+    // (un autre chantier se termine ; la file prend le relais)
+    S.modules.mine_surface = { level: 3 };
+    S.modules.generateur_solaire = { level: 1 };
+    S.build = { id: 'generateur_solaire', targetLevel: 2, totalMin: 10, doneMin: 9, cost: {} };
+    S.buildQueue = [{ id: 'mine_surface', targetLevel: 4, cost: { metal: 10 } }];
+    app.appliquerEffetsColonie([{ module: { id: 'mine_surface', niveau: -1 } }], {});
+    st.tickOnce({ silent: true });
+    out.dbg = JSON.stringify({ build: S.build, q: S.buildQueue, lvl: S.modules.mine_surface });
+    out.reparation = S.build?.id === 'mine_surface' && S.build?.targetLevel === 3 && Object.keys(S.build.cost || {}).length === 0 && S.buildQueue[0]?.targetLevel === 4;
+    S.build = null; S.buildQueue = []; S.pendingDecisions.length = 0;
+    return out;
+  });
+  check(file.pleine && file.inchangee, 'file pleine : aucun nouvel incident ni événement tiré');
+  check(file.deborde, 'file qui déborde : aucun incident sérieux ni événement tranché à la place du joueur');
+  check(file.fete, `incident sans personne à la base : le coût du choix retenu est payé (${file.ligne})`);
+  check(file.reparation, 'module endommagé : le niveau perdu est réparé gratuitement, le niveau payé reste en file' + (file.reparation ? '' : ' ' + file.dbg));
 
   // ------------------------------------------------------------------
   console.log('3. Archives et Annales');
