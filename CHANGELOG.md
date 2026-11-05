@@ -51,6 +51,8 @@ décisions en attente et chroniques sont conservés.
 - Aucun coût au-dessus du stockage atteignable (vérifié par un outil) ;
   plafonds qui suivent les modules ; techs centrales sans schéma tiré au
   hasard ; une pénurie d'énergie ralentit réellement la base et s'affiche.
+- Une colonie à court de vivres peut toujours agrandir l'hydroponie : les
+  modules qui produisent de la biomasse n'en coûtent plus.
 - Un module endommagé pendant son chantier ne fait plus perdre le niveau
   payé.
 
