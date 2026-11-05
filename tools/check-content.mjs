@@ -233,7 +233,7 @@ function verifierGabarit(inner, ctx, cadre) {
   if (head.startsWith('pnj:')) {
     const ref = head.slice(4);
     const [hId, pId] = ref.includes('/') ? ref.split('/') : [h?.id, ref];
-    if (!HISTOIRES[hId]?.personnages?.[pId] && !(!ref.includes('/') && PERSONNAGES_P[ref])) err(ctx, `{${inner}} : personnage inconnu « ${ref} »${h ? '' : ' (personnage partagé de src/content/personnages/, ou {pnj:histoire/personnage})'}`);
+    if (!HISTOIRES[hId]?.personnages?.[pId] && !(cadre.colonie && !ref.includes('/') && PERSONNAGES_P[ref])) err(ctx, `{${inner}} : personnage inconnu « ${ref} »${h ? '' : ' (hors histoire : {pnj:histoire/personnage} ; un personnage partagé, seulement à la colonie)'}`);
   } else if (colonie || (cadre.colonie && head === 'module' && cadre.module)) {
     // acteur déclaré de l'événement, recrue, module de l'incident
   } else if (head.startsWith('decor.')) {
@@ -357,7 +357,7 @@ function verifierEffets(liste, ctx, cadre) {
         }
         const ref = String(v);
         const [hId, pId] = ref.includes('/') ? ref.split('/') : [h?.id, ref];
-        if (!HISTOIRES[hId]?.personnages?.[pId] && !(!ref.includes('/') && PERSONNAGES_P[ref])) err(cx, `personnage inconnu « ${ref} »`);
+        if (!HISTOIRES[hId]?.personnages?.[pId] && !(cadre.colonie && !ref.includes('/') && PERSONNAGES_P[ref])) err(cx, `personnage inconnu « ${ref} »`);
         break;
       }
       case 'reputation':

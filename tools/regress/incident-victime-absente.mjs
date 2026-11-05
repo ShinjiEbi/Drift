@@ -30,7 +30,7 @@ async function scenario(choiceRe, simulateMin) {
   // 2. … un éboulement survient à la mine : victime X (seul en poste) → mis en file (fenêtre déjà ouverte)
   await page.evaluate(async () => (await import('./src/app.js')).triggerIncident('mine_eboulement', false));
   await page.waitForTimeout(500);
-  const victim = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.victimId);
+  const victim = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.acteurs?.victime);
   // 3. Il ouvre les réglages, choisit le vaisseau et X seul (en poste, donc éligible ;
   //    l'équipe proposée d'office est d'abord retirée), puis décolle
   await page.click('#modal .lx-details > summary');

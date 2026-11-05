@@ -161,7 +161,7 @@ Entre accolades, remplacés au moment de l'affichage :
 | `{equipe.hasard}` | un membre de l'équipe, le même pendant toute la scène |
 | `{acteur}` | le colon qui agit pour ce choix (celui qui passe le test, ou qui remplit la condition) — dans les textes de conséquence |
 | `{victime}` | le dernier colon touché par un `statut` (ou la victime d'un incident) |
-| `{pnj:adele}` | nom d'un personnage de l'histoire (`{pnj:pulsar_silencieux/adele}` ailleurs) ; `{pnj:ilya}` : un personnage partagé (section 12) |
+| `{pnj:adele}` | nom d'un personnage de l'histoire (`{pnj:pulsar_silencieux/adele}` ailleurs) ; `{pnj:ilya}` : un personnage partagé (section 12), dans les événements, incidents et archives |
 | `{colon}`, `{colon.age}` | un acteur déclaré d'un événement (section 9), son âge |
 | `{module}` | le module d'un incident (« Mine de surface ») |
 | `{recrue}` | le colon qu'un choix vient d'accueillir (effet `recrute`) |
