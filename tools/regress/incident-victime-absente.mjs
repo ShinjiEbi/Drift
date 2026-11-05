@@ -30,10 +30,17 @@ async function scenario(choiceRe, simulateMin) {
   // 2. … un éboulement survient à la mine : victime X (seul en poste) → mis en file (fenêtre déjà ouverte)
   await page.evaluate(async () => (await import('./src/app.js')).triggerIncident('mine_eboulement', false));
   await page.waitForTimeout(500);
-  const victim = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.victimId);
-  // 3. Il sélectionne le vaisseau et X (en poste, donc éligible), puis décolle
+  const victim = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.acteurs?.victime);
+  // 3. Il ouvre les réglages, choisit le vaisseau et X seul (en poste, donc éligible ;
+  //    l'équipe proposée d'office est d'abord retirée), puis décolle
+  await page.click('#modal .lx-details > summary');
   await page.click('[data-pick-vessel]');
-  await page.click(`[data-pick-crew="${ids.x}"]`);
+  for (let i = 0; i < 6; i++) {
+    const sel = await page.$(`#modal .crew-picker-item.selected:not([data-pick-crew="${ids.x}"])`);
+    if (!sel) break;
+    await sel.click();
+  }
+  if (!await page.$(`#modal [data-pick-crew="${ids.x}"].selected`)) await page.click(`[data-pick-crew="${ids.x}"]`);
   await page.click('#launchGo');
   await page.waitForTimeout(700);
   const shown = await page.evaluate(() => document.querySelector('#modalBg.show #modal .incident-body')?.textContent);

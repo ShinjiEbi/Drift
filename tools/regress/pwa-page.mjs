@@ -101,8 +101,13 @@ try {
   await page.goto(BASE + '?tab=crew');
   await waitGame();
   await page.waitForTimeout(900);
-  check(await activeTab() === 'crew', '?tab=crew ouvre l\'onglet Équipage');
+  check(await activeTab() === 'equipage', '?tab=crew (ancien nom) ouvre l\'onglet Équipage');
   check(!(await page.evaluate(() => location.search)), 'paramètre retiré de l\'URL');
+  await page.goto(BASE + '?tab=' + encodeURIComponent('labo/atelier'));
+  await waitGame();
+  await page.waitForTimeout(900);
+  const sub = await page.evaluate(() => document.querySelector('#view-labo nav.subtabs button.active')?.dataset.subtab);
+  check(await activeTab() === 'labo' && sub === 'atelier', '?tab=labo/atelier ouvre Labo › Atelier', sub);
   // L'interface mémorise l'onglet ouvert (localStorage « drift_ui_nav ») et le restaure au
   // rechargement : on l'oublie pour vérifier que les ?tab= suivants ne changent rien.
   await page.evaluate(() => { try { localStorage.removeItem('drift_ui_nav'); } catch { /* rien */ } });
@@ -111,14 +116,14 @@ try {
     await waitGame();
     await page.waitForTimeout(800);
   }
-  check(await activeTab() === 'overview', 'un ?tab= inconnu ou malveillant est ignoré');
+  check(await activeTab() === 'base', 'un ?tab= inconnu ou malveillant est ignoré');
   flushErrors('aucune erreur avec des ?tab= malveillants');
 
   console.log('3. Partie : onglets, modales, export');
-  for (const t of ['overview', 'modules', 'crew', 'galaxy', 'stocks', 'arcs', 'journal']) {
+  for (const t of ['base', 'equipage', 'expeditions', 'recits', 'labo']) {
     await page.click(`nav.tabs button[data-tab="${t}"]`, { force: true });
     await page.waitForTimeout(120);
-    const subs = await page.$$(`#view-${t} [data-subtab], #view-${t} [data-subtab-mod], #view-${t} [data-subtab-galaxy], #view-${t} [data-subtab-stocks]`);
+    const subs = await page.$$(`#view-${t} [data-subtab]`);
     for (const s of subs) {
       if (await s.isDisabled()) continue;
       await s.click({ force: true });

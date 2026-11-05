@@ -18,7 +18,7 @@ const r = await page.evaluate(async () => {
   app.unassignMember(x.id);
   for (const k of Object.keys(S.assignments)) delete S.assignments[k];
   for (const m of S.crew) m.statut = 'libre';
-  app.autoAssignMember(x.id);
+  app.autoAssignMember(x.id, { force: true });   // V1 : désaffecté par le joueur → replacé seulement sur demande
   const a = app.memberAssignment(x.id);
   globalThis.__slot = a.modKey + ':' + a.slotIdx;
   for (const sys of S.galaxy.systems) sys.scanned = true;
@@ -30,7 +30,7 @@ const r = await page.evaluate(async () => {
   return { x: x.id, slot: globalThis.__slot, before };
 });
 console.log('X en expédition, poste réservé :', JSON.stringify(r.before));
-await page.evaluate(() => { document.querySelector('nav.tabs button[data-tab="modules"]').click(); document.querySelector('[data-subtab-mod="assignments"]').click(); });
+await page.evaluate(() => { document.querySelector('nav.tabs button[data-tab="base"]').click(); document.querySelector('[data-subtab="postes"]').click(); });
 await page.waitForTimeout(200);
 await page.click('#optimizeAssignBtn');
 await page.waitForTimeout(200);

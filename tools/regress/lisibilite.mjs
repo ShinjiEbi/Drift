@@ -30,9 +30,10 @@ try {
   const small = await page.evaluate(async () => {
     const ui = await import('./src/ui.js');
     document.querySelector('#modalBg').classList.remove('show');
-    const views = [['overview'], ['modules', 'construction'], ['modules', 'assignments'], ['crew', 'personnel'], ['crew', 'recruit'],
-      ['crew', 'formation'], ['crew', 'soins'], ['galaxy', 'cartographie'], ['galaxy', 'fleet'], ['galaxy', 'expeditions'],
-      ['galaxy', 'diplomatie'], ['stocks', 'inventory'], ['stocks', 'library'], ['stocks', 'research'], ['stocks', 'workshop'], ['arcs'], ['journal']];
+    const views = [['base', 'afaire'], ['base', 'construction'], ['base', 'postes'], ['equipage', 'personnel'], ['equipage', 'recrutement'],
+      ['equipage', 'formation'], ['equipage', 'soins'], ['expeditions', 'carte'], ['expeditions', 'vaisseaux'], ['expeditions', 'missions'],
+      ['expeditions', 'diplomatie'], ['labo', 'inventaire'], ['labo', 'bibliotheque'], ['labo', 'recherche'], ['labo', 'atelier'],
+      ['recits', 'chroniques'], ['recits', 'filsrouges'], ['recits', 'journal'], ['recits', 'archives'], ['recits', 'annales']];
     const found = new Map();
     const scan = root => {
       for (const el of root.querySelectorAll('*')) {
@@ -49,7 +50,8 @@ try {
     }
     scan(document.querySelector('header.top'));
     scan(document.querySelector('.topbars'));
-    scan(document.querySelector('footer.actions'));
+    ui.openMenu(); scan(document.querySelector('#menuSheet')); ui.closeMenu();
+    document.querySelector('[data-glossary]')?.click(); scan(document.querySelector('#modal')); document.querySelector('#modalBg').classList.remove('show');
     return [...found].map(([k, v]) => `${k} (${v}px)`);
   });
   t.check(small.length === 0, 'aucun texte visible sous 11 px', small.slice(0, 8).join(', '));

@@ -17,13 +17,22 @@ src/
   constants.js           VERSION, multiplicateurs, libellés
   util.js                RNG seedé, $/$$, formats, esc() (échappement HTML), uid()
   catalog.js             données : MODULES, VESSELS, ITEMS, BLUEPRINTS, TECH_TREE,
-                         FABRICATIONS, SCENES, BIOMES, TRAITS, ENEMY_TYPES…
-  chronicles.js          chroniques planétaires (scènes, fins, personnages)
+                         FABRICATIONS, BIOMES, TRAITS, ENEMY_TYPES… (SCENES : réexport du contenu)
+  content/               contenu narratif en données pures : histoires (chroniques),
+                         scènes d'expédition, événements, incidents, fils rouges,
+                         personnages, pages d'archives — voir docs/ecrire-pour-drift.md
+  engine/narration.js    moteur narratif : conditions (mini-langage), textes, effets, choix
+  chronicles.js          passerelle vers les histoires de content/histoires/
   data-arcs-factions.js  ARCS et FACTION_TYPES
   state.js               état S, temps de jeu, sauvegarde, migrations, galaxie
   app.js                 logique : postes, médical, recherche, incidents, événements,
                          arcs, diplomatie, expéditions, combat, démarrage
-  ui.js                  rendu des vues, modales, journal, toasts
+  ui.js                  coquille : en-tête, 5 onglets (Base, Équipage, Expéditions,
+                         Récits, Labo), alertes, toasts, menu « ⋯ », fenêtres,
+                         écran de scène, combat, lancement d'expédition
+  views/                 une vue par onglet (base, equipage, expeditions, recits, labo)
+                         et common.js (formats, appels tolérants à app.js)
+  objectives.js          objectifs du tableau de bord (3 au plus, avec leur action)
   notifications.js       notifications système
   pwa.js                 enregistrement du service worker, bandeau de mise à jour,
                          bouton d'installation
@@ -58,12 +67,17 @@ Les outils de développement ont besoin de Node 22 et de `npm ci`
 ```sh
 npm ci
 npm run lint          # ESLint (variables non définies, clés en double…)
-npm run check:data    # références croisées des données (items, scènes, techs…)
+npm run check:data    # références croisées des données (items, techs, modules…)
+npm run check:content # contenu narratif : schéma, références, graphe des histoires, typographie
 npm run sw:check      # le cache hors-ligne correspond bien aux fichiers publiés
 npm run smoke         # test de fumée dans Chromium : onglets, 10 jours simulés, rechargement
 npm run test:regress  # tests de non-régression (tools/regress/)
 npm test              # tout ce qui précède
 ```
+
+Pour écrire du contenu (histoires, scènes) : `docs/ecrire-pour-drift.md`, et
+`npm run histoire -- <id>` pour jouer une histoire dans le terminal (`--tout`
+liste tous les chemins jusqu'à chaque fin).
 
 `smoke` et `test:regress` utilisent Playwright, qui n'est pas une dépendance
 du projet : installez-le avec `npm i --no-save playwright && npx playwright install chromium`,
@@ -106,8 +120,26 @@ GitHub Pages : le dépôt est publié tel quel (https://shinjiebi.github.io/Drif
 
 ## Temps de jeu
 
-Une seconde réelle = une minute de jeu. Le temps écoulé pendant que l'onglet
-est caché ou l'app fermée est rattrapé au retour (12 h au plus), par tranches,
-avec une barre de progression. Pendant ce rattrapage, les incidents et
-événements sont résolus automatiquement avec le choix le plus prudent ; en
-jeu, ils attendent dans une file de décisions sauvegardée.
+Le jeu se joue en temps réel : **1 tick = 1 seconde réelle** (`S.meta.gameMin`
+compte les ticks, nom historique). Toutes les durées (chantiers, recherche,
+expéditions, soins, incidents, recrutement, vieillissement…) sont définies dans
+la table `PACING` de `src/constants.js`, source unique du rythme ; « Jour N »
+compte les jours de la colonie depuis sa fondation (`calendarOf()` dans
+`state.js`) : le temps simulé, qui suit le temps réel tant que l'absence ne
+dépasse pas 12 h.
+
+Le temps écoulé pendant que l'onglet est caché ou l'app fermée est rattrapé au
+retour (12 h au plus), par tranches, avec une barre de progression. Pendant ce
+rattrapage, seuls les incidents mineurs sont résolus automatiquement ; les
+incidents sérieux et les événements attendent le joueur dans la file des
+décisions (3 au plus). Les chantiers (file de 3) et la recherche (1 en file)
+continuent, l'infirmerie soigne seule si un soignant est en poste, et un
+rapport « Reprise du contact » raconte l'absence.
+
+Outils de réglage :
+
+```sh
+node tools/check-economy.mjs                  # aucun coût au-dessus du stockage atteignable
+node tools/sim.mjs --scenario regulier --seed 1 --out r.json   # bot joueur (actif, regulier, rare)
+node tools/sim.mjs --report r1.json r2.json   # tableau comparatif
+```

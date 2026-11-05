@@ -85,3 +85,21 @@ export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c]);
 let _uidCounter = 0;
 export const uid = prefix =>
   `${prefix}_${Date.now().toString(36)}_${(_uidCounter++).toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+
+// Durée réelle lisible. 1 tick = 1 seconde réelle (voir docs/V1.md).
+// 45 → « 45 s », 720 → « 12 min », 7500 → « 2 h 05 », 97200 → « 1 j 3 h ».
+export const fmtDuree = ticks => {
+  let s = Math.ceil(Number(ticks));
+  if (!Number.isFinite(s)) return '—';
+  if (s <= 0) return '0 s';
+  if (s < 60) return s + ' s';
+  const totalMin = Math.ceil(s / 60);
+  if (totalMin < 60) return totalMin + ' min';
+  if (totalMin < 24 * 60) {
+    const h = Math.floor(totalMin / 60), m = totalMin % 60;
+    return m ? `${h} h ${String(m).padStart(2, '0')}` : `${h} h`;
+  }
+  const totalH = Math.ceil(totalMin / 60);
+  const j = Math.floor(totalH / 24), h = totalH % 24;
+  return h ? `${j} j ${h} h` : `${j} j`;
+};

@@ -6,10 +6,12 @@
   "scripts": {
     "lint": "eslint --ext .js,.mjs src sw.js tools",
     "check:data": "node tools/check-data.mjs",
+    "check:content": "node tools/check-content.mjs",
+    "histoire": "node tools/lire-histoire.mjs",
     "sw:check": "node tools/sw-version.mjs --check",
     "sw:write": "node tools/sw-version.mjs --write",
     "smoke": "node tools/smoke.mjs",
-    "test": "npm run lint && npm run sw:check && npm run check:data && npm run smoke && npm run test:regress",
+    "test": "npm run lint && npm run sw:check && npm run check:data && npm run check:content && npm run smoke && npm run test:regress",
     "test:regress": "node tools/run-regress.mjs"
   },
   "devDependencies": {

@@ -51,16 +51,18 @@
 
   <header class="top">
     <div class="brand">DRIFT<span class="dot" aria-hidden="true"></span><span id="colonyName">Avant-poste</span></div>
-    <div class="session-clock">
+    <!-- « J1 · 00:03 » : le « our » de « Jour » est ajouté en CSS (.jday::after),
+         le texte de #gameTime reste compact pour les outils et les tests. -->
+    <div class="session-clock" title="Jours réels depuis la fondation">
       <b id="gameTime">J1 · 00:00</b>
-      <span id="realTime">session 0:00</span>
     </div>
     <button id="installBtn" class="install-btn" hidden title="Installer DRIFT sur ton appareil" aria-label="Installer DRIFT sur ton appareil"><span aria-hidden="true">⤓</span></button>
+    <button id="menuBtn" class="menu-btn" type="button" aria-haspopup="dialog" aria-controls="menuSheet" aria-expanded="false" aria-label="Menu et réglages" title="Menu et réglages"><span aria-hidden="true">⋯</span></button>
   </header>
 
   <!-- Barres collantes (un seul bloc : elles ne se chevauchent plus au défilement) -->
   <div class="topbars">
-    <!-- 0.23 — Bandeau ressources persistant : visible sur tous les onglets -->
+    <!-- Bandeau ressources persistant : visible sur tous les onglets -->
     <div class="res-bar" id="resBar" role="group" aria-label="Ressources">
       <div class="res-bar-cell" data-res="metal">
         <span class="rb-label">Me</span>
@@ -89,53 +91,48 @@
       </div>
     </div>
 
-    <!-- 0.23 — Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
+    <!-- Bandeau alertes contextuelles : visible uniquement s'il y a des alertes -->
     <div class="alert-bar" id="alertBar" style="display:none;" role="button" tabindex="0" aria-haspopup="dialog">
       <span class="ab-icon" aria-hidden="true">⚠</span>
       <span class="ab-text" id="alertText">Alertes</span>
       <span class="ab-arrow" aria-hidden="true">▸</span>
     </div>
 
-    <!-- Onglets : en haut sur ordinateur, barre fixe en bas sur mobile (libellés courts) -->
+    <!-- Onglets : en haut sur ordinateur, barre fixe en bas sur mobile -->
     <nav class="tabs" role="tablist" aria-label="Sections">
-      <button data-tab="overview" id="tab-overview" class="active" role="tab" aria-selected="true" aria-controls="view-overview"><span class="tab-icon" aria-hidden="true">🏛</span><span class="tab-label">Vue</span></button>
-      <button data-tab="modules" id="tab-modules" role="tab" aria-selected="false" aria-controls="view-modules" tabindex="-1"><span class="tab-icon" aria-hidden="true">⚙</span><span class="tab-label">Modules</span></button>
-      <button data-tab="crew" id="tab-crew" role="tab" aria-selected="false" aria-controls="view-crew" tabindex="-1"><span class="tab-icon" aria-hidden="true">👥</span><span class="tab-label tab-long">Équipage</span><span class="tab-short" aria-hidden="true">Équipe</span><span class="tab-badge" id="crewBadge"></span></button>
-      <button data-tab="galaxy" id="tab-galaxy" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1"><span class="tab-icon" aria-hidden="true">🛰</span><span class="tab-label">Galaxie</span><span class="tab-badge" id="galaxyBadge"></span></button>
-      <button data-tab="stocks" id="tab-stocks" role="tab" aria-selected="false" aria-controls="view-stocks" tabindex="-1"><span class="tab-icon" aria-hidden="true">📦</span><span class="tab-label">Stocks</span></button>
-      <button data-tab="arcs" id="tab-arcs" role="tab" aria-selected="false" aria-controls="view-arcs" tabindex="-1"><span class="tab-icon" aria-hidden="true">📜</span><span class="tab-label tab-long">Chroniques</span><span class="tab-short" aria-hidden="true">Chron.</span><span class="tab-badge" id="arcsBadge"></span></button>
-      <button data-tab="journal" id="tab-journal" role="tab" aria-selected="false" aria-controls="view-journal" tabindex="-1"><span class="tab-icon" aria-hidden="true">📓</span><span class="tab-label">Journal</span></button>
+      <button data-tab="base" id="tab-base" class="active" role="tab" aria-selected="true" aria-controls="view-base"><span class="tab-icon" aria-hidden="true">🏛</span><span class="tab-label">Base</span><span class="tab-badge" id="baseBadge"></span></button>
+      <button data-tab="equipage" id="tab-equipage" role="tab" aria-selected="false" aria-controls="view-equipage" tabindex="-1"><span class="tab-icon" aria-hidden="true">👥</span><span class="tab-label">Équipage</span><span class="tab-badge" id="equipageBadge"></span></button>
+      <button data-tab="expeditions" id="tab-expeditions" role="tab" aria-selected="false" aria-controls="view-expeditions" tabindex="-1"><span class="tab-icon" aria-hidden="true">🛰</span><span class="tab-label tab-long">Expéditions</span><span class="tab-short" aria-hidden="true">Expéd.</span><span class="tab-badge" id="expeditionsBadge"></span></button>
+      <button data-tab="recits" id="tab-recits" role="tab" aria-selected="false" aria-controls="view-recits" tabindex="-1"><span class="tab-icon" aria-hidden="true">📜</span><span class="tab-label">Récits</span><span class="tab-badge" id="recitsBadge"></span></button>
+      <button data-tab="labo" id="tab-labo" role="tab" aria-selected="false" aria-controls="view-labo" tabindex="-1"><span class="tab-icon" aria-hidden="true">🔬</span><span class="tab-label">Labo</span><span class="tab-badge" id="laboBadge"></span></button>
     </nav>
   </div>
 
   <main>
-    <!-- VUE D'ENSEMBLE -->
-    <section class="view active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
-      <h2 class="eyebrow">État de la colonie</h2>
-      <h1 class="head" id="overviewName">Avant-poste</h1>
-      <div class="subhead" id="overviewSub">Cycle de fondation</div>
-      <div class="resources" id="resourcesGrid"></div>
-
-      <h2 class="eyebrow">Construction en cours</h2>
-      <div id="buildSlot" class="empty">Aucun chantier ouvert.</div>
-    </section>
-
-    <!-- MODULES (hub avec sous-onglets) -->
-    <section class="view" id="view-modules" role="tabpanel" aria-labelledby="tab-modules">
-      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
-        <button data-subtab-mod="construction" class="active" role="tab" aria-controls="subview-construction" aria-selected="true">Construction</button>
-        <button data-subtab-mod="assignments" role="tab" aria-controls="subview-assignments" aria-selected="false" tabindex="-1">Affectations<span class="tab-badge" id="assignBadge"></span></button>
+    <!-- BASE : à faire, construction, postes -->
+    <section class="view active" id="view-base" role="tabpanel" aria-labelledby="tab-base">
+      <nav class="subtabs" role="tablist" aria-label="Base">
+        <button data-subtab="afaire" id="subtab-afaire" class="active" role="tab" aria-controls="subview-afaire" aria-selected="true">À faire<span class="tab-badge" id="afaireBadge"></span></button>
+        <button data-subtab="construction" id="subtab-construction" role="tab" aria-controls="subview-construction" aria-selected="false" tabindex="-1">Construction</button>
+        <button data-subtab="postes" id="subtab-postes" role="tab" aria-controls="subview-postes" aria-selected="false" tabindex="-1">Postes<span class="tab-badge" id="postesBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-construction" role="tabpanel">
-        <h2 class="eyebrow">Infrastructures disponibles</h2>
-        <h1 class="head">Modules</h1>
-        <div class="subhead">Construction séquentielle, un chantier à la fois</div>
+      <div class="subview active" id="subview-afaire" role="tabpanel" aria-labelledby="subtab-afaire">
+        <div id="dashHead" class="dash-head"></div>
+        <div id="dashAttention"></div>
+        <div id="dashObjectives"></div>
+        <div id="dashActivity"></div>
+        <div id="dashResources"></div>
+      </div>
+
+      <div class="subview" id="subview-construction" role="tabpanel" aria-labelledby="subtab-construction">
+        <div id="buildPanel"></div>
+        <div id="buildFilters"></div>
         <div class="modules" id="modulesList"></div>
-        <!-- 0.26.1 — Bandeau Synthétiseur quantique (caché si module pas construit) -->
+        <!-- Synthétiseur quantique (caché si le module n'est pas construit) -->
         <div id="synthesisBanner" class="synthesis-banner" hidden>
           <div class="sb-header">
-            <span class="sb-icon">⚛</span>
+            <span class="sb-icon" aria-hidden="true">⚛</span>
             <span class="sb-title">Synthétiseur quantique</span>
             <button id="openSynthesis" class="sb-btn">Convertir</button>
           </div>
@@ -143,76 +140,76 @@
         </div>
       </div>
 
-      <div class="subview" id="subview-assignments" role="tabpanel">
-        <h2 class="eyebrow">Vie de la base</h2>
-        <h1 class="head">Affectations</h1>
+      <div class="subview" id="subview-postes" role="tabpanel" aria-labelledby="subtab-postes">
         <div class="subhead" id="assignSub">Assigne ton équipage aux postes des bâtiments</div>
         <div id="assignControls"></div>
         <div id="assignList"></div>
       </div>
     </section>
 
-    <!-- ÉQUIPAGE (hub avec sous-onglets) -->
-    <section class="view" id="view-crew" role="tabpanel" aria-labelledby="tab-crew">
-      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
-        <button data-subtab="personnel" class="active" role="tab" aria-controls="subview-personnel" aria-selected="true">Personnel</button>
-        <button data-subtab="recruit" id="subtab-recruit" role="tab" aria-controls="subview-recruit" aria-selected="false" tabindex="-1">Recrut.<span class="tab-badge" id="recruitBadge"></span></button>
-        <button data-subtab="formation" id="subtab-formation" role="tab" aria-controls="subview-formation" aria-selected="false" tabindex="-1">Formation</button>
-        <button data-subtab="soins" id="subtab-soins" disabled role="tab" aria-controls="subview-soins" aria-selected="false" tabindex="-1">Soins</button>
+    <!-- ÉQUIPAGE : personnel, recrutement, formation, soins -->
+    <section class="view" id="view-equipage" role="tabpanel" aria-labelledby="tab-equipage">
+      <nav class="subtabs" role="tablist" aria-label="Équipage">
+        <button data-subtab="personnel" id="subtab-personnel" class="active" role="tab" aria-controls="subview-personnel" aria-selected="true">Personnel</button>
+        <button data-subtab="recrutement" id="subtab-recrutement" role="tab" aria-controls="subview-recrutement" aria-selected="false" tabindex="-1">Recrues<span class="tab-badge" id="recrutementBadge"></span></button>
+        <button data-subtab="formation" id="subtab-formation" role="tab" aria-controls="subview-formation" aria-selected="false" tabindex="-1">Formation<span class="tab-badge count" id="formationBadge"></span></button>
+        <button data-subtab="soins" id="subtab-soins" role="tab" aria-controls="subview-soins" aria-selected="false" tabindex="-1">Soins<span class="tab-badge" id="soinsBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-personnel" role="tabpanel">
-        <h2 class="eyebrow">Personnel actif</h2>
-        <h1 class="head" id="crewTitle">Équipage</h1>
-        <div class="subhead" id="crewSub">Personne à bord pour l'instant</div>
+      <div class="subview active" id="subview-personnel" role="tabpanel" aria-labelledby="subtab-personnel">
+        <div class="view-head">
+          <div class="subhead" id="crewSub">Personne à bord pour l'instant</div>
+          <button type="button" class="link-btn" data-glossary="1" aria-haspopup="dialog">Légende</button>
+        </div>
         <div id="crewList"></div>
       </div>
 
-      <div class="subview" id="subview-recruit" role="tabpanel">
-        <h2 class="eyebrow">Candidatures reçues</h2>
-        <h1 class="head">Recrutement</h1>
+      <div class="subview" id="subview-recrutement" role="tabpanel" aria-labelledby="subtab-recrutement">
         <div class="subhead" id="recruitSub">Construis une <em>Balise de recrutement</em> pour recevoir des candidats</div>
         <div id="candidateList"></div>
       </div>
 
-      <div class="subview" id="subview-formation" role="tabpanel">
-        <h2 class="eyebrow">Centre de formation</h2>
-        <h1 class="head">Formation</h1>
+      <div class="subview" id="subview-formation" role="tabpanel" aria-labelledby="subtab-formation">
         <div class="subhead" id="formationSub">Construis un Centre de formation</div>
         <div id="formationStatus"></div>
         <div id="formationList"></div>
         <button id="btnNewTraining" class="cta-btn" style="display:none;">Lancer une formation</button>
       </div>
 
-      <div class="subview" id="subview-soins" role="tabpanel">
-        <h2 class="eyebrow">Infirmerie</h2>
-        <h1 class="head">Soins</h1>
+      <div class="subview" id="subview-soins" role="tabpanel" aria-labelledby="subtab-soins">
         <div class="subhead" id="soinsSub">Construis une Infirmerie</div>
         <div id="soinsStatus"></div>
         <div id="soinsAlert"></div>
-        <h3 class="section-h">Patients</h3>
-        <div id="soinsPatients"></div>
-        <h3 class="section-h">Membres requérant attention</h3>
-        <div id="soinsAttention"></div>
+        <div id="soinsBody">
+          <h3 class="section-h">Patients</h3>
+          <div id="soinsPatients"></div>
+          <h3 class="section-h">Membres requérant attention</h3>
+          <div id="soinsAttention"></div>
+        </div>
       </div>
     </section>
 
-    <!-- GALAXIE (hub avec sous-onglets) -->
-    <section class="view" id="view-galaxy" role="tabpanel" aria-labelledby="tab-galaxy">
-      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
-        <button data-subtab-galaxy="cartographie" class="active" role="tab" aria-controls="subview-cartographie" aria-selected="true">Cartographie</button>
-        <button data-subtab-galaxy="fleet" id="subtab-fleet" role="tab" aria-controls="subview-fleet" aria-selected="false" tabindex="-1">Vaisseaux</button>
-        <button data-subtab-galaxy="expeditions" id="subtab-expeditions" role="tab" aria-controls="subview-expeditions" aria-selected="false" tabindex="-1">Expéd.<span class="tab-badge" id="expBadge"></span></button>
-        <button data-subtab-galaxy="diplomatie" id="subtab-diplomatie" role="tab" aria-controls="subview-diplomatie" aria-selected="false" tabindex="-1">Diplomatie<span class="tab-badge" id="diploBadge"></span></button>
+    <!-- EXPÉDITIONS : missions, carte, vaisseaux, diplomatie -->
+    <section class="view" id="view-expeditions" role="tabpanel" aria-labelledby="tab-expeditions">
+      <nav class="subtabs" role="tablist" aria-label="Expéditions">
+        <button data-subtab="missions" id="subtab-missions" class="active" role="tab" aria-controls="subview-missions" aria-selected="true">Missions<span class="tab-badge" id="missionsBadge"></span></button>
+        <button data-subtab="carte" id="subtab-carte" role="tab" aria-controls="subview-carte" aria-selected="false" tabindex="-1">Carte</button>
+        <button data-subtab="vaisseaux" id="subtab-vaisseaux" role="tab" aria-controls="subview-vaisseaux" aria-selected="false" tabindex="-1">Vaisseaux</button>
+        <button data-subtab="diplomatie" id="subtab-diplomatie" role="tab" aria-controls="subview-diplomatie" aria-selected="false" tabindex="-1">Diplomatie<span class="tab-badge count" id="diploBadge"></span></button>
       </nav>
 
-      <div class="subview active" id="subview-cartographie" role="tabpanel">
+      <div class="subview active" id="subview-missions" role="tabpanel" aria-labelledby="subtab-missions">
+        <div class="subhead" id="expSub">Aucune expédition pour l'instant</div>
+        <div id="expActiveList"></div>
+        <h3 class="section-h" id="expHistoryHead" hidden>Historique récent</h3>
+        <div id="expHistoryList"></div>
+      </div>
+
+      <div class="subview" id="subview-carte" role="tabpanel" aria-labelledby="subtab-carte">
         <div id="galaxyContent"></div>
       </div>
 
-      <div class="subview" id="subview-fleet" role="tabpanel">
-        <h2 class="eyebrow">Flotte stationnée</h2>
-        <h1 class="head">Vaisseaux</h1>
+      <div class="subview" id="subview-vaisseaux" role="tabpanel" aria-labelledby="subtab-vaisseaux">
         <div class="subhead" id="fleetSub">Construis un Hangar pour entreposer des vaisseaux</div>
         <div id="fleetStatus"></div>
         <div id="fleetList"></div>
@@ -220,90 +217,143 @@
         <div id="fleetCatalog"></div>
       </div>
 
-      <div class="subview" id="subview-expeditions" role="tabpanel">
-        <h2 class="eyebrow">Missions actives & passées</h2>
-        <h1 class="head">Expéditions</h1>
-        <div class="subhead" id="expSub">Aucune expédition pour l'instant</div>
-        <div id="expActiveList"></div>
-        <h3 class="section-h" id="expHistoryHead" hidden>Historique récent</h3>
-        <div id="expHistoryList"></div>
-      </div>
-
-      <div class="subview" id="subview-diplomatie" role="tabpanel">
-        <h2 class="eyebrow">Relations interstellaires</h2>
-        <h1 class="head">Diplomatie</h1>
+      <div class="subview" id="subview-diplomatie" role="tabpanel" aria-labelledby="subtab-diplomatie">
         <div class="subhead" id="diploSub">Factions rencontrées au fil des expéditions</div>
         <div id="diploContent"></div>
       </div>
     </section>
 
-    <!-- STOCKS (hub avec sous-onglets : Inventaire / Bibliothèque / Recherche) -->
-    <section class="view" id="view-stocks" role="tabpanel" aria-labelledby="tab-stocks">
-      <nav class="subtabs" role="tablist" aria-label="Sous-sections">
-        <button data-subtab-stocks="inventory" class="active" role="tab" aria-controls="subview-inventory" aria-selected="true">Inventaire</button>
-        <button data-subtab-stocks="library" role="tab" aria-controls="subview-library" aria-selected="false" tabindex="-1">Bibliothèque<span class="tab-badge" id="libBadge"></span></button>
-        <button data-subtab-stocks="research" role="tab" aria-controls="subview-research" aria-selected="false" tabindex="-1">Recherche<span class="tab-badge" id="researchBadge"></span></button>
-        <button data-subtab-stocks="workshop" role="tab" aria-controls="subview-workshop" aria-selected="false" tabindex="-1">Atelier<span class="tab-badge" id="workshopBadge"></span></button>
+    <!-- RÉCITS : chroniques, fils rouges, journal, archives, annales -->
+    <section class="view" id="view-recits" role="tabpanel" aria-labelledby="tab-recits">
+      <nav class="subtabs" role="tablist" aria-label="Récits">
+        <button data-subtab="chroniques" id="subtab-chroniques" class="active" role="tab" aria-controls="subview-chroniques" aria-selected="true">Chroniques<span class="tab-badge" id="chroniquesBadge"></span></button>
+        <button data-subtab="filsrouges" id="subtab-filsrouges" role="tab" aria-controls="subview-filsrouges" aria-selected="false" tabindex="-1">Fils rouges</button>
+        <button data-subtab="journal" id="subtab-journal" role="tab" aria-controls="subview-journal" aria-selected="false" tabindex="-1">Journal</button>
+        <button data-subtab="archives" id="subtab-archives" role="tab" aria-controls="subview-archives" aria-selected="false" tabindex="-1">Archives<span class="tab-badge count" id="archivesBadge"></span></button>
+        <button data-subtab="annales" id="subtab-annales" role="tab" aria-controls="subview-annales" aria-selected="false" tabindex="-1">Annales</button>
       </nav>
 
-      <div class="subview active" id="subview-inventory" role="tabpanel">
-        <h2 class="eyebrow">Stocks de la colonie</h2>
-        <h1 class="head">Inventaire</h1>
-        <div class="subhead" id="invSub">Items, artefacts et équipements</div>
-        <div id="invContent"></div>
+      <div class="subview active" id="subview-chroniques" role="tabpanel" aria-labelledby="subtab-chroniques">
+        <div class="subhead" id="chronSub">Les histoires que portent les planètes</div>
+        <div id="chronList"></div>
       </div>
 
-      <div class="subview" id="subview-library" role="tabpanel">
-        <h2 class="eyebrow">Schémas découverts</h2>
-        <h1 class="head">Bibliothèque</h1>
-        <div class="subhead" id="libSub">Plans techniques exploitables</div>
-        <div id="libContent"></div>
+      <div class="subview" id="subview-filsrouges" role="tabpanel" aria-labelledby="subtab-filsrouges">
+        <div class="subhead" id="arcsSub">Les fils rouges qui se tissent au fil du temps</div>
+        <div id="arcsContent"></div>
       </div>
 
-      <div class="subview" id="subview-research" role="tabpanel">
-        <h2 class="eyebrow">Programme de recherche</h2>
-        <h1 class="head">Recherche</h1>
-        <div class="subhead" id="researchSub">Tech tree et progression long terme</div>
+      <div class="subview" id="subview-journal" role="tabpanel" aria-labelledby="subtab-journal">
+        <div class="subhead" id="journalTitle">Carnet de fondation, tenu par le commandement local</div>
+        <div id="journalFilters"></div>
+        <div id="journalList" class="journal-days"></div>
+      </div>
+
+      <div class="subview" id="subview-archives" role="tabpanel" aria-labelledby="subtab-archives">
+        <div id="archivesContent"></div>
+      </div>
+
+      <div class="subview" id="subview-annales" role="tabpanel" aria-labelledby="subtab-annales">
+        <div id="annalesContent"></div>
+      </div>
+    </section>
+
+    <!-- LABO : recherche, atelier, inventaire, schémas -->
+    <section class="view" id="view-labo" role="tabpanel" aria-labelledby="tab-labo">
+      <nav class="subtabs" role="tablist" aria-label="Labo">
+        <button data-subtab="recherche" id="subtab-recherche" class="active" role="tab" aria-controls="subview-recherche" aria-selected="true">Recherche<span class="tab-badge count" id="rechercheBadge"></span></button>
+        <button data-subtab="atelier" id="subtab-atelier" role="tab" aria-controls="subview-atelier" aria-selected="false" tabindex="-1">Atelier<span class="tab-badge count" id="atelierBadge"></span></button>
+        <button data-subtab="inventaire" id="subtab-inventaire" role="tab" aria-controls="subview-inventaire" aria-selected="false" tabindex="-1">Inventaire</button>
+        <button data-subtab="bibliotheque" id="subtab-bibliotheque" role="tab" aria-controls="subview-bibliotheque" aria-selected="false" tabindex="-1">Schémas<span class="tab-badge count" id="libBadge"></span></button>
+      </nav>
+
+      <div class="subview active" id="subview-recherche" role="tabpanel" aria-labelledby="subtab-recherche">
+        <div class="subhead" id="researchSub">Programme de recherche</div>
         <div id="researchContent"></div>
       </div>
 
-      <div class="subview" id="subview-workshop" role="tabpanel">
-        <h2 class="eyebrow">Production d'équipement</h2>
-        <h1 class="head">Atelier</h1>
+      <div class="subview" id="subview-atelier" role="tabpanel" aria-labelledby="subtab-atelier">
         <div class="subhead" id="workshopSub">Fabrique consommables, outils et armement</div>
         <div id="workshopStatus"></div>
         <div id="workshopContent"></div>
       </div>
-    </section>
 
-    <!-- CHRONIQUES (arcs narratifs) -->
-    <section class="view" id="view-arcs" role="tabpanel" aria-labelledby="tab-arcs">
-      <h2 class="eyebrow">Chroniques de la colonie</h2>
-      <h1 class="head">Arcs narratifs</h1>
-      <div class="subhead" id="arcsSub">Les fils rouges qui se tissent au fil du temps</div>
-      <div id="arcsContent"></div>
-    </section>
+      <div class="subview" id="subview-inventaire" role="tabpanel" aria-labelledby="subtab-inventaire">
+        <div class="subhead" id="invSub">Items, artefacts et équipements</div>
+        <div id="invContent"></div>
+      </div>
 
-    <!-- JOURNAL -->
-    <section class="view" id="view-journal" role="tabpanel" aria-labelledby="tab-journal">
-      <h2 class="eyebrow">Journal de bord</h2>
-      <h1 class="head" id="journalTitle">Carnet de fondation</h1>
-      <div class="subhead">Tenu par le commandement local</div>
-      <ul class="journal-list" id="journalList"></ul>
+      <div class="subview" id="subview-bibliotheque" role="tabpanel" aria-labelledby="subtab-bibliotheque">
+        <div class="subhead" id="libSub">Plans techniques exploitables</div>
+        <div id="libContent"></div>
+      </div>
     </section>
   </main>
+</div>
 
-  <footer class="actions">
-    <button id="btnRename">Renommer</button>
-    <button id="btnPushToggle" title="Recevoir une notification système quand un événement se produit pendant que l'app est en arrière-plan">🔕 Notifs téléphone</button>
-    <button id="btnExport">Exporter save</button>
-    <button id="btnImport">Importer</button>
-    <button id="btnReset">Recommencer</button>
-  </footer>
+<!-- Menu « ⋯ » : réglages et administration de la partie -->
+<div class="sheet-bg" id="menuBg">
+  <aside class="sheet" id="menuSheet" role="dialog" aria-modal="true" aria-labelledby="menuTitle" tabindex="-1">
+    <div class="sheet-head">
+      <h2 id="menuTitle">Réglages</h2>
+      <button type="button" class="sheet-close" id="menuClose" aria-label="Fermer les réglages"><span aria-hidden="true">✕</span></button>
+    </div>
+
+    <section class="sheet-sec" aria-labelledby="secColonie">
+      <h3 id="secColonie">Colonie</h3>
+      <button type="button" id="btnRename" class="sheet-btn">Renommer la colonie</button>
+    </section>
+
+    <section class="sheet-sec" aria-labelledby="secNotifs">
+      <h3 id="secNotifs">Notifications</h3>
+      <button type="button" id="btnPushToggle" class="sheet-btn" title="Recevoir une notification système quand un événement se produit pendant que l'app est en arrière-plan">🔕 Notifs téléphone</button>
+      <p class="sheet-hint">Une notification quand un chantier se termine ou qu'une décision t'attend, l'app fermée.</p>
+    </section>
+
+    <section class="sheet-sec" aria-labelledby="secAffichage">
+      <h3 id="secAffichage">Affichage</h3>
+      <div class="pref-row">
+        <span class="pref-lbl" id="lblTextSize">Taille du texte</span>
+        <div class="seg" role="group" aria-labelledby="lblTextSize">
+          <button type="button" aria-pressed="true" data-pref="textSize" data-value="normal">Normal</button>
+          <button type="button" aria-pressed="false" data-pref="textSize" data-value="grand">Grand</button>
+        </div>
+      </div>
+      <div class="pref-row">
+        <span class="pref-lbl" id="lblMotion">Réduire les animations</span>
+        <button type="button" class="switch-btn" role="switch" aria-checked="false" aria-labelledby="lblMotion" data-pref="reduceMotion"><span class="switch" aria-hidden="true"></span></button>
+      </div>
+    </section>
+
+    <section class="sheet-sec" aria-labelledby="secJeu">
+      <h3 id="secJeu">Jeu</h3>
+      <div class="pref-row">
+        <span class="pref-lbl" id="lblAutoCombat">Combat automatique par défaut</span>
+        <button type="button" class="switch-btn" role="switch" aria-checked="false" aria-labelledby="lblAutoCombat" data-pref="autoCombat"><span class="switch" aria-hidden="true"></span></button>
+      </div>
+      <p class="sheet-hint">Les affrontements se résolvent d'un geste ; le détail reste accessible.</p>
+    </section>
+
+    <section class="sheet-sec" aria-labelledby="secSave">
+      <h3 id="secSave">Sauvegarde</h3>
+      <div class="sheet-row">
+        <button type="button" id="btnExport" class="sheet-btn">Exporter</button>
+        <button type="button" id="btnImport" class="sheet-btn">Importer</button>
+      </div>
+      <p class="sheet-hint">La partie est enregistrée sur cet appareil. Exporte-la pour la garder ailleurs.</p>
+      <button type="button" id="btnReset" class="sheet-btn danger">Recommencer une partie</button>
+    </section>
+
+    <section class="sheet-sec about" aria-labelledby="secAbout">
+      <h3 id="secAbout">À propos</h3>
+      <p class="about-line">DRIFT <span id="aboutVersion"></span> · <span id="realTime">session 0:00</span></p>
+      <p class="sheet-hint">Un avant-poste, un équipage, une galaxie qui se souvient.</p>
+    </section>
+  </aside>
 </div>
 
 <input type="file" id="fileInput" accept="application/json" style="display:none" aria-label="Fichier de sauvegarde à importer">
-<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="toast" class="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 
 <div class="modal-bg" id="modalBg">
   <div class="modal" id="modal" role="dialog" aria-modal="true" tabindex="-1"></div>

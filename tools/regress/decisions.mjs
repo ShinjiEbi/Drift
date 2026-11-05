@@ -6,7 +6,7 @@
 //         acteurs revalidés (mort entre-temps)
 //   E1  : incidents en chaîne — en direct : file ; en silencieux : résolution automatique
 //   M2  : coûts vérifiés avant un choix volontaire, montants réels affichés
-//   M6  : dégâts sur un module — postes libérés, chantier ajusté
+//   M6  : dégâts sur un module — postes libérés, chantier repris à zéro (niveau payé acquis)
 //   M11 : une erreur dans un sous-système ne bloque ni les autres ni l'horloge ;
 //         une erreur de rendu ne double pas le temps et n'empêche pas la sauvegarde
 // Usage : NODE_PATH=$(npm root -g) node tools/regress/decisions.mjs
@@ -27,6 +27,12 @@ const waitShown = (page, re, timeout = 3000) => b.until(page, re => {
   return new RegExp(re).test(h3) ? h3 : false;
 }, re.source, { timeout });
 const clickChoice = (page, sel = '#modal button.incident-choice:not([disabled])') => page.evaluate(s => document.querySelector(s)?.click(), sel);
+// V1 : après un choix, la fenêtre montre les conséquences ; « Continuer » la ferme
+const choisir = async (page, sel) => {
+  await clickChoice(page, sel);
+  await page.waitForSelector('#consContinue', { timeout: 2000 });
+  await page.click('#consContinue');
+};
 
 try {
   const ctx = await b.context();
@@ -55,15 +61,15 @@ try {
   await waitShown(page, /Éboulement/);
   const before = await page.evaluate(async () => {
     const { S } = await import('./src/state.js');
-    return { victim: S.pendingDecisions[0]?.victimId, flag: S.pendingIncident };
+    return { victim: S.pendingDecisions[0]?.acteurs?.victime, flag: S.pendingIncident };
   });
   check(before.flag === 'mine_eboulement', 'S.pendingIncident renseigné pour le bandeau d\'alertes');
   await page.reload();
   await b.waitGame(page);
   await waitShown(page, /Éboulement/);
-  const after = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.victimId);
-  check(after === before.victim, 'après rechargement, le même incident réapparaît (même victime)');
-  await clickChoice(page);
+  const after = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.acteurs?.victime);
+  check(!!before.victim && after === before.victim, 'après rechargement, le même incident réapparaît (même victime)');
+  await choisir(page);
   await page.waitForTimeout(300);
   const st1 = await page.evaluate(async () => { const { S } = await import('./src/state.js'); return { n: S.pendingDecisions.length, flag: S.pendingIncident }; });
   check(st1.n === 0 && st1.flag === null && !(await shown(page)), 'choix appliqué : file vide, fenêtre fermée');
@@ -78,10 +84,10 @@ try {
   await waitShown(page, /Filon/);
   await page.waitForTimeout(600);
   check(/Filon/.test((await shown(page))?.title || ''), 'le 2e incident n\'écrase pas le 1er');
-  await clickChoice(page);
+  await choisir(page);
   await waitShown(page, /Récolte/);
   check(true, 'le 2e s\'affiche une fois le 1er résolu');
-  await clickChoice(page);
+  await choisir(page);
   await page.waitForTimeout(300);
 
   // ------------------------------------------------------------------
@@ -97,7 +103,7 @@ try {
     const { S } = await import('./src/state.js');
     return { n: S.pendingDecisions.length, auto: S.journal.filter(e => /décision automatique/.test(e.txt)).length };
   });
-  check(cap.n === 5 && cap.auto >= 2, `file plafonnée à 5 (${cap.n}), les plus anciennes résolues automatiquement (${cap.auto})`);
+  check(cap.n === 3 && cap.auto >= 4, `file plafonnée à 3 (${cap.n}), les plus anciennes mineures résolues automatiquement (${cap.auto})`);
   await page.evaluate(() => document.querySelector('#sceneOverlay').classList.remove('show'));
   await waitShown(page, /Corrélation/);
   check(true, 'la décision s\'affiche à la fermeture de la scène');
@@ -150,7 +156,8 @@ try {
   await clickChoice(page, '#modal [data-event-choice="0"]');
   await page.waitForSelector('#consContinue', { timeout: 2000 });
   const cons = await page.evaluate(async () => ({ txt: document.querySelector('#modal').textContent, metal: (await import('./src/state.js')).S.res.metal }));
-  check(cons.metal === 60 && /−240 Métal/.test(cons.txt) && /\+90 Datacubes/.test(cons.txt), 'conséquences = montants réellement appliqués');
+  // Le filet du Commandement (V1) ajoute un peu de métal à chaque tick : marge < 1.
+  check(Math.abs(cons.metal - 60) < 1 && /−240 Métal/.test(cons.txt) && /\+90 Datacubes/.test(cons.txt), 'conséquences = montants réellement appliqués' + (Math.abs(cons.metal - 60) < 1 ? '' : ' (métal : ' + cons.metal + ')'));
   await page.click('#consContinue');
 
   // ------------------------------------------------------------------
@@ -165,12 +172,12 @@ try {
     workers.forEach((w, i) => app.assignMember(w.id, 'mine_surface', i));
     const third = workers[2];
     S.build = { id: 'mine_surface', targetLevel: 4, totalMin: 100, doneMin: 10 };
-    app.applyIncidentChoice({ modKey: 'mine_surface', titre: 'Test', choices: [] }, { label: 'x', outcome: { damageModule: true } }, third);
+    app.appliquerEffetsColonie([{ module: { id: 'mine_surface', niveau: -1 } }], { victime: third });
     const a = app.memberAssignment(third.id);
     const res = {
       level: S.modules.mine_surface.level, slot2: S.assignments['mine_surface:2'] || null,
       thirdPost: a ? `${a.modKey}:${a.slotIdx}` : null, thirdStatut: third.statut, hist: (third.posteHistorique || []).length,
-      target: S.build.targetLevel
+      target: S.build.targetLevel, done: S.build.doneMin
     };
     S.build.doneMin = S.build.totalMin;
     st.tickOnce({ silent: true });
@@ -180,7 +187,8 @@ try {
   check(dmg.level === 2 && !dmg.slot2, 'niveau perdu et poste disparu libéré');
   check(dmg.thirdPost !== 'mine_surface:2' && (dmg.thirdStatut !== 'travail' || dmg.thirdPost) && dmg.hist >= 1,
     `occupant libéré (statut ${dmg.thirdStatut}, poste ${dmg.thirdPost || 'aucun'}), ancienneté archivée`);
-  check(dmg.target === 3 && dmg.afterBuild === 3, `chantier ajusté : reconstruit le niveau perdu (cible ${dmg.target}, après ${dmg.afterBuild})`);
+  // V1 : le niveau payé reste acquis ; les dégâts coûtent du temps (chantier repris à zéro)
+  check(dmg.target === 4 && dmg.done === 0 && dmg.afterBuild === 4, `chantier repris à zéro, niveau payé acquis (cible ${dmg.target}, après ${dmg.afterBuild})`);
 
   // ------------------------------------------------------------------
   console.log('7. Incidents en chaîne (E1)');
@@ -191,15 +199,23 @@ try {
     S.pendingChainIncidents = [{ incidentId: 'mine_eboulement', triggerAt: S.meta.gameMin }];
     const j0 = S.journal.length;
     st.tickOnce({ silent: true });
-    const silent = { pending: S.pendingDecisions.length, chain: S.pendingChainIncidents.length,
+    // V1 : hors ligne, un incident sérieux attend le retour du joueur…
+    const silent = { pending: S.pendingDecisions.map(d => d.refId), chain: S.pendingChainIncidents.length,
       logged: S.journal.slice(j0).some(e => /Éboulement dans la mine.*décision automatique/.test(e.txt)) };
+    S.pendingDecisions.length = 0;
+    // … un incident mineur (gravité 1) est tranché automatiquement
+    S.pendingChainIncidents = [{ incidentId: 'mine_filon_riche', triggerAt: S.meta.gameMin }];
+    const j1 = S.journal.length;
+    st.tickOnce({ silent: true });
+    const minor = { pending: S.pendingDecisions.length, logged: S.journal.slice(j1).some(e => /Filon inattendu.*décision automatique/.test(e.txt)) };
     S.pendingChainIncidents = [{ incidentId: 'mine_eboulement', triggerAt: S.meta.gameMin }];
     st.tickOnce({ silent: false });
     const live = { pending: S.pendingDecisions.map(d => d.refId) };
     S.pendingDecisions.length = 0;
-    return { silent, live };
+    return { silent, minor, live };
   });
-  check(chain.silent.pending === 0 && chain.silent.chain === 0 && chain.silent.logged, 'en silencieux : incident en chaîne résolu automatiquement');
+  check(chain.silent.pending.includes('mine_eboulement') && chain.silent.chain === 0 && !chain.silent.logged, 'en silencieux : incident en chaîne sérieux gardé pour le retour du joueur');
+  check(chain.minor.pending === 0 && chain.minor.logged, 'en silencieux : incident en chaîne mineur résolu automatiquement');
   check(chain.live.pending.includes('mine_eboulement'), 'en direct : incident en chaîne mis en file');
   await page.evaluate(() => document.querySelector('#modalBg').classList.remove('show'));
 
@@ -210,7 +226,7 @@ try {
     const bad = [];
     for (const [id, def] of [...Object.entries(app.INCIDENTS), ...Object.entries(app.COLONY_EVENTS)]) {
       if (!def.titre) bad.push(id + ' (sans titre)');
-      if (!def.choices.some(c => !c.req && !c.consume && !c.pay)) bad.push(id);
+      if (!def.choix.some(c => c.si === undefined && c.requiert === undefined && c.consomme === undefined && c.cout === undefined)) bad.push(id);
     }
     return bad;
   });

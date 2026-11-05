@@ -49,11 +49,14 @@ async function prepare() {
     window.__intervals.forEach(id => clearInterval(id));
     const st = await import('./src/state.js');
     const app = await import('./src/app.js');
+    window.__YEAR = (await import('./src/constants.js')).YEAR_IN_GAME_MIN;
     window.__t = {
       st, app,
       fresh() {
         st.setS(st.freshState());
         const S = st.S;
+        S.crew = []; S.fleet = [];  // V1 : sans l'équipage ni la vedette de départ
+        S.nextIncidentMin = 1e12;
         S.nextEventMin = 1e12;      // pas d'événement de colonie parasite
         S.autoAssign = false;
         S.res = { metal: 500, cristal: 500, energie: 500, biomasse: 500, datacubes: 200 };
@@ -61,7 +64,7 @@ async function prepare() {
       },
       mk(over = {}) {
         const c = st.genCandidate();
-        const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * 43200,
+        const m = { ...c, id: 'm_test_' + st.S.crew.length, age: 30, traits: [], birthGameMin: st.S.meta.gameMin - 30 * window.__YEAR,
           statut: 'libre', sante: 100, moral: 70, loyaute: 60, statuts: [], sequels: [], ...over };
         m.skills = { ...c.skills, ...(over.skills || {}) };
         st.S.crew.push(m);
@@ -90,7 +93,7 @@ try {
     const S = fresh();
     S.journal = [];
     const old = mk({ name: 'Ancien Test', skills: { pilotage: 3 } });
-    old.birthGameMin = S.meta.gameMin - 120 * 43200;          // 120 ans
+    old.birthGameMin = S.meta.gameMin - 120 * window.__YEAR;   // 120 ans
     const friend = mk({ name: 'Ami Test', moral: 70 });
     app.assignMember(old.id, 'commandement', 0);
     S.relations[[old.id, friend.id].sort().join('|')] = 90;   // ami proche

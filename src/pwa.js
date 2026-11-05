@@ -16,18 +16,10 @@ let updateAccepted = false;   // le joueur a cliqué « Recharger »
 let reloading = false;
 
 // ------------------------------------------------------------
-//   Navigation vers un onglet (?tab=…, clic sur notification)
+//   Navigation (?tab=…, clic sur notification)
 // ------------------------------------------------------------
-// Le nom d'onglet vient de l'URL ou d'un message : on ne l'insère jamais dans
-// un sélecteur CSS, on le compare aux onglets existants (liste blanche).
-function goToTab(name) {
-  if (typeof name !== 'string') return false;
-  const btn = Array.from(document.querySelectorAll('nav.tabs button[data-tab]'))
-    .find((b) => b.dataset.tab === name);
-  if (!btn) return false;
-  btn.click();
-  return true;
-}
+// ui.js lit ?tab= au chargement et écoute NOTIF_NAVIGATE : ce module se
+// contente de nettoyer l'URL une fois la partie démarrée.
 
 function onDomReady(fn) {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
@@ -36,12 +28,10 @@ function onDomReady(fn) {
 
 onDomReady(() => {
   const params = new URLSearchParams(window.location.search);
-  const tab = params.get('tab');
-  if (tab === null) return;
-  // Laisse le jeu démarrer (boot différé) avant de changer d'onglet.
+  if (!params.has('tab')) return;
+  // Laisse le jeu démarrer (boot différé) et lire le paramètre avant de
+  // nettoyer l'URL.
   setTimeout(() => {
-    goToTab(tab);
-    // Nettoie l'URL pour ne pas garder le paramètre
     const url = new URL(window.location.href);
     url.searchParams.delete('tab');
     window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
@@ -202,15 +192,6 @@ if ('serviceWorker' in navigator) {
     else showUpdateBanner('Nouvelle version installée');
   });
 
-  navigator.serviceWorker.addEventListener('message', (event) => {
-    const data = event.data || {};
-    // Clic sur une notification système alors que l'app est ouverte
-    // (voir 'notificationclick' dans sw.js).
-    if (data.type === 'NOTIF_NAVIGATE') {
-      // Petit délai pour que l'UI soit prête
-      setTimeout(() => goToTab(data.target), 300);
-    }
-  });
 
   // Enregistrement après le chargement complet pour ne pas concurrencer
   // le démarrage du jeu.

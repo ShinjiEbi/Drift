@@ -10,6 +10,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Historique complet : les tests de migration reconstruisent la 0.33
+          # (git archive) pour produire une vraie sauvegarde à charger.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -24,6 +28,9 @@ jobs:
 
       - name: Cohérence des données
         run: npm run check:data
+
+      - name: Contenu narratif
+        run: npm run check:content
 
       - name: Version du cache hors-ligne
         run: npm run sw:check

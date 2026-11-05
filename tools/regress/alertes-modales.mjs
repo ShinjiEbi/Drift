@@ -45,11 +45,11 @@ try {
     return {
       shown: document.querySelector('#modalBg').classList.contains('show'),
       tab: document.querySelector('nav.tabs button.active')?.dataset.tab,
-      sub: document.querySelector('#view-modules nav.subtabs button.active')?.dataset.subtabMod,
+      sub: document.querySelector('#view-base nav.subtabs button.active')?.dataset.subtab,
       cls: document.querySelector('#modal').className,
     };
   });
-  t.check(!nav.err && !nav.shown && nav.tab === 'modules' && nav.sub === 'assignments', 'cliquer « colons sans poste » ouvre Modules › Affectations', JSON.stringify(nav));
+  t.check(!nav.err && !nav.shown && nav.tab === 'base' && nav.sub === 'postes', 'cliquer « colons sans poste » ouvre Base › Postes', JSON.stringify(nav));
   t.check(nav.cls === 'modal', 'la modale fermée ne garde pas de classe (alerts-modal…)', nav.cls);
 
   // ---- Décisions en attente : comptées, rouvertes au clic ----
@@ -57,7 +57,7 @@ try {
     const app = await import('./src/app.js');
     const st = await import('./src/state.js');
     const cat = await import('./src/catalog.js');
-    const ids = Object.keys(app.INCIDENTS).filter(id => cat.MODULES[app.INCIDENTS[id].modKey]);
+    const ids = Object.keys(app.INCIDENTS).filter(id => cat.MODULES[app.INCIDENTS[id].module]);
     // Tout se fait sans laisser passer de tick : la file n'est pas vidée entre-temps
     app.triggerIncident(ids[0], false);
     app.triggerIncident(ids[1] || ids[0], false);
@@ -99,6 +99,7 @@ try {
     st.S.fleet.forEach(v => { v.available = true; });
     st.S.crew.forEach(m => { if (m.statut === 'travail') m.statut = 'libre'; });
     ui.showLaunchModal(st.S.galaxy.systems[0].bodies[0].id);
+    document.querySelector('#modal .lx-details > summary').click();   // réglages fins (repliés par défaut)
     const big = st.S.fleet.reduce((a, v) => (a && a.type === 'cargo') ? a : v, null);
     document.querySelector(`#modal [data-pick-vessel="${big.id}"]`)?.click();
     const m = document.querySelector('#modal');
@@ -129,7 +130,7 @@ try {
     const patient = S.crew.find(m => m.statut === 'libre' && m !== worker);
     patient.statuts.push({ key, since: S.meta.gameMin, revealed: true, diagnosed: false, lastDiagAt: S.meta.gameMin });
     patient.statut = 'infirmerie';
-    ui.selectTab('crew'); ui.selectSubtab('crew', 'soins'); ui.render();
+    ui.gotoView('equipage', 'soins'); ui.render();
     const admit = !!document.querySelector(`#subview-soins button[data-act="admit"][data-mid="${CSS.escape(worker.id)}"]`);
     const diag = document.querySelector(`#subview-soins button[data-act="diagnose"][data-mid="${CSS.escape(patient.id)}"]`);
     const expected = app.canDiagnose(patient.id, 0);

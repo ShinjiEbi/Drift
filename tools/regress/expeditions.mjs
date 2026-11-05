@@ -8,7 +8,10 @@
 //  - F3  : un site déjà fouillé ne redonne qu'une fraction du butin et aucune réputation ;
 //  - F15 : un schéma légendaire / récompense d'arc ne tombe jamais d'un tirage aléatoire ;
 //  - M14 : les jets « risqués » portent sur une caractéristique (journal sans « undefined ») ;
-//  - M13 : les objets fabricables embarqués débloquent leur choix dédié et sont consommés.
+//  - M13 : les objets fabricables embarqués débloquent leur choix dédié et sont consommés ;
+//  - V1  : lieu obligatoire (pas de tempête ni de halte casque ouvert sans atmosphère),
+//          mémoire des scènes vues (une scène jamais vue passe avant les autres),
+//          vue getSceneView (titre, raison lisible, chance) et résultat du choix.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -93,6 +96,10 @@ try {
     delete body.chronicle;
     const launch = (equipment = {}) => {
       refill();
+      // Expéditions ordinaires : pas d'histoire sur le corps de test (l'apparition
+      // garantie peut en placer une sur le corps compatible le plus proche)
+      delete body.chronicle;
+      body.chronicleChecked = true;
       for (const [k, n] of Object.entries(equipment)) S.inventory[k] = (S.inventory[k] || 0) + n;
       app.launchExpedition({ vesselId: 'v_rx', bodyId: body.id, crewIds: team, equipment });
       return S.expeditions[S.expeditions.length - 1];
@@ -146,7 +153,7 @@ try {
     };
     sec('f3', () => {
       const r = { first: visit(), second: visit() };
-      S.meta.gameMin += 31 * 1440;   // le site se reconstitue en 30 jours
+      S.meta.gameMin += 3 * 86400 + 60;   // V1 : le site se reconstitue en 3 jours réels (PACING.LOOT_RECOVERY)
       r.later = visit();
       return r;
     });
@@ -195,6 +202,34 @@ try {
       }
       return { got: [...got], legendaryDrawn: [...got].filter(id => legendary.has(id)) };
     });
+    // ---- V1 : lieu obligatoire, mémoire des scènes, vue de scène ----
+    sec('v1', () => {
+      Object.assign(body, { type: 'asteroide_g', biome: 'asteroide', atmosphere: 'aucune', vie: 'aucune', signal: 'aucun', danger: 'tempetes', ruines: 'aucune' });
+      const vues = new Set();
+      for (let i = 0; i < 40; i++) { const e = launch(); e.scenes.forEach(id => vues.add(id)); cancel(e); }
+      const interdites = ['tempete', 'intro_orage', 'filler_repos', 'filler_etoiles', 'filler_reflet', 'faune_essaim'].filter(id => vues.has(id));
+      // Toutes les scènes d'exploration compatibles déjà vues, sauf une
+      const compat = app.scenesCompatibles(body).filter(x => (x.moment || 'exploration') === 'exploration').map(x => x.id);
+      const reste = compat[compat.length - 1];
+      S.scenesVues = Object.fromEntries(compat.filter(id => id !== reste).map(id => [id, 1]));
+      let toujours = true;
+      for (let i = 0; i < 10; i++) { const e = launch(); toujours &&= e.scenes.includes(reste); cancel(e); }
+      S.scenesVues = {};
+      // Vue d'une scène : titre, raison lisible, chance d'un test
+      Object.assign(body, { type: 'planete', biome: 'toundra', atmosphere: 'tenue', danger: 'aucun', ruines: 'humaines' });
+      const e = launch();
+      arrive(e, ['ruine_h_porte', 'outro_retour']);
+      const vue = app.getSceneView(e.id);
+      const chalumeau = vue.choix.find(c => /chalumeau/.test(c.label));
+      const charge = vue.choix.find(c => /charge de démolition/.test(c.label));
+      const forcer = vue.choix.find(c => /Forcer/.test(c.label));
+      app.playChoice(e.id, forcer.index);
+      const r = e.dernierResultat;
+      cancel(e);
+      return { vues: [...vues], interdites, compat: compat.length, reste, toujours, titre: vue.titre, progression: vue.progression,
+        chalumeau: chalumeau && { disponible: chalumeau.disponible }, charge: charge && { disponible: charge.disponible, raison: charge.raison },
+        forcer: forcer && { chance: forcer.chance, acteur: forcer.acteur }, resultat: r && { jet: r.jet, texte: r.texte } };
+    });
     return out;
   });
 
@@ -207,7 +242,7 @@ try {
   if (res.f3?.error) fail('exception : ' + res.f3.error);
   check(first.mult === 1 && first.metal === 20 && first.repDelta === 2 && first.back, `1re visite : butin complet (métal ${first.metal}), réputation +${first.repDelta}`);
   check(second.mult < 0.3 && second.metal > 0 && second.metal <= 6 && second.repDelta === 0 && second.back, `2e visite : butin réduit (×${second.mult?.toFixed(2)}, métal ${second.metal}), réputation +${second.repDelta}`);
-  check(later.mult === 1 && later.metal === 20 && later.repDelta === 2, `après 31 jours : site reconstitué (métal ${later.metal}, réputation +${later.repDelta})`);
+  check(later.mult === 1 && later.metal === 20 && later.repDelta === 2, `après 3 jours : site reconstitué (métal ${later.metal}, réputation +${later.repDelta})`);
 
   console.log('M14 — jets risqués');
   check(res.m14 && /^Jet Vigueur/.test(res.m14) && !/undefined/.test(res.m14), `journal : « ${res.m14} »`);
@@ -218,6 +253,17 @@ try {
 
   console.log('F15 — schémas légendaires');
   check(res.f15.got?.length > 0 && res.f15.legendaryDrawn.length === 0, `tirages fusion : ${res.f15.got?.join(', ') || res.f15.error} (aucun légendaire)`);
+
+  console.log('V1 — sélection et vue des scènes');
+  const v1 = res.v1 || {};
+  if (v1.error) fail('exception : ' + v1.error);
+  check(v1.vues?.length > 3 && v1.interdites?.length === 0, `astéroïde sans atmosphère : aucune scène qui en exige une (${v1.vues?.length} scènes tirées en 40 expéditions)`);
+  check(v1.toujours === true, `mémoire : la seule scène jamais vue (${v1.reste}, parmi ${v1.compat}) est tirée à chaque fois`);
+  check(v1.titre === 'La porte soudée' && v1.progression?.i === 1 && v1.progression?.n === 2, `getSceneView : titre « ${v1.titre} », scène ${v1.progression?.i}/${v1.progression?.n}`);
+  check(v1.charge && !v1.charge.disponible && v1.charge.raison === 'Nécessite : Explosif de démolition', `choix grisé avec sa raison : « ${v1.charge?.raison} »`);
+  check(v1.forcer && v1.forcer.chance > 0 && v1.forcer.chance <= 1 && !!v1.forcer.acteur, `test : chance ${Math.round((v1.forcer?.chance || 0) * 100)} %, colon ${v1.forcer?.acteur}`);
+  check(v1.resultat?.jet?.stat === 'Vigueur' && v1.resultat.jet.difficulte === 6 && typeof v1.resultat.jet.reussite === 'boolean' && v1.resultat.texte.length === 1,
+    `résultat du choix : jet ${JSON.stringify(v1.resultat?.jet)}, « ${v1.resultat?.texte?.[0]} »`);
 
   const uniq = [...new Set(pageErrors)];
   check(uniq.length === 0, `aucune erreur de page${uniq.length ? ' — ' + uniq.slice(0, 3).join(' | ') : ''}`);

@@ -12,21 +12,24 @@ const expId = await page.evaluate(async () => {
   const S = st.S;
   S.modules.habitat = { level: 3 }; S.modules.hangar = { level: 1 };
   for (let i = 0; i < 2; i++) { const c = st.genCandidate(); S.candidates.push(c); st.acceptCandidate(c.id); }
-  const scene = ch.CHRONICLE_SCENES.find(s => s.choices.some(c => /verrou actif/.test(c.outcome?.log || '')));
-  const chronId = Object.keys(ch.CHRONICLES).find(id => JSON.stringify(ch.CHRONICLES[id].episodes).includes('anneau')) || Object.keys(ch.CHRONICLES)[0];
+  // Scène d'histoire (format V1) dont un choix raconte un « verrou actif » (guillemets « »)
+  const aVerrou = c => JSON.stringify(c.effets || c.test || []).includes('verrou actif');
+  const scene = ch.CHRONICLE_SCENES.find(s => s.scene.choix.some(aVerrou));
+  const chronId = scene.histoire;
   const sys = S.galaxy.systems[1]; const body = sys.bodies[0];
-  body.chronicle = { id: chronId, episodeIdx: 0, flags: { ...(ch.CHRONICLES[chronId].initialFlags || {}) }, completed: false, currentSceneId: null };
+  for (const b of S.galaxy.systems.flatMap(x => x.bodies)) if (b.chronicle?.id === chronId) delete b.chronicle;
+  body.chronicle = { id: chronId, episodeIdx: 0, flags: { ...ch.CHRONICLES[chronId].drapeaux }, completed: false, currentSceneId: null };
   S.fleet.push({ id: 'v_qt', type: 'navette', name: 'Navette', available: false });
   const m = S.crew[0]; m.statut = 'expedition';
   S.expeditions.push({ id: 'e_qt', vesselId: 'v_qt', bodyId: body.id, systemId: sys.id, crewIds: [m.id], phase: 'sur_place', elapsedMin: 0, oneWayMin: 60, onSiteMin: 240, cost: {}, bodyDistance: 1, seed: 'qt', scenes: ['__chron_intro__'], sceneIdx: 0, awaitingChoice: true, accumulatedLoot: {}, accumulatedItems: [], accumulatedLog: [], sceneThreatMod: 0, equipment: {}, chronicleSceneId: scene.id, chronicleRef: { id: chronId, episodeIdx: 0 } });
-  const idx = scene.choices.findIndex(c => /verrou actif/.test(c.outcome?.log || ''));
+  const idx = scene.scene.choix.findIndex(aVerrou);
   app.playChoice('e_qt', idx);
   st.save();
   return 'e_qt';
 });
 const mini = async () => {
-  await page.evaluate(() => document.querySelector('nav.tabs button[data-tab="galaxy"]').click());
-  await page.evaluate(() => document.querySelector('#subtab-expeditions')?.click());
+  await page.evaluate(() => document.querySelector('nav.tabs button[data-tab="expeditions"]').click());
+  await page.evaluate(() => document.querySelector('#subtab-missions')?.click());
   await page.waitForTimeout(200);
   await page.click(`button[data-resume-exp="e_qt"]`);
   await page.waitForTimeout(200);

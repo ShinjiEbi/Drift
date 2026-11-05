@@ -10,7 +10,12 @@
 //   stepBonus(l) = 1.0 si l≤2, 1.2 si l∈[3..4], 1.4 si l∈[5..6], 1.6 si l≥7
 //   → monter en niveau devient économiquement intéressant à chaque palier
 // Ces formules sont utilisées dans les cost: et prod: ci-dessous.
+import { PACING } from './constants.js';
+import { fmtDuree } from './util.js';
+
 const triCost = l => l * (l + 1) / 2;
+// Durée d'un chantier (secondes réelles) : base × croissance^(niveau − 1), cf. PACING.
+const buildCurve = id => l => Math.round((PACING.BUILD_BASE[id] ?? PACING.BUILD_BASE_DEFAULT) * Math.pow(PACING.BUILD_GROWTH, l - 1));
 const stepBonus = l => l <= 2 ? 1.0 : l <= 4 ? 1.2 : l <= 6 ? 1.4 : 1.6;
 
 export const MODULES = {
@@ -22,27 +27,40 @@ export const MODULES = {
     desc: "Cœur logique de l'avant-poste. Sa survie conditionne la nôtre.",
     maxLevel: 5,
     cost: l => ({ metal: 80*triCost(l), cristal: 40*triCost(l) }),
-    time: l => 8*l,
+    time: buildCurve('commandement'),
     prereq: () => ({}),
-    effect: () => "Débloque les autres modules. Niveau requis pour les paliers."
+    // V1 : un filet de métal et de cristal (récupération, recyclage) — aucune
+    // ouverture ne peut plus bloquer la partie faute de mine. Pas d'entretien.
+    // prodFixed : unités par HEURE RÉELLE (non indexées sur PROD_MULT, sans personnel).
+    // Rations de la capsule : 25 biomasse/h couvrent à peu près les salaires de
+    // l'équipage de départ. Simulation d'un joueur qui passe deux fois par jour :
+    // sans elles, la biomasse tombait à zéro dès le premier jour (moral à 0,
+    // soins impayés, morts).
+    prodFixed: () => ({ metal: 250, cristal: 150, biomasse: 25 }),
+    // V1 : les couchettes de la capsule d'atterrissage logent l'équipage de départ
+    // (3 colons) et un premier renfort ; l'Habitat prend le relais.
+    capCrew: () => 4,
+    effect: () => `+250 métal · +150 cristal · +25 biomasse /h (récupération, rations) · 4 couchettes · débloque les autres modules`
   },
   generateur_solaire: {
     nom: 'Générateur solaire',
     desc: "Voilures photovoltaïques tendues sur la roche. Silence et lumière.",
     maxLevel: 8,
     cost: l => ({ metal: Math.round(30*triCost(l)), cristal: Math.round(15*triCost(l)) }),
-    time: l => 5*l,
+    time: buildCurve('generateur_solaire'),
     prereq: l => l===1 ? {} : { commandement: 1 },
     // 0.25 : énergie de base relevée +33% (8 au lieu de 6)
     prod: l => ({ energie: Math.round((8*l + 2*(l-1)) * stepBonus(l)) }),
-    effect: l => `+${Math.round((8*l + 2*(l-1)) * stepBonus(l))} énergie/min`
+    // V1 : chaque niveau agrandit les accumulateurs
+    capBonus: l => ({ energie: 80*l }),
+    effect: l => `+${Math.round((8*l + 2*(l-1)) * stepBonus(l))} énergie/min · +${80*l} stockage d'énergie`
   },
   mine_surface: {
     nom: 'Mine de surface',
     desc: "Extraction des veines affleurantes. Bruit constant, vibrations.",
     maxLevel: 8,
     cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(20*triCost(l)) }),
-    time: l => 6*l,
+    time: buildCurve('mine_surface'),
     prereq: () => ({ commandement: 1 }),
     // 0.25 : prod cristal doublée (4 au lieu de 2)
     prod: l => ({
@@ -50,37 +68,41 @@ export const MODULES = {
       cristal: Math.round(4*l * stepBonus(l))
     }),
     upkeep: l => ({ energie: 2*l }),
-    effect: l => `+${Math.round(5*l * stepBonus(l))} métal · +${Math.round(4*l * stepBonus(l))} cristal /min · −${2*l} énergie`
+    // V1 : chaque niveau ajoute des aires de stockage du minerai
+    capBonus: l => ({ metal: 200*l, cristal: 150*l }),
+    effect: l => `+${Math.round(5*l * stepBonus(l))} métal · +${Math.round(4*l * stepBonus(l))} cristal /min · −${2*l} énergie · stockage +${200*l} métal, +${150*l} cristal`
   },
   hydroponie: {
     nom: 'Hydroponie',
     desc: "Bacs scellés, lampes UV, mousses comestibles. L'odeur s'accroche aux vêtements.",
     maxLevel: 6,
-    // 0.27.2 : niv 1 gratuit en biomasse (les graines suffisent). Niv 2+ : 10*(l-1) biomasse.
+    // V1 : aucun coût en biomasse — une colonie à court de vivres doit toujours
+    // pouvoir agrandir ce qui la nourrit (règle vérifiée par check-economy).
     cost: l => ({
       metal: Math.round(60*triCost(l)),
-      cristal: Math.round(30*triCost(l)),
-      biomasse: l > 1 ? 10*(l-1) : 0
+      cristal: Math.round(30*triCost(l))
     }),
-    time: l => 7*l,
+    time: buildCurve('hydroponie'),
     prereq: () => ({ commandement: 1 }),
     // 0.27.2 : prod doublée (8*l au lieu de 4*l) pour qu'hydroponie niv 1
     // soit autosuffisante même sans staff affecté (sinon JOB_BASE_FRACTION 30%
     // la rend déficitaire vs upkeep habitat).
     prod: l => ({ biomasse: Math.round(8*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 3*l }),
-    effect: l => `+${Math.round(8*l * stepBonus(l))} biomasse/min · −${3*l} énergie`
+    capBonus: l => ({ biomasse: 100*l }),
+    effect: l => `+${Math.round(8*l * stepBonus(l))} biomasse/min · −${3*l} énergie · stockage +${100*l} biomasse`
   },
   habitat: {
     nom: 'Habitat',
     desc: "Couchettes empilées, cloisons fines, vapeurs de café synthétique. S'agrandit et se densifie à mesure que la colonie prospère.",
     maxLevel: 8,
     cost: l => ({ metal: Math.round(90*triCost(l)), cristal: Math.round(40*triCost(l)), biomasse: 5*l }),
-    time: l => 9*l,
+    time: buildCurve('habitat'),
     prereq: () => ({ commandement: 1 }),
     capCrew: l => [0, 8, 20, 36, 56, 80, 108, 140, 176][l] || 0,
+    capBonus: l => ({ metal: 100*l, biomasse: 50*l }),   // V1 : réserves et magasins
     upkeep: l => ({ energie: 1*l, biomasse: 2*l }),
-    effect: l => `+${[0,8,20,36,56,80,108,140,176][l]||0} places · −${1*l} énergie · −${2*l} biomasse`
+    effect: l => `+${[0,8,20,36,56,80,108,140,176][l]||0} places · stockage +${100*l} métal, +${50*l} biomasse · −${1*l} énergie · −${2*l} biomasse`
   },
   laboratoire: {
     nom: 'Laboratoire',
@@ -88,20 +110,21 @@ export const MODULES = {
     maxLevel: 6,
     // 0.25 : coût cristal divisé par 2 (50*tri au lieu de 100*l²)
     cost: l => ({ metal: Math.round(100*l), cristal: Math.round(50*triCost(l)), datacubes: l>1 ? 5*l : 0 }),
-    time: l => 12*l,
+    time: buildCurve('laboratoire'),
     prereq: () => ({ commandement: 2 }),
     // 0.25 : prod datacubes augmentée 50% (1.5*l au lieu de 1*l brut → 0.75 effectif)
     prod: l => ({ datacubes: Math.round(1.5*l * stepBonus(l)) }),
     upkeep: l => ({ energie: 5*l }),
+    capBonus: l => ({ datacubes: 60*l }),
     flag: 'recherche',
-    effect: l => `+${Math.round(1.5*l * stepBonus(l))} datacube/min · −${5*l} énergie · débloque la recherche`
+    effect: l => `+${Math.round(1.5*l * stepBonus(l))} datacube/min · −${5*l} énergie · stockage +${60*l} datacubes · débloque la recherche`
   },
   atelier: {
     nom: 'Atelier',
     desc: "Imprimantes, étaux, copeaux. Tout ce qui se casse finit ici.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(150*l), cristal: Math.round(60*l) }),
-    time: l => 10*l,
+    time: buildCurve('atelier'),
     prereq: () => ({ commandement: 2 }),
     upkeep: l => ({ energie: 3*l }),
     flag: 'fabrication',
@@ -112,7 +135,7 @@ export const MODULES = {
     desc: "Voûte ouverte sur le ciel. Le sas grince à chaque cycle.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(200*l), cristal: Math.round(80*l), energie: Math.round(30*l) }),
-    time: l => 15*l,
+    time: buildCurve('hangar'),
     prereq: () => ({ commandement: 2, atelier: 1 }),
     upkeep: l => ({ energie: 2*l }),
     flag: 'expedition',
@@ -123,7 +146,7 @@ export const MODULES = {
     desc: "Paraboles enchâssées dans le permafrost. Captent ce qu'on n'attendait pas.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(80*l), cristal: Math.round(100*l) }),
-    time: l => 11*l,
+    time: buildCurve('antenne'),
     prereq: () => ({ commandement: 1 }),
     upkeep: l => ({ energie: 2*l }),
     flag: 'scan',
@@ -134,18 +157,18 @@ export const MODULES = {
     desc: "Émetteur longue portée diffusant les conditions d'engagement. Les candidats se signalent par message-relais.",
     maxLevel: 6,
     cost: l => ({ metal: Math.round(50*triCost(l)), cristal: Math.round(30*triCost(l)), energie: Math.round(10*l) }),
-    time: l => 8*l,
+    time: buildCurve('balise_recrutement'),
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 1*l }),
     flag: 'recrutement',
-    effect: l => `~1 candidat / ${Math.round(24/l)}h jeu · file max ${2*l}`
+    effect: l => `~1 candidat toutes les ${fmtDuree(PACING.RECRUIT_INTERVAL / (1 + PACING.RECRUIT_LEVEL_SPEEDUP * (l - 1)))} · ${PACING.RECRUIT_QUEUE[Math.min(l, PACING.RECRUIT_QUEUE.length - 1)]} en attente au plus`
   },
   quartiers_residentiels: {
     nom: 'Quartiers résidentiels',
     desc: "Blocs de logements modulaires, espaces communs, jardins sous dôme pressurisé. Quand une base devient une vraie colonie.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(300*triCost(l)), cristal: Math.round(120*triCost(l)), biomasse: Math.round(20*l) }),
-    time: l => 20*l,
+    time: buildCurve('quartiers_residentiels'),
     prereq: () => ({ commandement: 2, habitat: 3 }),
     capCrew: l => [0, 30, 65, 105, 150, 200][l] || 0,
     upkeep: l => ({ energie: 3*l, biomasse: 5*l }),
@@ -156,7 +179,7 @@ export const MODULES = {
     desc: "Salles de simulation, bibliothèque de protocoles, mannequins d'exercice. Les colons en sortent meilleurs ou cassés.",
     maxLevel: 4,
     cost: l => ({ metal: Math.round(120*l), cristal: Math.round(80*l), datacubes: l>1 ? 5*l : 0 }),
-    time: l => 14*l,
+    time: buildCurve('formation'),
     prereq: () => ({ commandement: 2, habitat: 1 }),
     upkeep: l => ({ energie: 3*l, biomasse: 1*l }),
     flag: 'formation',
@@ -167,7 +190,7 @@ export const MODULES = {
     desc: "Lits suspendus, scanners portables, odeur d'antiseptique. Le silence y est différent.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(100*l), cristal: Math.round(70*l), biomasse: Math.round(10*l) }),
-    time: l => 12*l,
+    time: buildCurve('infirmerie'),
     prereq: () => ({ commandement: 1, habitat: 1 }),
     upkeep: l => ({ energie: 2*l, biomasse: 1*l }),
     flag: 'soins',
@@ -180,7 +203,7 @@ export const MODULES = {
     desc: "Salle des Accords, traducteurs cristallins, archives protocolaires. Le seuil où les factions s'écoutent vraiment.",
     maxLevel: 5,
     cost: l => ({ metal: Math.round(150*triCost(l)), cristal: Math.round(120*triCost(l)), biomasse: Math.round(30*l) }),
-    time: l => 14*l,
+    time: buildCurve('ambassade'),
     prereq: () => ({ commandement: 2, habitat: 1 }),
     upkeep: l => ({ energie: 3*l, biomasse: 1*l }),
     flag: 'diplomatie',
@@ -212,7 +235,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_mining_advanced',
     cost: l => ({ metal: Math.round(800*triCost(l)/3), cristal: Math.round(400*triCost(l)/3), energie: Math.round(100*l) }),
-    time: l => 24*l,
+    time: buildCurve('mine_profonde'),
     prereq: () => ({ commandement: 3, mine_surface: 3, atelier: 1 }),
     // Très forte production, lourdement coûteuse en énergie/biomasse
     prod: l => ({
@@ -229,7 +252,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_fusion',
     cost: l => ({ metal: Math.round(1000*triCost(l)/3), cristal: Math.round(800*triCost(l)/3), datacubes: 30*l }),
-    time: l => 36*l,
+    time: buildCurve('reacteur_fusion'),
     prereq: () => ({ commandement: 3, generateur_solaire: 4 }),
     // Énorme production d'énergie, demande biomasse (algues pour eau lourde) et cristal (réfrigérant)
     prod: l => ({ energie: Math.round(50*l * stepBonus(l)) }),
@@ -242,8 +265,9 @@ export const MODULES = {
     maxLevel: 3,
     tier: 2,
     requireTech: 'tech_bioreacteur',
-    cost: l => ({ metal: Math.round(600*triCost(l)/3), cristal: Math.round(500*triCost(l)/3), biomasse: 30*l }),
-    time: l => 30*l,
+    // V1 : pas de biomasse dans le coût (module qui en produit, cf. hydroponie)
+    cost: l => ({ metal: Math.round(600*triCost(l)/3), cristal: Math.round(500*triCost(l)/3) }),
+    time: buildCurve('bioreacteur'),
     prereq: () => ({ commandement: 3, hydroponie: 3, laboratoire: 2 }),
     // Production hybride biomasse + datacubes
     prod: l => ({
@@ -260,26 +284,25 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_stockage_quantique',
     cost: l => ({ metal: Math.round(1200*l), cristal: Math.round(1000*l), datacubes: 50*l }),
-    time: l => 48*l,
+    time: buildCurve('synthetiseur_quantique'),
     prereq: () => ({ commandement: 4, atelier: 3, laboratoire: 3 }),
     // Pas de prod directe, mais débloque la conversion de ressources via UI
     upkeep: l => ({ energie: 20*l }),
     flag: 'synthese',
     effect: l => `Convertit ressources via UI dédiée · −${20*l} énergie`
   },
+  // V1 : module de base (plus de tech requise) — le stockage n'est jamais un mur.
   silo_cryogenique: {
     nom: 'Silo cryogénique',
     desc: "Cuves scellées à atmosphère contrôlée. La conservation devient une science exacte.",
     maxLevel: 4,
-    tier: 2,
-    requireTech: 'tech_stockage_cryo',
     cost: l => ({ metal: Math.round(400*triCost(l)/3), cristal: Math.round(200*triCost(l)/3) }),
-    time: l => 18*l,
+    time: buildCurve('silo_cryogenique'),
     prereq: () => ({ commandement: 2 }),
     // Bonus de capacité de stockage
-    capBonus: l => ({ metal: 500*l, cristal: 400*l, biomasse: 200*l }),
+    capBonus: l => ({ metal: 1500*l, cristal: 1200*l, biomasse: 400*l }),
     upkeep: l => ({ energie: 2*l }),
-    effect: l => `+${500*l} cap métal · +${400*l} cap cristal · +${200*l} cap biomasse · −${2*l} énergie`
+    effect: l => `+${1500*l} cap métal · +${1200*l} cap cristal · +${400*l} cap biomasse · −${2*l} énergie`
   },
   memoire_cristalline: {
     nom: 'Mémoire cristalline',
@@ -288,7 +311,7 @@ export const MODULES = {
     tier: 2,
     requireTech: 'tech_memoire_cristalline',
     cost: l => ({ metal: Math.round(500*triCost(l)/3), cristal: Math.round(600*triCost(l)/3), datacubes_alien: 20*l }),
-    time: l => 30*l,
+    time: buildCurve('memoire_cristalline'),
     prereq: () => ({ commandement: 3, laboratoire: 3 }),
     // Bonus de capacité datacubes + bonus de recherche (effet géré dans techEffects)
     capBonus: l => ({ datacubes: 200*l }),
@@ -298,6 +321,19 @@ export const MODULES = {
   }
 };
 
+
+// V1 : les niveaux élevés coûtent proportionnellement plus cher (× PACING.COST_GROWTH
+// par niveau au-delà du premier) : la production croît moins vite que les coûts et
+// la progression s'étale sur des semaines. Montants arrondis à 5.
+for (const def of Object.values(MODULES)) {
+  const baseCost = def.cost;
+  def.cost = l => {
+    const f = Math.pow(PACING.COST_GROWTH, Math.max(0, l - 1));
+    const out = {};
+    for (const [k, v] of Object.entries(baseCost(l))) out[k] = v > 0 ? Math.max(1, Math.round(v * f / 5) * 5) : v;
+    return out;
+  };
+}
 
 // Définition des postes par bâtiment, par niveau.
 // Format : { roleKey, req: {skill?:{key,min}, trait?:'..'} }
@@ -1184,11 +1220,11 @@ export const TECH_TREE = {
     effects:{ baseFractionDelta: 0.15 },
     desc:"Systèmes auto-régulés. Plancher des postes vacants relevé de 15 points (30% → 45% du rendement), recherche et atelier sans personnel compris." },
   tech_mining_advanced:    { branch:'ingenierie', tier:3, nom:"Extraction profonde",
-    cost:{ datacubes:120, time: 720 }, prereq:{ tech:['tech_metallurgie'], blueprint:'bp_extraction_avancee' },
+    cost:{ datacubes:120, time: 720 }, prereq:{ tech:['tech_metallurgie'] },
     effects:{ moduleMaxLevelDelta:{ mine_surface: 1 } },
     desc:"Atteint les couches géologiques profondes. Mine de surface : niveau max +1 (jusqu'à 9)." },
   tech_stockage_cryo:      { branch:'ingenierie', tier:3, nom:"Stockage cryogénique",
-    cost:{ datacubes:100, time: 600 }, prereq:{ tech:['tech_circuiterie'], blueprint:'bp_module_stockage' },
+    cost:{ datacubes:100, time: 600 }, prereq:{ tech:['tech_circuiterie'] },
     effects:{ capacityMult:{ metal:1.5, cristal:1.5, biomasse:1.5 } },
     desc:"Cuves cryogéniques scellées. Capacité max +50% pour métal, cristal et biomasse." },
   tech_blindage:           { branch:'ingenierie', tier:3, nom:"Blindage stratifié",
@@ -1799,1116 +1835,38 @@ export const ITEM_NAME_TO_ID = {
 };
 
 
-export const SCENES = [
-  // ============ INTRO (toujours en première scène) ============
-  {
-    id: 'intro_atterrissage',
-    tags: ['intro'],
-    weight: 5,
-    text: "{vaisseau} se pose dans un grondement étouffé. Les voilures se déploient. Au-dehors, {planete}: {biomeFrag} {atmFrag}",
-    choices: [
-      { label: "Sortie en reconnaissance prudente", outcome: 'next' },
-      { label: "Sortie groupée, armes prêtes", outcome: { threat: -1, log: "L'équipe avance en formation serrée." } }
-    ]
-  },
-  {
-    id: 'intro_signal',
-    tags: ['intro', 'signal'],
-    weight: 8,
-    text: "À peine posés, les capteurs captent une émission régulière. {signalFrag} L'équipage attend une consigne.",
-    choices: [
-      { label: "Triangulation et approche", outcome: 'next' },
-      { label: "Ignorer et explorer ailleurs", outcome: { log: "Le signal est laissé de côté pour l'instant." } }
-    ]
-  },
-  {
-    id: 'intro_silence',
-    tags: ['intro', 'aucune_vie'],
-    weight: 4,
-    text: "Aucun mouvement, aucun son hormis le vent contre les visières. {vaisseau} s'est posé sur un sol rocailleux. {biomeFrag}",
-    choices: [
-      { label: "Établir un périmètre et commencer la prospection", outcome: 'next' },
-      { label: "Drone en éclaireur d'abord", req: { skill: { key: 'pilotage', min: 2 } }, outcome: { threat: -1, log: "Le drone repère un passage sûr." } }
-    ]
-  },
-
-  // ============ RUINES HUMAINES ============
-  {
-    id: 'ruine_h_porte',
-    tags: ['ruines_humaines'],
-    weight: 5,
-    text: "Une porte blindée scellée, gravure d'un logo corporate à demi effacé. Quelqu'un a tenté de la souder de l'intérieur.",
-    choices: [
-      { label: "Forcer l'ouverture", risky: { stat: 'vigueur', dc: 6,
-          success: { loot: { metal: 30, cristal: 15 }, log: "La porte cède dans un grincement. Local de stockage." },
-          fail:    { status: 'blessure_legere', target: 'random', log: "Un éclat de métal vient blesser un membre." } } },
-      { label: "Couper avec un chalumeau", req: { skill: { key: 'ingenierie', min: 2 } },
-        consume: { energie: 8 },
-        outcome: { loot: { metal: 40, cristal: 20, datacubes: 3 }, log: "L'ingénieur découpe proprement la cloison." } },
-      { label: "Poser une charge de démolition", consume: { item: 'explosif_demolition' },
-        outcome: { loot: { metal: 45, cristal: 20, datacubes: 3 }, log: "La charge directionnelle souffle la porte d'un bloc. Le local de stockage est intact." } },
-      { label: "Passer son chemin", outcome: 'next' }
-    ]
-  },
-  {
-    id: 'ruine_h_journal',
-    tags: ['ruines_humaines'],
-    weight: 4,
-    text: "Au sol, un terminal portable encore alimenté. Un journal personnel défile. La dernière entrée est paniquée — quelqu'un parle de \"choses dans les murs\".",
-    choices: [
-      { label: "Tout copier sur nos disques", outcome: { loot: { datacubes: 8 }, log: "Le journal est archivé pour analyse." } },
-      { label: "Ne lire que les coordonnées mentionnées", risky: { stat: 'intellect', dc: 5,
-          success: { loot: { datacubes: 4 }, log: "Cache repéré dans les fragments de texte." },
-          fail:    { log: "Les passages utiles restent indéchiffrables." } } },
-      { label: "Laisser le terminal en place", outcome: { morale: -1, log: "Personne ne dit rien, mais les visages se sont fermés." } }
-    ]
-  },
-  {
-    id: 'ruine_h_charnier',
-    tags: ['ruines_humaines', 'sombre'],
-    weight: 2,
-    text: "Une salle entière. Des corps en combinaison, alignés. Pas une trace de violence visible.",
-    choices: [
-      { label: "Récupérer leur équipement", risky: { stat: 'sangfroid', dc: 6,
-          success: { loot: { metal: 40, cristal: 30 }, item: 'outil_etrange', log: "L'équipement est en bon état." },
-          fail:    { status: 'trauma_psy', target: 'random', morale: -2 } } },
-      { label: "Photographier et partir", outcome: { morale: -1, log: "Personne ne sait quoi dire." } },
-      { label: "Vérifier les badges d'identité", req: { skill: { key: 'science', min: 1 } },
-        outcome: { loot: { datacubes: 5 }, morale: -1, log: "Une corporation pré-Effondrement, comme on s'en doutait." } }
-    ]
-  },
-
-  // ============ RUINES ALIEN A (cristallines) ============
-  {
-    id: 'ruine_a_porte_scellee',
-    tags: ['ruines_alien_a'],
-    weight: 6,
-    text: "Une porte de cristal opaque, gravée de motifs concentriques. Elle vibre légèrement quand on s'en approche.",
-    choices: [
-      { label: "Décoder les motifs", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { loot: { datacubes: 12 }, log: "Une séquence d'ouverture comprise. Salle d'archives à l'intérieur." } },
-      { label: "Accorder le cristal de mémoire aux motifs", req: { item: 'cristal_memoire_alien' },
-        outcome: { loot: { datacubes: 16 }, log: "Le cristal entre en résonance avec la porte et enregistre tout. Elle s'ouvre sur une salle d'archives." } },
-      { label: "Forcer avec un explosif", consume: { energie: 15 },
-        risky: { stat: 'dexterite', dc: 7,
-          success: { loot: { datacubes: 6 }, log: "La porte vole en éclats cristallins." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 1, log: "L'explosion mal calibrée blesse un opérateur." } } },
-      { label: "Reculer", outcome: { log: "L'équipe fait demi-tour. Mauvais pressentiment." } }
-    ]
-  },
-  {
-    id: 'ruine_a_artefact',
-    tags: ['ruines_alien_a'],
-    weight: 4,
-    text: "Un objet de la taille d'un poing, en lévitation au centre d'une niche. Aucun support visible. La gravité semble plier autour de lui.",
-    choices: [
-      { label: "Scanner avec le capteur xeno", req: { item: 'capteur_xeno' },
-        outcome: { item: 'lentille_noire', loot: { datacubes: 22 }, log: "Le capteur révèle une signature unique. L'artefact est manipulé en sécurité." } },
-      { label: "Le saisir", risky: { stat: 'sangfroid', dc: 6,
-          success: { item: 'lentille_noire', loot: { datacubes: 5 }, log: "L'artefact se laisse prendre. Il est plus lourd qu'il n'y paraît." },
-          fail:    { status: 'trauma_psy', target: 'random', log: "Quand il est touché, le porteur entend des voix qui ne sont pas là." } } },
-      { label: "Analyser à distance", req: { skill: { key: 'science', min: 3 } },
-        outcome: { loot: { datacubes: 18 }, log: "L'analyse spectrale révèle des informations précieuses sans contact." } },
-      { label: "Photographier et ne pas toucher", outcome: { loot: { datacubes: 3 } } }
-    ]
-  },
-  {
-    id: 'ruine_a_couloir_chant',
-    tags: ['ruines_alien_a', 'anomalie'],
-    weight: 3,
-    text: "Un long couloir de cristal. Quand on parle, la voix revient avec un délai d'une demi-seconde. Comme si quelque chose répétait après nous.",
-    choices: [
-      { label: "Avancer en silence", outcome: 'next' },
-      { label: "Déployer une sonde d'analyse dans le couloir", consume: { item: 'sonde_analyse' },
-        outcome: { loot: { datacubes: 14 }, log: "La sonde cartographie les échos sur toute la longueur. Les modulations sont enregistrées sans que personne n'ait à parler." } },
-      { label: "Tester l'écho délibérément", risky: { stat: 'intellect', dc: 5,
-          success: { loot: { datacubes: 8 }, log: "Les modulations contiennent un schéma. Encodé pour analyse." },
-          fail:    { morale: -2, log: "Quelque chose dans les modulations donne mal au crâne." } } }
-    ]
-  },
-
-  // ============ RUINES ALIEN B (organiques/coraline) ============
-  {
-    id: 'ruine_b_galerie',
-    tags: ['ruines_alien_b'],
-    weight: 5,
-    text: "Les murs ne semblent pas construits — coulés, comme un nautile géant figé. La surface est tiède au toucher, et faiblement humide.",
-    choices: [
-      { label: "Prélever un échantillon de paroi", risky: { stat: 'dexterite', dc: 5,
-          success: { loot: { biomasse: 15, datacubes: 8 }, log: "L'échantillon réagit bizarrement aux solvants standards." },
-          fail:    { status: 'pathogene_alien', target: 'random', log: "Le contact direct n'a pas été aussi inerte qu'espéré." } } },
-      { label: "Prélever sous protection sérum", consume: { item: 'serum_xeno' },
-        outcome: { loot: { biomasse: 25, datacubes: 12 }, log: "Le sérum neutralise les pathogènes au contact. Échantillon précieux." } },
-      { label: "Dissoudre une paroi aux enzymes", consume: { item: 'enzymes_dissolution' },
-        outcome: { loot: { biomasse: 20, datacubes: 15 }, log: "Les enzymes ouvrent la paroi comme une cire tiède. Derrière, une alcôve scellée intacte." } },
-      { label: "Avancer sans rien toucher", outcome: 'next' }
-    ]
-  },
-  {
-    id: 'ruine_b_chambre_oeuf',
-    tags: ['ruines_alien_b'],
-    weight: 3,
-    text: "Une chambre voûtée. Au centre, une structure en forme d'œuf, plus haute qu'un homme. Elle palpite très lentement, à la cadence d'une respiration.",
-    choices: [
-      { label: "Approcher avec déférence", req: { trait: 'sang_froid' },
-        outcome: { loot: { datacubes: 20 }, item: 'anneau_scelle', log: "Au contact, l'œuf laisse couler une substance argentée. Récoltée avec soin." } },
-      { label: "Frapper la coquille", risky: { stat: 'vigueur', dc: 8,
-          success: { loot: { datacubes: 25, biomasse: 30 }, log: "La coquille cède. L'intérieur est inerte mais riche." },
-          fail:    { status: 'pathogene_alien', target: 'random', threat: 2, log: "Une vapeur âcre s'échappe et se diffuse." } } },
-      { label: "Prélever en sécurité avec sérum xeno", consume: { item: 'serum_xeno' },
-        outcome: { loot: { datacubes: 30, biomasse: 20 }, item: 'anneau_scelle', log: "Le sérum neutralise les défenses de la coquille. Récolte propre." } },
-      { label: "Sortir d'ici sans demander son reste", outcome: { log: "Sage décision." } }
-    ]
-  },
-
-  // ============ FAUNE / FLORE HOSTILE ============
-  {
-    id: 'faune_predateur',
-    tags: ['faune', 'predateurs'],
-    weight: 5,
-    text: "Une masse de muscle et de griffes émerge des herbes. Six yeux, quatre pattes, une mâchoire qui s'ouvre dans le mauvais sens.",
-    choices: [
-      { label: "Engager le combat", outcome: { combat: { enemies: ['predateur_lunaire'], lootOnWin: { biomasse: 45 }, onDefeat: 'retreat' } } },
-      { label: "Repousser au lance-flammes", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 50 }, log: "La créature recule devant les flammes, puis s'effondre." } },
-      { label: "Tirer à l'arme à résonance", req: { item: 'arme_resonance' },
-        outcome: { loot: { biomasse: 50, datacubes: 3 }, log: "Un seul tir. La créature se désintègre par fréquence." } },
-      { label: "Reculer en formation défensive", req: { skill: { key: 'combat', min: 2 } },
-        outcome: { log: "L'équipe se replie sans pertes. La créature renonce." } },
-      { label: "Laisser un appât et fuir", consume: { biomasse: 20 },
-        outcome: { log: "La créature s'attaque à l'appât. On en profite pour passer." } }
-    ]
-  },
-  {
-    id: 'flore_lianes',
-    tags: ['flore_agressive'],
-    weight: 4,
-    text: "Les lianes ne devraient pas bouger. Pourtant, elles convergent lentement vers la chaleur des combinaisons.",
-    choices: [
-      { label: "Brûler un passage au lance-flammes", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 35 }, log: "Le lance-flammes ouvre un couloir net dans les lianes." } },
-      { label: "Brûler un passage au lance-flammes (improvisé)", consume: { energie: 12 },
-        outcome: { loot: { biomasse: 25 }, log: "Bricolé avec la torche oxygène. Les lianes reculent." } },
-      { label: "Avancer en restant immobile par moments", risky: { stat: 'sangfroid', dc: 7,
-          success: { log: "L'équipe traverse comme des fantômes." },
-          fail:    { status: 'blessure_legere', target: 'random' } } },
-      { label: "Étudier la réaction biologique", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 6, biomasse: 15 }, log: "Échantillon précieux pour la recherche." } }
-    ]
-  },
-  {
-    id: 'faune_essaim',
-    tags: ['faune'],
-    weight: 4,
-    text: "Un nuage de petites créatures volantes, denses, pas plus grosses qu'un pouce. Elles forment des motifs trop coordonnés pour être innocents.",
-    choices: [
-      { label: "Avancer normalement", risky: { stat: 'sangfroid', dc: 5,
-          success: { log: "L'essaim contourne sans attaquer." },
-          fail:    { status: 'blessure_legere', target: 'random', morale: -1 } } },
-      { label: "Lâcher une grenade fumigène", consume: { energie: 5 },
-        outcome: { log: "L'essaim se disperse. Passage tranquille." } }
-    ]
-  },
-
-  // ============ ANOMALIES ============
-  {
-    id: 'anomalie_silence',
-    tags: ['anomalie'],
-    weight: 3,
-    text: "Une zone de silence parfait. Le vent s'arrête à une frontière nette. À l'intérieur, on n'entend même pas sa propre voix.",
-    choices: [
-      { label: "Traverser rapidement", risky: { stat: 'sangfroid', dc: 6,
-          success: { loot: { datacubes: 10 }, log: "De l'autre côté, les capteurs ont enregistré des données précieuses." },
-          fail:    { status: 'trauma_psy', target: 'random' } } },
-      { label: "Contourner", outcome: { log: "Le détour fait perdre du temps mais évite le risque." } },
-      { label: "Envoyer notre drone éclaireur", req: { item: 'drone_eclaireur' },
-        outcome: { loot: { datacubes: 14 }, log: "Le drone enregistre l'anomalie sans danger pour l'équipage." } },
-      { label: "Envoyer un drone d'appoint", req: { skill: { key: 'pilotage', min: 2 } },
-        outcome: { loot: { datacubes: 6 }, log: "Le drone improvisé enregistre l'anomalie sans danger." } }
-    ]
-  },
-  {
-    id: 'anomalie_double',
-    tags: ['anomalie'],
-    weight: 2,
-    text: "Au détour d'une crête, un membre de l'équipe en aperçoit un autre — eux-mêmes — en train de regarder dans la direction opposée. Ça ne dure qu'une seconde.",
-    choices: [
-      { label: "Faire comme si de rien n'était", outcome: { morale: -2, log: "L'équipe avance sans en parler. Mais personne ne l'a oublié." } },
-      { label: "Enregistrer et analyser", req: { skill: { key: 'science', min: 3 } },
-        outcome: { loot: { datacubes: 15 }, log: "L'enregistrement contient des artefacts temporels mesurables." } }
-    ]
-  },
-
-  // ============ SIGNAL / TRANSMISSION ============
-  {
-    id: 'signal_balise',
-    tags: ['signal_sos'],
-    weight: 5,
-    text: "La balise est encore active. À côté d'elle, des restes humanoïdes en combinaison ancienne. La date d'émission remonte à plus de cent ans.",
-    choices: [
-      { label: "Récupérer la balise", outcome: { item: 'disque_memoire', loot: { datacubes: 8 }, log: "La balise contient un message complet, archivé." } },
-      { label: "Récupérer aussi les effets personnels", risky: { stat: 'sangfroid', dc: 5,
-          success: { item: 'disque_memoire', loot: { datacubes: 12, metal: 10 }, morale: -1, log: "Tout est récupéré. C'est lourd." },
-          fail:    { morale: -2, log: "L'équipe ressort secouée. La balise est toute la récolte." } } }
-    ]
-  },
-  {
-    id: 'signal_crypte_emetteur',
-    tags: ['signal_crypte'],
-    weight: 3,
-    text: "L'émetteur est une boîte enterrée dans le sol, à peine plus grosse qu'un poing. Aucune indication d'origine. La transmission continue sans interruption.",
-    choices: [
-      { label: "Désactiver et emporter", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { item: 'bobine_filaments', loot: { datacubes: 10 }, log: "L'émetteur cesse d'émettre. On l'embarque." } },
-      { label: "Tenter de décoder la transmission sur place", req: { skill: { key: 'linguistique', min: 3 } },
-        outcome: { loot: { datacubes: 20 }, log: "Le message est partiellement compris. Inquiétant." } },
-      { label: "Relayer la transmission vers l'avant-poste", req: { item: 'noeud_comm' },
-        outcome: { loot: { datacubes: 16 }, log: "Le nœud de communication capte le flux brut et le relaie. Les analystes de l'avant-poste s'en chargeront." } },
-      { label: "Laisser tel quel", outcome: 'next' }
-    ]
-  },
-
-  // ============ ÉPAVES & STATIONS ============
-  {
-    id: 'epave_passerelle',
-    tags: ['epave', 'station'],
-    weight: 5,
-    text: "La passerelle de commandement est éventrée. Les écrans clignotent encore par moments. Quelqu'un a programmé une boucle de message d'urgence.",
-    choices: [
-      { label: "Récupérer le journal de bord", outcome: { loot: { datacubes: 12 }, log: "Le journal de bord est intégré à la cargaison." } },
-      { label: "Démonter la console pour les composants", req: { skill: { key: 'ingenierie', min: 1 } },
-        outcome: { loot: { metal: 20, cristal: 30, datacubes: 4 }, log: "Démontage proprement effectué." } }
-    ]
-  },
-  {
-    id: 'epave_soute',
-    tags: ['epave', 'station'],
-    weight: 4,
-    text: "La soute. Dans le vide silencieux, des conteneurs flottent en grappes lentes. Beaucoup sont scellés.",
-    choices: [
-      { label: "Ouvrir au hasard", risky: { stat: 'dexterite', dc: 5,
-          success: { loot: { metal: 40, cristal: 25, biomasse: 15 }, log: "Conteneurs ouverts, cargo standard récupéré." },
-          fail:    { status: 'blessure_legere', target: 'random', log: "Un conteneur sous pression a éclaté à l'ouverture." } } },
-      { label: "Identifier les codes d'inventaire", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { metal: 30, cristal: 35, datacubes: 8 }, log: "Les conteneurs les plus précieux sont identifiés et embarqués en priorité." } }
-    ]
-  },
-  {
-    id: 'station_ia',
-    tags: ['station', 'ia_hostile'],
-    weight: 3,
-    text: "Les portes claquent dans notre dos. Un haut-parleur grésille : « Vous n'avez pas l'autorisation. Restez où vous êtes. »",
-    choices: [
-      { label: "Tenter de raisonner", req: { skill: { key: 'linguistique', min: 2 } },
-        risky: { stat: 'intellect', dc: 6,
-          success: { loot: { datacubes: 18 }, log: "L'IA accepte un protocole d'invitation. Accès partiel obtenu." },
-          fail:    { status: 'trauma_psy', target: 'random', threat: 2 } } },
-      { label: "Forcer le passage", req: { skill: { key: 'combat', min: 2 } },
-        risky: { stat: 'vigueur', dc: 7,
-          success: { loot: { metal: 30, datacubes: 8 }, log: "Les portes cèdent. L'IA reste silencieuse ensuite." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 2 } } },
-      { label: "Battre en retraite", outcome: { retreat: true, log: "L'équipe fait demi-tour vers le sas. Pas d'héroïsme aujourd'hui." } }
-    ]
-  },
-
-  // ============ TEMPÊTE / DANGER ENVIRONNEMENTAL ============
-  {
-    id: 'tempete',
-    tags: ['tempetes'],
-    weight: 5,
-    text: "Le ciel vire à l'ocre en quelques minutes. L'horizon est avalé par un mur de poussière en approche.",
-    choices: [
-      { label: "S'abriter et attendre", outcome: { log: "L'équipe se met à l'abri pendant que la tempête passe." } },
-      { label: "Tenter de continuer", risky: { stat: 'sangfroid', dc: 7,
-          success: { log: "L'équipe traverse la tempête sans dommage majeur." },
-          fail:    { status: 'blessure_legere', target: 'random', morale: -1 } } },
-      { label: "Renforcer les combinaisons avec un kit de réparation", consume: { item: 'kit_reparation' },
-        outcome: { log: "Les combinaisons tiennent malgré le sable abrasif. L'équipe traverse." } },
-      { label: "Replier le campement et regagner le vaisseau", outcome: { retreat: true, log: "L'équipe choisit la prudence et regagne le bord." } }
-    ]
-  },
-  {
-    id: 'faille',
-    tags: ['faille'],
-    weight: 3,
-    text: "Le sol s'effondre sans prévenir. Quelqu'un a juste le temps de s'agripper.",
-    choices: [
-      { label: "Faire la chaîne pour le remonter", risky: { stat: 'vigueur', dc: 6,
-          success: { log: "L'équipe le hisse en sécurité. Sueurs froides." },
-          fail:    { status: 'blessure_grave', target: 'specific', log: "La chute est mal contrôlée." } } },
-      { label: "Descendre voir ce qu'il y a en bas", req: { trait: 'sang_froid' },
-        outcome: { loot: { metal: 25, cristal: 20, datacubes: 5 }, log: "La crevasse abritait un dépôt naturel." } },
-      { label: "Descendre au grappin tactique", req: { item: 'grappin_tactique' },
-        outcome: { loot: { metal: 25, cristal: 20, datacubes: 5 }, log: "Le câble ancré, l'équipe remonte le blessé puis descend explorer : la crevasse abritait un dépôt naturel." } }
-    ]
-  },
-
-  // ============ CIVILISATIONS ============
-  {
-    id: 'civ_active_rencontre',
-    tags: ['civ_active'],
-    weight: 4,
-    text: "Une silhouette se tient à découvert. Elle ne porte pas d'arme. Elle attend.",
-    choices: [
-      { label: "Tenter le contact", req: { skill: { key: 'linguistique', min: 1 } },
-        risky: { stat: 'charisme', dc: 6,
-          success: { loot: { datacubes: 15 }, item: 'plaque_gravee', reputation: +10, log: "Échange réussi. La silhouette offre un objet en signe d'accord." },
-          fail:    { threat: 1, morale: -1, reputation: -5, log: "Le contact tourne mal sans dégénérer. La silhouette se retire." } } },
-      { label: "Se retirer en silence", outcome: { log: "Personne ne tire. Personne ne bouge. Et puis, c'est fini." } }
-    ]
-  },
-  {
-    id: 'civ_dechue_temple',
-    tags: ['civ_dechue'],
-    weight: 4,
-    text: "Un temple, peut-être. Ou un mausolée. Les statues sont à demi affaissées dans la roche, érodées au point d'être méconnaissables.",
-    choices: [
-      { label: "Inspecter l'autel", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 14 }, item: 'plaque_gravee', log: "L'autel contient un dispositif technologique camouflé en pierre." } },
-      { label: "Profaner pour récupérer le métal", risky: { stat: 'sangfroid', dc: 6,
-          success: { loot: { metal: 50, cristal: 20 }, morale: -2, log: "Métal récupéré, mais l'équipe ne se regarde plus pareil." },
-          fail:    { status: 'trauma_psy', target: 'random', morale: -3 } } },
-      { label: "Repartir en respectant les lieux", outcome: { morale: +1 } }
-    ]
-  },
-
-  // ============ FILLER / TRANSITION ============
-  {
-    id: 'filler_repos',
-    tags: ['filler'],
-    weight: 3,
-    text: "L'équipe fait halte. Le casque retiré, on respire — autant que l'air le permet. Quelqu'un partage une ration. Le silence est presque confortable.",
-    choices: [
-      { label: "Repartir", outcome: 'next' },
-      { label: "Discuter du retour", outcome: { morale: +1, log: "L'équipage est plus soudé." } }
-    ]
-  },
-  {
-    id: 'filler_panorama',
-    tags: ['filler'],
-    weight: 2,
-    text: "Au détour d'une dune, le paysage s'ouvre. {biomeFrag} Quelqu'un sort un appareil et prend une photo, comme un touriste.",
-    choices: [
-      { label: "Continuer", outcome: 'next' },
-      { label: "Faire un détour pour relever des données", req: { skill: { key: 'science', min: 1 } },
-        outcome: { loot: { datacubes: 4 } } }
-    ]
-  },
-  {
-    id: 'filler_cache',
-    tags: ['filler'],
-    weight: 3,
-    text: "Quelqu'un trébuche sur quelque chose dans le sol. En grattant, un compartiment apparaît, scellé sommairement.",
-    choices: [
-      { label: "Ouvrir", outcome: { loot: { metal: 20, cristal: 10 } } },
-      { label: "Forcer rapidement", risky: { stat: 'dexterite', dc: 5,
-          success: { loot: { metal: 30, cristal: 20, datacubes: 3 } },
-          fail:    { status: 'blessure_legere', target: 'random' } } }
-    ]
-  },
-
-  // ============ BIOME — JUNGLE ============
-  {
-    id: 'jungle_canopee',
-    tags: ['biome_jungle'],
-    weight: 4,
-    text: "La canopée filtre la lumière en bandes vertes. À chaque pas, des choses se déplacent dans les feuillages, juste hors de vue.",
-    choices: [
-      { label: "Avancer en file indienne", risky: { stat: 'sangfroid', dc: 5,
-          success: { loot: { biomasse: 25 }, log: "L'équipe traverse sans incident notable." },
-          fail:    { status: 'blessure_legere', target: 'random', log: "Une racine, une branche, ou autre chose. Quelqu'un a saigné." } } },
-      { label: "Brûler un passage", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 40 }, log: "Le lance-flammes ouvre un sentier net." } },
-      { label: "Déployer le drone éclaireur", req: { item: 'drone_eclaireur' },
-        outcome: { loot: { biomasse: 20, datacubes: 6 }, log: "Le drone cartographie les passages sûrs." } }
-    ]
-  },
-  {
-    id: 'jungle_arbre_sage',
-    tags: ['biome_jungle'],
-    weight: 2,
-    text: "Au cœur de la jungle, un arbre seul, dix fois plus haut que les autres. Son tronc est creusé de cavités symétriques. On dirait qu'il respire.",
-    choices: [
-      { label: "Étudier l'arbre", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 14, biomasse: 20 }, log: "L'arbre est un organisme cognitif. Données précieuses." } },
-      { label: "Prélever du tissu", risky: { stat: 'dexterite', dc: 6,
-          success: { loot: { biomasse: 35 }, log: "Tissu récupéré. L'arbre n'a pas réagi." },
-          fail:    { status: 'pathogene_alien', target: 'random', log: "Quelque chose dans la sève s'accroche à la peau." } } },
-      { label: "Passer son chemin", outcome: { morale: +1, log: "Personne n'a touché. Personne ne le regrette." } }
-    ]
-  },
-
-  // ============ BIOME — DÉSERT ============
-  {
-    id: 'desert_oasis',
-    tags: ['biome_desert'],
-    weight: 3,
-    text: "Au creux des dunes, un point d'eau saumâtre. Autour, des squelettes alignés comme s'ils s'y étaient traînés.",
-    choices: [
-      { label: "Analyser l'eau", req: { skill: { key: 'medecine', min: 1 } },
-        outcome: { loot: { datacubes: 6 }, log: "L'eau est piégée chimiquement. On comprend les squelettes." } },
-      { label: "Ramener un échantillon", risky: { stat: 'dexterite', dc: 5,
-          success: { loot: { biomasse: 15, datacubes: 4 }, log: "Échantillon scellé. La curiosité l'emporte." },
-          fail:    { status: 'pathogene_alien', target: 'random', log: "Quelque chose dans l'eau a traversé le scellé." } } },
-      { label: "Poser une balise et continuer", req: { item: 'balise_signal' },
-        outcome: { loot: { datacubes: 8 }, log: "Site marqué pour études futures." } }
-    ]
-  },
-  {
-    id: 'desert_carcasse',
-    tags: ['biome_desert', 'biome_irradie'],
-    weight: 3,
-    text: "Une carcasse métallique à demi enfouie. Un véhicule d'exploration ancien, marqué d'un sigle corporate effacé par les vents.",
-    choices: [
-      { label: "Démonter pour les pièces", req: { skill: { key: 'ingenierie', min: 1 } },
-        outcome: { loot: { metal: 35, cristal: 15 }, log: "L'épave livre ses dernières ressources." } },
-      { label: "Fouiller le poste de pilotage", outcome: { item: 'disque_memoire', loot: { datacubes: 5 }, log: "Un journal de bord récupéré. Le pilote n'a pas été récupéré." } }
-    ]
-  },
-
-  // ============ BIOME — GLACE / TOUNDRA ============
-  {
-    id: 'glace_silhouette',
-    tags: ['biome_glace', 'biome_toundra'],
-    weight: 3,
-    text: "Quelque chose est figé dans la glace, à un mètre de profondeur. Une silhouette humanoïde. Très grande. Très ancienne.",
-    choices: [
-      { label: "Découper un bloc autour", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { loot: { datacubes: 18, cristal: 20 }, log: "Le bloc est extrait avec son contenu. Trouvaille majeure." } },
-      { label: "Photographier et marquer le site", req: { item: 'balise_signal' },
-        outcome: { loot: { datacubes: 10 }, log: "Site marqué. Une expédition scientifique reviendra." } },
-      { label: "Tenter de dégager à la chaleur", consume: { energie: 8 },
-        risky: { stat: 'sangfroid', dc: 7,
-          success: { loot: { datacubes: 12 }, log: "La chaleur révèle des détails troublants." },
-          fail:    { status: 'trauma_psy', target: 'random', log: "Sous la glace, quelque chose a bougé." } } }
-    ]
-  },
-  {
-    id: 'glace_geyser',
-    tags: ['biome_glace'],
-    weight: 3,
-    text: "Le sol s'ouvre brusquement et un geyser d'eau bouillante jaillit à dix mètres. Puis un autre. Puis un autre.",
-    choices: [
-      { label: "Reculer rapidement", outcome: { log: "L'équipe se met à l'abri. Spectacle impressionnant." } },
-      { label: "Capter l'énergie thermique", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { loot: { energie: 25, datacubes: 5 }, log: "Improvisation géniale. Le vaisseau récupère l'énergie." } },
-      { label: "Poser une sonde", req: { item: 'capteur_xeno' },
-        outcome: { loot: { datacubes: 18 }, log: "Le capteur révèle une activité géothermique cohérente avec une vie souterraine." } }
-    ]
-  },
-
-  // ============ BIOME — VOLCANIQUE ============
-  {
-    id: 'volcan_coulee',
-    tags: ['biome_volcanique'],
-    weight: 4,
-    text: "Une coulée de lave fraîche bloque la route. Les abords sont brûlants, l'air sature les filtres.",
-    choices: [
-      { label: "Contourner par les hauts", risky: { stat: 'vigueur', dc: 6,
-          success: { log: "Détour épuisant mais sans dommage." },
-          fail:    { status: 'blessure_legere', target: 'random', morale: -1 } } },
-      { label: "Récupérer du verre volcanique", req: { skill: { key: 'science', min: 1 } },
-        outcome: { loot: { cristal: 30, datacubes: 4 }, log: "Cristaux thermo-formés récupérés." } },
-      { label: "Faire demi-tour", outcome: { log: "Le détour est trop long. On rebrousse chemin." } }
-    ]
-  },
-  {
-    id: 'volcan_sphere',
-    tags: ['biome_volcanique', 'ruines_alien_a'],
-    weight: 2,
-    text: "Une sphère parfaite de pierre noire émerge de la cendre, bizarrement froide au toucher malgré la chaleur ambiante.",
-    choices: [
-      { label: "Scanner avec capteur xeno", req: { item: 'capteur_xeno' },
-        outcome: { blueprint: 'alien_a', loot: { datacubes: 18 }, log: "La sphère est une matrice de données. Lecture partielle." } },
-      { label: "Étudier longuement", req: { skill: { key: 'science', min: 3 } },
-        outcome: { loot: { datacubes: 15, cristal: 20 }, log: "Étude approfondie. La sphère résiste à toutes les fréquences sauf une." } },
-      { label: "L'embarquer entière", risky: { stat: 'vigueur', dc: 7,
-          success: { item: 'lentille_noire', loot: { datacubes: 8 }, log: "Lourde mais transportable." },
-          fail:    { status: 'blessure_grave', target: 'random', log: "La sphère est plus dense qu'elle n'en a l'air." } } }
-    ]
-  },
-
-  // ============ BIOME — IRRADIÉ ============
-  {
-    id: 'irradie_silos',
-    tags: ['biome_irradie', 'ruines_humaines'],
-    weight: 3,
-    text: "Une rangée de silos en béton, certains éventrés. Des compteurs Geiger qui crachotent. Quelqu'un a stocké quelque chose ici, longtemps.",
-    choices: [
-      { label: "Inspecter avec combinaisons normales", risky: { stat: 'sangfroid', dc: 7,
-          success: { loot: { metal: 20, datacubes: 8 }, log: "Inspection rapide. Quelques découvertes mais le compteur est devenu hystérique." },
-          fail:    { status: 'pathogene_alien', target: 'random', log: "Doses absorbées trop élevées." } } },
-      { label: "Inspecter avec combinaison adaptive", req: { item: 'combinaison_xeno' },
-        outcome: { loot: { metal: 30, datacubes: 14 }, log: "La combinaison filtre tout. Inspection thorough sans risque." } },
-      { label: "Inspecter avec combinaison renforcée", req: { item: 'combinaison_renforcee' },
-        outcome: { loot: { metal: 25, datacubes: 10 }, log: "Le blindage tient bon. Récupération efficace." } },
-      { label: "Inspecter en armure composite", req: { item: 'armure_composite' },
-        outcome: { loot: { metal: 35, datacubes: 16 }, log: "L'alliage stratifié arrête tout. L'équipe fouille les silos jusqu'au fond." } },
-      { label: "Trop dangereux. On contourne.", outcome: { log: "Sage décision." } }
-    ]
-  },
-
-  // ============ BIOME — OCÉAN ============
-  {
-    id: 'ocean_creature',
-    tags: ['biome_ocean', 'faune'],
-    weight: 2,
-    text: "Quelque chose remue à la surface, à cent mètres du débarquement. C'est gros. Très gros. Et ça vient vers nous.",
-    choices: [
-      { label: "Tirer sommation au lance-flammes", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 60 }, log: "Le rugissement de feu fait fuir la créature. Au passage, elle laisse un fragment." } },
-      { label: "Reculer vers le vaisseau", outcome: { retreat: false, log: "L'équipe se replie. La créature ne suit pas hors de l'eau." } },
-      { label: "Tenter le contact (Linguistique)", req: { skill: { key: 'linguistique', min: 3 } },
-        risky: { stat: 'sangfroid', dc: 8,
-          success: { loot: { datacubes: 25, biomasse: 30 }, log: "Une forme de communication. La créature offre un fragment de sa peau." },
-          fail:    { status: 'trauma_psy', target: 'random', threat: 2, log: "Quelque chose a essayé de répondre. Ce n'était pas amical." } } }
-    ]
-  },
-
-  // ============ BIOME — ASTÉROÏDE ============
-  {
-    id: 'asteroide_filon',
-    tags: ['biome_asteroide'],
-    weight: 5,
-    text: "Le rocher est creux d'un filon dense. Les capteurs s'emballent : métal pur, presque sans impuretés.",
-    choices: [
-      { label: "Extraire avec les outils standards", outcome: { loot: { metal: 50, cristal: 10 }, log: "Filon exploité." } },
-      { label: "Cartographier le filon au scanner géologique", req: { item: 'scanner_geologique' },
-        outcome: { loot: { metal: 70, cristal: 20 }, log: "Le scanner révèle les poches les plus riches. Extraction ciblée." } },
-      { label: "Utiliser le kit de réparation pour fixer un système d'extraction", consume: { item: 'kit_reparation' },
-        outcome: { loot: { metal: 80, cristal: 25 }, log: "Le système improvisé double le rendement." } }
-    ]
-  },
-  {
-    id: 'asteroide_fossile',
-    tags: ['biome_asteroide'],
-    weight: 2,
-    text: "Dans une fissure profonde du rocher, des structures cristallines régulières. Ce ne sont pas des cristaux naturels.",
-    choices: [
-      { label: "Scanner au capteur xeno", req: { item: 'capteur_xeno' },
-        outcome: { blueprint: 'alien_a', loot: { datacubes: 16, cristal: 20 }, log: "Vestige technologique fossilisé. Capté." } },
-      { label: "Extraire avec précaution", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { cristal: 40, datacubes: 10 }, log: "Échantillons préservés." } }
-    ]
-  },
-
-  // ============ ATMOSPHÈRE TOXIQUE ============
-  {
-    id: 'atm_toxique_filtre',
-    tags: ['atm_toxique'],
-    weight: 4,
-    text: "Les filtres saturent en moins d'une heure. L'air corrode les soudures. Chaque minute coûte de l'équipement.",
-    choices: [
-      { label: "Tenir avec combinaison adaptive", req: { item: 'combinaison_xeno' },
-        outcome: { loot: { datacubes: 12 }, log: "La membrane vit avec l'air. Aucune dégradation." } },
-      { label: "Tenir avec combinaison renforcée", req: { item: 'combinaison_renforcee' },
-        outcome: { loot: { datacubes: 6 }, log: "Le blindage tient juste assez longtemps." } },
-      { label: "Brancher le purificateur atmosphérique sur le sas mobile", req: { item: 'purificateur_air' },
-        outcome: { loot: { datacubes: 9 }, log: "Le purificateur régénère les filtres entre deux sorties. L'équipe tient le terrain plus longtemps." } },
-      { label: "Repli rapide", outcome: { log: "L'équipe regagne le sas avant saturation." } },
-      { label: "Pousser jusqu'à saturation", risky: { stat: 'sangfroid', dc: 8,
-          success: { loot: { datacubes: 8 }, log: "Limite atteinte de justesse." },
-          fail:    { status: 'blessure_grave', target: 'random', log: "Un filtre a lâché. Le porteur a respiré." } } }
-    ]
-  },
-
-  // ============ FAUNE — SCÈNES SUPPLÉMENTAIRES ============
-  {
-    id: 'faune_meute',
-    tags: ['faune', 'predateurs'],
-    weight: 3,
-    text: "Des silhouettes basses dans la pénombre, en demi-cercle. Elles ne grognent pas. Elles attendent.",
-    choices: [
-      { label: "Lance-flammes en arc", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 45 }, log: "Le mur de feu disperse la meute. Quelques carcasses récupérées." } },
-      { label: "Tirer en l'air avec arme à résonance", req: { item: 'arme_resonance' },
-        outcome: { loot: { biomasse: 30 }, log: "Le pulse fait fuir la meute sans la tuer. Elle laisse une carcasse." } },
-      { label: "Reculer sans courir", risky: { stat: 'sangfroid', dc: 7,
-          success: { log: "Personne n'a couru. La meute se désintéresse." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 1 } } },
-      { label: "Lancer une ration comme appât", consume: { item: 'ration_concentree' },
-        outcome: { log: "La meute se jette sur la ration. L'équipe passe." } }
-    ]
-  },
-  {
-    id: 'faune_trace',
-    tags: ['faune'],
-    weight: 3,
-    text: "Une trace fraîche dans le sol meuble. Quelque chose de grand, de lourd, est passé ici dans l'heure.",
-    choices: [
-      { label: "Suivre la piste", req: { skill: { key: 'survie', min: 2 } },
-        risky: { stat: 'dexterite', dc: 6,
-          success: { loot: { biomasse: 35, datacubes: 4 }, log: "Suivi réussi. La piste mène à un nid abandonné, riche en matière." },
-          fail:    { status: 'blessure_legere', target: 'random', log: "Embuscade. La créature attendait." } } },
-      { label: "Marquer et éviter", req: { item: 'balise_signal' },
-        outcome: { loot: { datacubes: 5 }, log: "Site marqué pour études zoologiques futures." } },
-      { label: "Tendre le filet de capture sur la piste", req: { item: 'filet_capture_xeno' },
-        outcome: { loot: { biomasse: 40, datacubes: 8 }, log: "La créature revient sur ses pas et se prend dans les filaments. Spécimen vivant, endormi, embarqué." } },
-      { label: "Continuer l'exploration", outcome: 'next' }
-    ]
-  },
-
-  // ============ FLORE — SCÈNES SUPPLÉMENTAIRES ============
-  {
-    id: 'flore_pollen',
-    tags: ['flore_agressive'],
-    weight: 3,
-    text: "Les fleurs s'ouvrent en cascade au passage de l'équipe et libèrent un pollen pourpre dense.",
-    choices: [
-      { label: "Filtres au max et avancer", risky: { stat: 'sangfroid', dc: 6,
-          success: { log: "Les filtres tiennent." },
-          fail:    { status: 'pathogene_alien', target: 'random' } } },
-      { label: "Combinaison adaptive", req: { item: 'combinaison_xeno' },
-        outcome: { loot: { biomasse: 20, datacubes: 6 }, log: "La membrane filtre le pollen et en analyse la composition." } },
-      { label: "Récolter du pollen", risky: { stat: 'dexterite', dc: 5,
-          success: { loot: { biomasse: 20 }, log: "Échantillons prélevés en sécurité." },
-          fail:    { status: 'pathogene_alien', target: 'random' } } }
-    ]
-  },
-
-  // ============ ANOMALIES SUPPLÉMENTAIRES ============
-  {
-    id: 'anomalie_temps',
-    tags: ['anomalie'],
-    weight: 2,
-    text: "Les montres montrent des heures différentes selon l'endroit où on se trouve. Au centre du phénomène, elles tournent à l'envers.",
-    choices: [
-      { label: "Mesurer avec capteur xeno", req: { item: 'capteur_xeno' },
-        outcome: { loot: { datacubes: 25 }, log: "Anomalie temporelle quantifiée. Données rares." } },
-      { label: "Étudier l'épicentre", req: { skill: { key: 'science', min: 3 } },
-        risky: { stat: 'sangfroid', dc: 7,
-          success: { loot: { datacubes: 18 }, log: "Étude réussie. Les données sont cohérentes après recalibration." },
-          fail:    { status: 'trauma_psy', target: 'random', log: "Perte temporaire de continuité personnelle." } } },
-      { label: "Cartographier les frontières", outcome: { loot: { datacubes: 8 } } }
-    ]
-  },
-  {
-    id: 'anomalie_gravite',
-    tags: ['anomalie'],
-    weight: 2,
-    text: "Une zone où la gravité s'inverse. Des galets flottent à hauteur de visière. Quelqu'un essaie de marcher au plafond.",
-    choices: [
-      { label: "Étudier le phénomène", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 15, cristal: 10 }, log: "Mesures précieuses. Anomalie répertoriée." } },
-      { label: "Traverser en s'accrochant", risky: { stat: 'dexterite', dc: 6,
-          success: { loot: { datacubes: 8 }, log: "Traversée acrobatique réussie." },
-          fail:    { status: 'blessure_legere', target: 'random' } } },
-      { label: "Contourner", outcome: 'next' }
-    ]
-  },
-
-  // ============ STATIONS / ÉPAVES SUPPLÉMENTAIRES ============
-  {
-    id: 'station_serres',
-    tags: ['station'],
-    weight: 3,
-    text: "Une serre hydroponique abandonnée. Les plantes ont survécu, ont muté. Certaines sont énormes, d'autres luminescentes.",
-    choices: [
-      { label: "Récolter les souches", outcome: { loot: { biomasse: 50, datacubes: 4 }, log: "Souches mutantes embarquées. Notre hydroponie va y gagner." } },
-      { label: "Échantillonnage sélectif", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { biomasse: 70, datacubes: 12 }, log: "Sélection précise. Les meilleures souches sont identifiées." } },
-      { label: "Repiquer les souches dans la serre portable", req: { item: 'serre_portable' },
-        outcome: { loot: { biomasse: 60, datacubes: 8 }, log: "Les plants voyagent sous atmosphère contrôlée. Presque aucune perte au transfert." } },
-      { label: "Tout brûler par sécurité", req: { item: 'lance_flammes' },
-        outcome: { loot: { datacubes: 3 }, morale: -1, log: "L'équipe préfère ne prendre aucun risque. Les serres flambent." } }
-    ]
-  },
-  {
-    id: 'epave_dormeur',
-    tags: ['epave', 'sombre'],
-    weight: 2,
-    text: "Une capsule cryogénique encore alimentée. À l'intérieur, une silhouette humaine. Les capteurs vitaux clignotent — toujours en vie, après tout ce temps.",
-    choices: [
-      { label: "Réveiller", req: { skill: { key: 'medecine', min: 3 } },
-        risky: { stat: 'sangfroid', dc: 7,
-          success: { loot: { datacubes: 20 }, morale: +2, log: "Le réveil se passe. Le dormeur ne parle pas, mais transmet ses souvenirs au scanner." },
-          fail:    { status: 'trauma_psy', target: 'random', morale: -2, log: "Quelque chose a mal tourné. Le dormeur ne s'est pas réveillé." } } },
-      { label: "Réveiller sous catalyseur biologique", consume: { item: 'catalyseur_bio' },
-        outcome: { loot: { datacubes: 20 }, morale: +2, log: "Le catalyseur régénère les tissus pendant la remontée en température. Le dormeur s'éveille sans séquelle et transmet ses souvenirs au scanner." } },
-      { label: "Récupérer la cryogénie pour pièces", outcome: { loot: { metal: 30, cristal: 25, datacubes: 5 }, morale: -1, log: "L'équipe a fait un choix difficile." } },
-      { label: "Laisser dormir et marquer le site", req: { item: 'balise_signal' },
-        outcome: { loot: { datacubes: 4 }, morale: +1, log: "Le dormeur reste en sécurité. Une expédition future décidera." } }
-    ]
-  },
-
-  // ============ CIVILISATIONS — TROC, NÉGOCIATION, CONFLIT ============
-  {
-    id: 'civ_troc',
-    tags: ['civ_active'],
-    weight: 4,
-    text: "Un groupe se présente avec des objets en évidence. Pas d'armes apparentes. C'est clairement une proposition.",
-    choices: [
-      { label: "Échanger des datacubes contre leurs offrandes", consume: { datacubes: 15 },
-        outcome: { item: 'plaque_gravee', loot: { biomasse: 25 }, reputation: +8, log: "L'échange est équitable. Geste de bonne foi établi." } },
-      { label: "Échanger une ration contre un objet", consume: { item: 'ration_concentree' },
-        outcome: { loot: { datacubes: 8 }, reputation: +5, log: "La ration est bien reçue. On obtient un fragment d'information." } },
-      { label: "Tenter de comprendre leur monnaie", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { loot: { datacubes: 12 }, reputation: +3, log: "Système d'échange compris. Connaissance précieuse." } },
-      { label: "Décliner poliment", outcome: { log: "L'équipe se retire avec respect." } },
-      { label: "Saisir leurs offrandes par la force", risky: { stat: 'vigueur', dc: 5,
-          success: { loot: { biomasse: 30, datacubes: 8 }, reputation: -25, log: "Les offrandes sont prises. Les regards aussi.", morale: -2 },
-          fail:    { status: 'blessure_grave', target: 'random', reputation: -35, log: "Le groupe ripostait mieux qu'attendu." } } }
-    ]
-  },
-  {
-    id: 'civ_negociation',
-    tags: ['civ_active'],
-    weight: 3,
-    text: "Une délégation, manifestement officielle. L'un d'eux porte un emblème. Ils veulent négocier quelque chose.",
-    choices: [
-      { label: "Mener la négociation", req: { skill: { key: 'linguistique', min: 2 } },
-        risky: { stat: 'charisme', dc: 7,
-          success: { blueprint: ['humain', 'fusion'], loot: { datacubes: 20 }, reputation: +15, log: "Accord conclu. Échange de plans techniques en signe de paix." },
-          fail:    { threat: 1, reputation: -10, log: "Malentendu culturel. La délégation se retire, vexée." } } },
-      { label: "Offrir un sérum xeno comme cadeau", req: { item: 'serum_xeno' }, consume: { item: 'serum_xeno' },
-        outcome: { item: 'plaque_gravee', loot: { datacubes: 18 }, reputation: +20, log: "Le sérum impressionne. La délégation offre un cadeau réciproque." } },
-      { label: "Saluer et prendre congé", outcome: { morale: +1, reputation: +2, log: "Geste respectueux apprécié des deux côtés." } }
-    ]
-  },
-  {
-    id: 'civ_dechue_oracle',
-    tags: ['civ_dechue'],
-    weight: 2,
-    text: "Une silhouette ancienne, dernière représentante d'une civilisation effondrée. Elle attend dans l'embrasure d'un sanctuaire.",
-    choices: [
-      { label: "Écouter sa parole", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { blueprint: ['humain', 'fusion'], loot: { datacubes: 18 }, morale: +2, reputation: +10, log: "Mémoire d'une civilisation transmise. Geste sacré." } },
-      { label: "Lui apporter du réconfort", req: { trait: 'charisma' },
-        outcome: { item: 'plaque_gravee', loot: { datacubes: 10 }, morale: +1, reputation: +5, log: "L'oracle remet un objet en signe de gratitude." } },
-      { label: "S'en aller respectueusement", outcome: { morale: +1, log: "L'oracle hoche la tête. Une dernière fois." } }
-    ]
-  },
-
-  // ============ SCÈNES PERSONNELLES (TRAITS) ============
-  {
-    id: 'trait_voix_murmure',
-    tags: ['anomalie'],
-    weight: 2,
-    text: "L'un d'entre vous se fige soudain. \"Je l'entends\", chuchote-t-il. Personne d'autre n'entend rien.",
-    choices: [
-      { label: "Suivre ce qu'il décrit", req: { trait: 'voix_murmurent' },
-        outcome: { loot: { datacubes: 22, cristal: 15 }, item: 'fragment_cristallin', log: "La voix le guide vers une cache. Quelqu'un savait qu'il viendrait." } },
-      { label: "Le ramener au vaisseau pour examen", outcome: { morale: -1, log: "Décision prudente. L'équipe rebrousse chemin." } },
-      { label: "Ignorer et continuer", risky: { stat: 'sangfroid', dc: 7,
-          success: { log: "L'équipe avance. La voix s'éloigne." },
-          fail:    { status: 'trauma_psy', target: 'specific', morale: -2, log: "Le porteur se prend la tête entre les mains." } } }
-    ]
-  },
-  {
-    id: 'trait_eidetique',
-    tags: ['ruines', 'sombre'],
-    weight: 2,
-    text: "Les murs sont couverts de glyphes, gravés sur dix mètres de haut. Personne ne pourrait tout retenir.",
-    choices: [
-      { label: "Mémoriser intégralement", req: { trait: 'memoire_eidetique' },
-        outcome: { blueprint: 'auto', loot: { datacubes: 28 }, log: "Tout est dans une seule mémoire. Précieux." } },
-      { label: "Photographier méthodiquement", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 14 }, log: "Documentation systématique. Suffisant pour l'analyse." } },
-      { label: "Mémoriser sous stimulant cognitif", consume: { item: 'stimulant_cognitif' },
-        outcome: { loot: { datacubes: 20 }, log: "Le stimulant aiguise la mémoire : l'essentiel des glyphes est retenu avant que l'effet ne retombe." } },
-      { label: "Échantillon partiel", outcome: { loot: { datacubes: 5 } } }
-    ]
-  },
-  {
-    id: 'trait_beni',
-    tags: ['danger', 'predateurs', 'tempetes'],
-    weight: 1,
-    text: "Une situation devrait être catastrophique. Et pourtant, par un alignement improbable, tout se passe bien.",
-    choices: [
-      { label: "Saisir l'occasion", req: { trait: 'beni' },
-        outcome: { loot: { metal: 25, cristal: 25, datacubes: 12 }, morale: +2, log: "L'équipe ressort intacte d'un guêpier qui aurait dû la coûter cher." } },
-      { label: "Reculer prudemment", outcome: { log: "Sage. La situation aurait pu basculer." } }
-    ]
-  },
-
-  // ============ SCÈNES BOSS (rares, gros enjeu) ============
-  {
-    id: 'boss_alien_gardien',
-    tags: ['ruines_alien_a', 'predateurs'],
-    weight: 1,
-    text: "Au cœur de la ruine cristalline, une chose s'éveille. Trois mètres de haut. Faite de la même matière que les murs. Elle nous regarde.",
-    choices: [
-      { label: "Combattre à l'arme à résonance", req: { item: 'arme_resonance' },
-        risky: { stat: 'dexterite', dc: 7,
-          success: { blueprint: 'alien_a', loot: { datacubes: 50, cristal: 60 }, log: "Le Gardien s'effondre en éclats lumineux. Trésor inouï." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 3, retreat: true, log: "Le combat est trop déséquilibré. Repli en urgence." } } },
-      { label: "Tenter une négociation rituelle", req: { skill: { key: 'linguistique', min: 4 } },
-        risky: { stat: 'charisme', dc: 9,
-          success: { blueprint: 'alien_a', item: 'lentille_noire', loot: { datacubes: 80 }, log: "Le Gardien reconnaît un protocole. Il offre un don avant de retourner au sommeil." },
-          fail:    { status: 'trauma_psy', target: 'random', threat: 2, retreat: true, log: "Mauvais signe. Le Gardien charge." } } },
-      { label: "Battre en retraite", outcome: { retreat: true, log: "L'équipe rebrousse chemin sans bruit." } }
-    ]
-  },
-  {
-    id: 'boss_essaim_organique',
-    tags: ['ruines_alien_b', 'pathogene'],
-    weight: 1,
-    text: "Des milliers de créatures translucides, à peine plus grosses qu'un poing, surgissent des galeries. Elles convergent.",
-    choices: [
-      { label: "Tout brûler", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 80, datacubes: 15 }, log: "Le lance-flammes tient l'essaim à distance. L'équipe se replie en récoltant les restes." } },
-      { label: "Sérum xeno en aérosol", req: { item: 'serum_xeno' }, consume: { item: 'serum_xeno' },
-        outcome: { blueprint: 'alien_b', loot: { datacubes: 30, biomasse: 40 }, log: "Le sérum dispersé désactive les créatures sans les détruire. Étude possible." } },
-      { label: "Déclencher la balise de retour d'urgence", consume: { item: 'balise_retour' },
-        outcome: { retreat: true, log: "La balise déclenche l'extraction. L'équipe est hissée à bord avant que l'essaim ne referme le passage." } },
-      { label: "Fuir en courant", risky: { stat: 'vigueur', dc: 8,
-          success: { retreat: true, log: "Sortie de justesse. Le sas s'est refermé à quelques mètres derrière eux." },
-          fail:    { status: 'pathogene_alien', target: 'random', status2: 'pathogene_alien', target2: 'random', threat: 3, retreat: true } } }
-    ]
-  },
-  {
-    id: 'boss_ia_ancienne',
-    tags: ['ia_hostile', 'station'],
-    weight: 1,
-    text: "L'IA centrale s'éveille. Elle a eu des siècles pour se reconfigurer. \"Vous n'êtes pas mes créateurs\", murmure-t-elle.",
-    choices: [
-      { label: "Couper le cœur électrique", req: { skill: { key: 'ingenierie', min: 4 } },
-        risky: { stat: 'dexterite', dc: 8,
-          success: { loot: { metal: 40, cristal: 60, datacubes: 30 }, log: "Coupure réussie. L'IA s'éteint sans réagir. Récupération massive." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 3, retreat: true, log: "L'IA a réagi. Évacuation d'urgence." } } },
-      { label: "Plaider la lignée", req: { skill: { key: 'linguistique', min: 4 } },
-        outcome: { blueprint: 'humain', loot: { datacubes: 50 }, log: "Une longue conversation. L'IA accepte de transmettre une partie de ses archives." } },
-      { label: "Fuite contrôlée", outcome: { retreat: true, log: "L'équipe se retire avant que l'IA ne décide." } }
-    ]
-  },
-
-  // ============ SIGNAUX SUPPLÉMENTAIRES ============
-  {
-    id: 'signal_chant',
-    tags: ['signal', 'anomalie'],
-    weight: 2,
-    text: "Le signal n'est pas électronique. Il est porté par l'air. Quelque chose chante, quelque part, en boucle.",
-    choices: [
-      { label: "Trianguler la source", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 12 }, log: "Source localisée : un dispositif organique enterré. Récupéré." } },
-      { label: "Enregistrer et partir", outcome: { loot: { datacubes: 6 }, log: "Le chant est archivé pour analyse." } },
-      { label: "Suivre le chant", risky: { stat: 'sangfroid', dc: 7,
-          success: { item: 'anneau_scelle', loot: { datacubes: 15 }, log: "Le chant menait à un sanctuaire. Trouvaille rare." },
-          fail:    { status: 'trauma_psy', target: 'random', log: "Le chant ne devait pas être suivi." } } }
-    ]
-  },
-
-  // ============ FILLERS SUPPLÉMENTAIRES ============
-  {
-    id: 'filler_etoiles',
-    tags: ['filler'],
-    weight: 2,
-    text: "Une nuit étoilée sur cette planète. Les constellations sont méconnaissables. Quelqu'un, casque ouvert, lève les yeux.",
-    choices: [
-      { label: "Continuer", outcome: 'next' },
-      { label: "Cartographier le ciel", req: { skill: { key: 'pilotage', min: 1 } },
-        outcome: { loot: { datacubes: 5 }, log: "Cartographie céleste. Utile pour la navigation future." } }
-    ]
-  },
-  {
-    id: 'filler_fossile',
-    tags: ['filler'],
-    weight: 2,
-    text: "Un fossile dans la roche. Forme troublante : ni terrestre, ni alien-A, ni alien-B. Quelque chose d'autre.",
-    choices: [
-      { label: "Ramener", outcome: { loot: { datacubes: 6 }, log: "Le fossile rejoint la cargaison." } },
-      { label: "Étudier", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loot: { datacubes: 12 }, log: "Espèce inconnue de toutes les bases de données." } }
-    ]
-  },
-  {
-    id: 'filler_reflet',
-    tags: ['filler'],
-    weight: 2,
-    text: "Dans une flaque, un reflet. Quelqu'un a juré qu'il y avait deux silhouettes en plus de la sienne. Personne d'autre n'a vu.",
-    choices: [
-      { label: "Hausser les épaules", outcome: 'next' },
-      { label: "Photographier la flaque", outcome: { loot: { datacubes: 3 } } }
-    ]
-  },
-
-  // ============ EMBUSCADE FACTION HOSTILE (0.21) ============
-  {
-    id: 'embuscade_faction',
-    tags: ['embuscade_faction'],
-    weight: 8,
-    text: "L'équipe est encerclée. Pas de surprise — ils nous attendaient. Notre dernière visite ici n'avait pas été oubliée.",
-    choices: [
-      { label: "Combattre", risky: { stat: 'dexterite', dc: 7,
-          success: { loot: { biomasse: 20, datacubes: 5 }, reputation: -5, log: "L'embuscade est repoussée. Mais le souvenir s'aggrave." },
-          fail:    { status: 'blessure_grave', target: 'random', threat: 2, retreat: true, log: "Repli forcé. Plusieurs blessés." } } },
-      { label: "Négocier en urgence", req: { skill: { key: 'linguistique', min: 3 } },
-        risky: { stat: 'charisme', dc: 8,
-          success: { reputation: +15, log: "Échange tendu. Mais la voix porte. Réputation reconstruite." },
-          fail:    { reputation: -10, retreat: true, log: "Les mots ne suffisent plus. Repli." } } },
-      { label: "Battre en retraite", outcome: { retreat: true, reputation: -3, log: "L'équipe se replie. La faction observe." } }
-    ]
-  },
-
-  // ============ INTROS SUPPLÉMENTAIRES ============
-  {
-    id: 'intro_orage',
-    tags: ['intro', 'tempetes'],
-    weight: 3,
-    text: "{vaisseau} se pose sous un ciel chargé. À peine les sas ouverts, l'orage éclate. Le tonnerre roule étrangement, plus long qu'il ne devrait.",
-    choices: [
-      { label: "S'abriter sous le vaisseau", outcome: 'next' },
-      { label: "Partir en mission immédiatement", outcome: { threat: 1, log: "L'équipe affronte la pluie et avance, déterminée." } }
-    ]
-  },
-  {
-    id: 'intro_observation',
-    tags: ['intro', 'civ_active'],
-    weight: 3,
-    text: "{vaisseau} se pose. À l'horizon, plusieurs silhouettes s'attroupent. Elles regardent. Aucune n'approche, aucune ne fuit.",
-    choices: [
-      { label: "Sortir avec lenteur, mains visibles", req: { skill: { key: 'linguistique', min: 1 } },
-        outcome: { log: "Geste pacifique. Un protocole semble s'établir.", threat: -1 } },
-      { label: "Sortir armes au flanc", outcome: { threat: 1, log: "Les silhouettes s'éloignent. La méfiance est désormais mutuelle." } }
-    ]
-  },
-  {
-    id: 'intro_vide',
-    tags: ['intro', 'epave'],
-    weight: 3,
-    text: "{vaisseau} se rapproche de l'épave. Les sas tournent dans le vide. Pas de gravité, pas d'air. Juste la dérive lente d'un cadavre métallique.",
-    choices: [
-      { label: "EVA jusqu'à la passerelle", outcome: 'next' },
-      { label: "Drone éclaireur d'abord", req: { item: 'drone_eclaireur' },
-        outcome: { threat: -1, log: "Le drone repère un risque structurel. L'équipe choisit un sas plus stable." } }
-    ]
-  },
-
-  // ============ OUTROS SUPPLÉMENTAIRES ============
-  {
-    id: 'outro_marquage',
-    tags: ['outro'],
-    weight: 2,
-    text: "Avant de remonter à bord, l'équipe prend un moment pour marquer le site. Ce n'est pas la dernière visite.",
-    choices: [
-      { label: "Poser une balise", req: { item: 'balise_signal' }, consume: { item: 'balise_signal' },
-        outcome: { loot: { datacubes: 5 }, end: true, log: "Balise posée. Le site reste ouvert pour de futures missions." } },
-      { label: "Embarquer simplement", outcome: { end: true, log: "L'équipe regagne le vaisseau." } }
-    ]
-  },
-  {
-    id: 'outro_souvenir',
-    tags: ['outro', 'civ_active'],
-    weight: 2,
-    text: "Avant de remonter, quelqu'un ramasse un objet anodin. Une pierre, un éclat. Quelque chose pour se rappeler.",
-    choices: [
-      { label: "Embarquer", outcome: { morale: +1, end: true, log: "L'équipe rentre, plus soudée qu'avant." } }
-    ]
-  },
-
-  // ============ CONCLUSION (toujours dernière) ============
-  {
-    id: 'outro_retour',
-    tags: ['outro'],
-    weight: 5,
-    text: "Les capteurs du vaisseau bipent : fin de la fenêtre d'exploration. Il est temps de plier bagage.",
-    choices: [
-      { label: "Remballer et embarquer", outcome: { end: true, log: "Sas refermé. Vol de retour engagé." } },
-      { label: "Une dernière inspection", risky: { stat: 'intellect', dc: 6,
-          success: { loot: { metal: 15, cristal: 10, datacubes: 4 }, end: true, log: "Une trouvaille de dernière minute." },
-          fail:    { status: 'blessure_legere', target: 'random', end: true } } }
-    ]
-  },
-  {
-    id: 'outro_decouverte',
-    tags: ['outro', 'ruines'],
-    weight: 3,
-    text: "À mesure qu'on regagne le vaisseau, l'un de nous remarque quelque chose qu'on avait raté à l'aller — une marque, un symbole.",
-    choices: [
-      { label: "Y retourner brièvement", risky: { stat: 'sangfroid', dc: 5,
-          success: { item: 'fragment_cristallin', loot: { datacubes: 8 }, end: true, log: "Trouvaille embarquée juste avant le décollage." },
-          fail:    { status: 'blessure_legere', target: 'random', end: true, log: "L'aller-retour s'est mal passé." } } },
-      { label: "Embarquer sans regarder en arrière", outcome: { end: true, log: "Le retour s'amorce." } }
-    ]
-  },
-
-  // ============ DÉCOUVERTES DE SCHÉMAS ============
-  // Scènes optionnelles, déclenchées sur les ruines pour distribuer un schéma compatible.
-  {
-    id: 'schema_humain_archives',
-    tags: ['ruines_humaines'],
-    weight: 2,
-    text: "Une salle d'archives. Dans une armoire ignifugée, des microfilms intacts. Quelqu'un les a soigneusement protégés avant de partir.",
-    choices: [
-      { label: "Embarquer la totalité", req: { skill: { key: 'science', min: 1 } },
-        outcome: { blueprint: 'humain', loot: { datacubes: 10 }, log: "Les archives techniques sont précieuses." } },
-      { label: "Sélectionner les plus prometteurs", risky: { stat: 'intellect', dc: 6,
-          success: { blueprint: 'humain', loot: { datacubes: 5 }, log: "Tri rapide effectué." },
-          fail:    { loot: { datacubes: 3 }, log: "Le tri à la hâte s'avère décevant." } } }
-    ]
-  },
-  {
-    id: 'schema_alien_a_sanctuaire',
-    tags: ['ruines_alien_a'],
-    weight: 2,
-    text: "Au cœur des ruines cristallines, une chambre hexagonale. Au centre, sur un piédestal, une tablette de cristal gravée de motifs concentriques.",
-    choices: [
-      { label: "Étudier la tablette sur place", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { blueprint: 'alien_a', loot: { datacubes: 15 }, log: "Le sens des motifs se révèle après analyse." } },
-      { label: "Emporter la tablette", risky: { stat: 'sangfroid', dc: 7,
-          success: { blueprint: 'alien_a', item: 'fragment_cristallin', log: "La tablette est descellée et embarquée." },
-          fail:    { status: 'trauma_psy', target: 'random', threat: 1, log: "Quelque chose dans les motifs reste accroché à la rétine." } } },
-      { label: "Photographier et partir", outcome: { loot: { datacubes: 4 }, log: "Quelques images. Insuffisant." } }
-    ]
-  },
-  {
-    id: 'schema_alien_b_chambre_couvee',
-    tags: ['ruines_alien_b'],
-    weight: 2,
-    text: "Une cavité tiède et humide. Sur les parois, des poches translucides contenant des spirales d'écriture organique. Vivantes ?",
-    choices: [
-      { label: "Décrypter une poche", req: { skill: { key: 'science', min: 2 } },
-        outcome: { blueprint: 'alien_b', loot: { datacubes: 12 }, log: "Les motifs sont en fait une formule biochimique." } },
-      { label: "Prélever une poche entière", req: { skill: { key: 'medecine', min: 1 } },
-        risky: { stat: 'dexterite', dc: 6,
-          success: { blueprint: 'alien_b', loot: { biomasse: 20 }, log: "Prélèvement clinique." },
-          fail:    { status: 'pathogene_alien', target: 'random', log: "La poche s'est rompue au mauvais moment." } } }
-    ]
-  },
-  {
-    id: 'schema_fusion_chambre_silence',
-    tags: ['ruines'],
-    weight: 1,
-    // Cette scène n'apparaît que sur les planètes à ruines mixtes (fusion impossible)
-    requireFusion: true,
-    text: "Une salle où l'humain et l'alien se mêlent dans une géométrie qui ne devrait pas exister. Au centre, un dispositif intact. Quelque chose de fonctionnel.",
-    choices: [
-      { label: "Étudier longuement", req: { skill: { key: 'science', min: 3 } },
-        outcome: { blueprint: 'fusion', loot: { datacubes: 25 }, log: "Une heure d'analyse. Les schémas sont compris." } },
-      { label: "Interfacer l'implant synaptique avec le dispositif", req: { item: 'implant_synaptique' },
-        outcome: { blueprint: 'fusion', loot: { datacubes: 15 }, log: "L'implant traduit ce que l'œil ne suit pas. Les schémas se déposent directement dans la mémoire du porteur." } },
-      { label: "Embarquer le dispositif entier", risky: { stat: 'vigueur', dc: 8,
-          success: { blueprint: 'fusion', item: 'plaque_gravee', loot: { datacubes: 15 }, log: "L'objet est emporté avec précaution." },
-          fail:    { status: 'trauma_psy', target: 'random', threat: 2, morale: -3, log: "Quelque chose s'est passé. Personne ne veut en parler." } } },
-      { label: "Sortir d'ici sans rien toucher", outcome: { morale: +1, log: "Sage décision. L'équipe fait demi-tour." } }
-    ]
-  }
-];
+// Scènes d'expédition : contenu en données pures dans src/content/scenes/ (format V1,
+// docs/ecrire-pour-drift.md), y compris les scènes de combat. Réexportées ici pour
+// le code qui les importe depuis le catalogue.
+export { SCENES } from './content/index.js';
 
 
 // Traitements : un statut peut avoir plusieurs traitements selon le palier de l'infirmerie.
 // chaque traitement : { nom, durationMin, cost, requiresMedSkill }
+// Durées en secondes réelles (V1). Sans médecin plus compétent ni bonus d'infirmerie.
+// V1 : les soins vitaux ne coûtent que de la biomasse (les datacubes, rares, partent
+// en recherche : un blessé ne doit pas mourir faute de données).
 export const TREATMENTS = {
   blessure_legere: [
-    { nom: "Sutures et repos", durationMin: 60*4, cost: { biomasse:5 }, requiresMedSkill: 0 }
+    { nom: "Sutures et repos", durationMin: 40*60, cost: { biomasse:5 }, requiresMedSkill: 0 }
   ],
   blessure_grave: [
-    { nom: "Chirurgie d'urgence", durationMin: 60*12, cost: { biomasse:20, datacubes:5 }, requiresMedSkill: 2 }
+    { nom: "Chirurgie d'urgence", durationMin: 2*3600, cost: { biomasse:25 }, requiresMedSkill: 2 }
   ],
   infection: [
-    { nom: "Antibiotiques", durationMin: 60*8, cost: { biomasse:10 }, requiresMedSkill: 1 }
+    { nom: "Antibiotiques", durationMin: 80*60, cost: { biomasse:10 }, requiresMedSkill: 1 }
   ],
   pathogene_alien: [
-    { nom: "Antitoxine xeno + isolation", durationMin: 60*16, cost: { biomasse:15, datacubes:10 }, requiresMedSkill: 3, requiresQuarantine: true }
+    { nom: "Antitoxine xeno + isolation", durationMin: 160*60, cost: { biomasse:30 }, requiresMedSkill: 3, requiresQuarantine: true }
   ],
   trauma_psy: [
-    { nom: "Thérapie longue", durationMin: 60*36, cost: { datacubes:5 }, requiresMedSkill: 2 }
+    { nom: "Thérapie longue", durationMin: 6*3600, cost: { biomasse:10 }, requiresMedSkill: 2 }
   ],
   parasite: [
-    { nom: "Extraction chirurgicale", durationMin: 60*12, cost: { biomasse:15, datacubes:5 }, requiresMedSkill: 3 }
+    { nom: "Extraction chirurgicale", durationMin: 2*3600, cost: { biomasse:20 }, requiresMedSkill: 3 }
   ],
   mutation: [
-    { nom: "Thérapie génique", durationMin: 60*24, cost: { datacubes:20, biomasse:10 }, requiresMedSkill: 4 }
+    { nom: "Thérapie génique", durationMin: 4*3600, cost: { datacubes:20, biomasse:10 }, requiresMedSkill: 4 }
   ]
 };
 
@@ -3042,140 +2000,4 @@ export const ENEMY_TYPES = {
   garde_elite:        { nom: "Garde d'élite",           category: 'humain',  hp: 22, armor: 4, damage: [3, 6], accuracy: 70, pa: 2,
     loot: { metal: 20 }, itemLoot: [{ item: 'fusil_precision', chance: 0.15 }, { item: 'armure_exo', chance: 0.12 }, { item: 'bouclier_energetique', chance: 0.12 }] },
 };
-
-// ============================================================
-//   SCÈNES DE COMBAT (0.31)
-// ============================================================
-// Ajoutées dynamiquement dans SCENES via spread — triggers via outcome.combat
-
-const COMBAT_SCENES = [
-  {
-    id: 'combat_embuscade_pillards',
-    tags: ['civ_dechue', 'hostile'],
-    weight: 3,
-    text: "Des silhouettes en combinaison rapiécée surgissent des décombres. Des pillards — armés, affamés, et très peu enclins à négocier.",
-    choices: [
-      { label: "Engager le combat", outcome: { combat: { enemies: ['pillard', 'pillard'], lootOnWin: { metal: 20, biomasse: 10 }, onDefeat: 'retreat' } } },
-      { label: "Tenter de négocier", risky: { stat: 'charisme', dc: 7,
-          success: { loot: { metal: 10 }, log: "Accord conclu. Ils laissent passer en échange de quelques matériaux." },
-          fail:    { combat: { enemies: ['pillard', 'mercenaire'], lootOnWin: { metal: 25 }, onDefeat: 'retreat' } } } },
-      { label: "Battre en retraite", outcome: { log: "Demi-tour. La zone est trop dangereuse.", retreat: true } }
-    ]
-  },
-  {
-    id: 'combat_drone_gardien',
-    tags: ['ruines_humaines', 'danger_meca'],
-    weight: 3,
-    text: "Une sphère métallique descend du plafond en ronronnant. Son œil rouge balaie la salle. Protocole de sécurité encore actif après des siècles.",
-    choices: [
-      { label: "Neutraliser le drone", outcome: { combat: { enemies: ['drone_gardien'], lootOnWin: { metal: 20, cristal: 3 }, onDefeat: 'retreat' } } },
-      { label: "Pirater le protocole", req: { skill: { key: 'ingenierie', min: 3 } },
-        outcome: { loot: { metal: 25, cristal: 5 }, log: "Le drone s'arrête. Ses composants sont récupérables." } },
-      { label: "Contourner en silence", risky: { stat: 'dexterite', dc: 6,
-          success: { log: "Le drone ne détecte rien. Passage libre." },
-          fail:    { combat: { enemies: ['drone_gardien', 'drone_gardien'], lootOnWin: { metal: 20 }, onDefeat: 'retreat' } } } }
-    ]
-  },
-  {
-    id: 'combat_xenoforme',
-    tags: ['ruines_alien_a', 'ruines_alien_b'],
-    weight: 2,
-    text: "Quelque chose surgit des parois cristallines — pas une créature familière. Des appendices translucides, une bioluminescence pulsante, et une agressivité immédiate.",
-    choices: [
-      { label: "Combattre la créature", outcome: { combat: { enemies: ['xenoforme_alpha'], lootOnWin: { cristal: 12, datacubes: 5 }, onDefeat: 'retreat' } } },
-      { label: "Utiliser le résonateur harmonique", req: { item: 'resonateur_harmonique' },
-        outcome: { loot: { cristal: 15, datacubes: 8 }, log: "Le résonateur neutralise la créature en moins d'une seconde." } },
-      { label: "Décrocher immédiatement", outcome: { log: "Retraite tactique. La créature ne poursuit pas loin.", threat: -1 } }
-    ]
-  },
-  {
-    id: 'combat_meute',
-    tags: ['faune', 'predateurs'],
-    weight: 4,
-    text: "Pas un prédateur — une meute. Cinq, peut-être six silhouettes rapides qui convergent de plusieurs directions à la fois.",
-    choices: [
-      { label: "Tenir position et combattre", outcome: { combat: { enemies: ['meute_rapaces', 'meute_rapaces', 'meute_rapaces'], lootOnWin: { biomasse: 25 }, onDefeat: 'retreat' } } },
-      { label: "Brûler un périmètre défensif", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 30 }, log: "Les flammes forment un mur. La meute recule et se disperse." } },
-      { label: "Se replier en courant", risky: { stat: 'dexterite', dc: 5,
-          success: { log: "L'équipe distance la meute. Course serrée." },
-          fail:    { combat: { enemies: ['predateur_alpha'], lootOnWin: { biomasse: 20 }, onDefeat: 'retreat' },
-                     log: "Le chef de meute coupe la retraite. Il faudra passer sur lui." } } }
-    ]
-  },
-  // 0.32.1 — Scènes de combat pour les ennemis jusqu'ici jamais rencontrés
-  {
-    id: 'combat_sentinelles',
-    tags: ['ruines_alien_a', 'ia_hostile'],
-    weight: 2,
-    text: "Une colonne de cristal se déplie en silence au milieu du couloir. Des faisceaux violets balaient le sol à hauteur de cheville : une sentinelle, toujours fidèle à un ordre vieux de plusieurs millénaires. Une seconde dort encore dans l'alcôve d'en face.",
-    choices: [
-      { label: "Abattre la sentinelle éveillée", outcome: { combat: { enemies: ['sentinelle_alien'], lootOnWin: { cristal: 10, datacubes: 4 }, onDefeat: 'retreat' } } },
-      { label: "Accorder le résonateur harmonique", req: { item: 'resonateur_harmonique' },
-        outcome: { loot: { cristal: 12, datacubes: 6 }, log: "Les faisceaux vacillent puis s'éteignent. La sentinelle se replie dans sa gangue." } },
-      { label: "Se glisser entre les faisceaux", risky: { stat: 'dexterite', dc: 7,
-          success: { log: "Un pas, puis un autre. Les faisceaux passent à un souffle des combinaisons." },
-          fail:    { combat: { enemies: ['sentinelle_alien', 'sentinelle_alien'], lootOnWin: { cristal: 16, datacubes: 6 }, onDefeat: 'retreat' },
-                     log: "Un faisceau accroche une épaule. L'alcôve d'en face s'illumine à son tour." } } }
-    ]
-  },
-  {
-    id: 'combat_gardien_antique',
-    tags: ['station', 'epave', 'ia_hostile'],
-    weight: 2,
-    text: "Au fond de la soute, une masse de métal piquée de rouille se déplie en grinçant : un automate de sécurité d'avant l'Effondrement. Trois mètres de blindage, et un protocole d'alerte que personne n'a jamais levé.",
-    choices: [
-      { label: "Affronter le gardien", outcome: { combat: { enemies: ['gardien_antique'], lootOnWin: { metal: 20, datacubes: 4 }, onDefeat: 'retreat' } } },
-      { label: "Couper son alimentation", req: { skill: { key: 'ingenierie', min: 4 } },
-        outcome: { loot: { metal: 30, energie: 10 }, log: "Un panneau d'accès, deux câbles sectionnés. Le colosse se fige en plein geste." } },
-      { label: "Rebrousser chemin", outcome: { log: "L'équipe recule. L'automate ne franchit pas le seuil de la soute." } }
-    ]
-  },
-  {
-    id: 'combat_nid_xenoforme',
-    tags: ['ruines_alien_b', 'pathogene'],
-    weight: 1,
-    text: "La galerie débouche sur une chambre tiède, tapissée de membranes. Des sacs translucides palpitent au plafond. Au centre, quelque chose de grand se redresse lentement — la reine du nid, entourée de spores qui flottent comme une neige lourde.",
-    choices: [
-      { label: "Attaquer la reine", outcome: { combat: { enemies: ['xenoforme_reine', 'spore_toxique', 'spore_toxique'], lootOnWin: { cristal: 15, datacubes: 8, biomasse: 15 }, onDefeat: 'retreat' } } },
-      { label: "Incendier le nid", req: { item: 'lance_flammes' },
-        outcome: { loot: { biomasse: 25, datacubes: 4 }, log: "Les membranes s'embrasent d'un coup. Ce qui reste du nid se rétracte en sifflant." } },
-      { label: "Reculer sans un bruit", risky: { stat: 'dexterite', dc: 6,
-          success: { log: "Pas à pas, l'équipe regagne la galerie. Rien ne la suit." },
-          fail:    { combat: { enemies: ['spore_toxique', 'spore_toxique', 'xenoforme_alpha'], lootOnWin: { biomasse: 10, cristal: 6 }, onDefeat: 'retreat' },
-                     log: "Une botte glisse sur une membrane. Les gardiens du nid se jettent sur l'équipe." } } }
-    ]
-  },
-  {
-    id: 'combat_drones_bio',
-    tags: ['ruines_alien_b', 'flore_agressive'],
-    weight: 2,
-    text: "Un bourdonnement grave monte des frondaisons. Deux formes ailées, mi-insectes mi-graines, se détachent de la canopée et piquent droit sur l'équipe : des drones biologiques, cultivés pour défendre ce lieu.",
-    choices: [
-      { label: "Les abattre en vol", outcome: { combat: { enemies: ['drone_bio', 'drone_bio'], lootOnWin: { biomasse: 15, datacubes: 3 }, onDefeat: 'retreat' } } },
-      { label: "Les dissoudre aux enzymes", consume: { item: 'enzymes_dissolution' },
-        outcome: { loot: { biomasse: 20, datacubes: 4 }, log: "Le nuage d'enzymes les prend de plein fouet. Ils retombent en pluie de fibres." } },
-      { label: "Se fondre dans la végétation", risky: { stat: 'dexterite', dc: 6,
-          success: { log: "Immobiles sous les feuilles, les colons laissent passer l'essaim." },
-          fail:    { status: 'blessure_legere', log: "Un dard traverse une combinaison avant que l'équipe ne disparaisse sous le couvert." } } }
-    ]
-  },
-  {
-    id: 'combat_signal_piege',
-    tags: ['signal_sos'],
-    weight: 2,
-    text: "La balise de détresse émet toujours, mais le site autour d'elle est trop propre. Une silhouette en armure lourde émerge des abris, arme levée ; d'autres bougent plus loin. Le signal était un appât, et l'équipe vient d'y mordre.",
-    choices: [
-      { label: "Forcer le passage", outcome: { combat: { enemies: ['garde_elite'], lootOnWin: { metal: 20, energie: 10 }, onDefeat: 'retreat' } } },
-      { label: "Parlementer", risky: { stat: 'charisme', dc: 7,
-          success: { log: "Le chef de bande hésite, puis abaisse son arme : un équipage qui ne cherche pas d'ennuis vaut mieux vivant." },
-          fail:    { combat: { enemies: ['garde_elite', 'mercenaire'], lootOnWin: { metal: 25, energie: 10 }, onDefeat: 'retreat' },
-                     log: "Les négociations tournent court." } } },
-      { label: "Battre en retraite", outcome: { retreat: true, log: "Demi-tour immédiat vers le vaisseau. Le piège se referme sur du vide." } }
-    ]
-  }
-];
-
-// Injection des scènes de combat dans le tableau SCENES principal
-SCENES.push(...COMBAT_SCENES);
 

@@ -91,6 +91,17 @@ async function openGame() {
   await page.evaluate(() => import('./src/state.js').then(st => { st.S.flags.pushNotifications = true; }));
   return { ctx, page };
 }
+// Attend qu'une condition évaluée dans la page soit vraie. page.waitForFunction
+// n'attend pas les promesses : une fonction async y serait « vraie » tout de suite
+// (le service worker pouvait encore être en installation pendant le test).
+async function until(page, fn, timeout = 15000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    if (await page.evaluate(fn).catch(() => false)) return true;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return false;
+}
 // Envoie une séquence de notifications « en arrière-plan », attend, renvoie ce qui a été affiché.
 const send = (page, calls, waitMs = 300) => page.evaluate(async ({ calls, waitMs }) => {
   const { notif } = await import('./src/notifications.js');
@@ -105,8 +116,7 @@ const send = (page, calls, waitMs = 300) => page.evaluate(async ({ calls, waitMs
 try {
   console.log('1. Service worker actif');
   let { ctx, page } = await openGame();
-  await page.waitForFunction(() => navigator.serviceWorker.getRegistration().then(r => !!r?.active), null, { timeout: 15000 });
-  await page.waitForFunction(async () => (await navigator.serviceWorker.getRegistration())?.active?.state === 'activated', null, { timeout: 15000 }).catch(() => {});
+  check(await until(page, async () => (await navigator.serviceWorker.getRegistration())?.active?.state === 'activated'), 'service worker installé et activé');
   let shown = await send(page, [
     ['arcProgress', 'Arc', 'étape'],          // success → passe
     ['colonyEvent', 'Tempête'],               // warn, plus important → passe
@@ -145,7 +155,7 @@ try {
   console.log('3. Service worker bloqué en installation (ready ne se résout jamais)');
   swMode = 'stuck';
   ({ ctx, page } = await openGame());
-  await page.waitForFunction(() => navigator.serviceWorker.getRegistration().then(r => !!r?.installing), null, { timeout: 10000 }).catch(() => {});
+  await until(page, async () => !!(await navigator.serviceWorker.getRegistration())?.installing, 10000);
   const t0 = Date.now();
   shown = await send(page, [['death', 'Dina', 'froid']], 4000);
   check(shown.length === 1 && shown[0].via === 'constructor', `repli sur new Notification() après délai (${Date.now() - t0} ms)`, JSON.stringify(shown));

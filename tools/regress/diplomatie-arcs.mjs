@@ -153,7 +153,7 @@ try {
     app.toggleFactionTrade(f.id);
     const opened = f.tradeActive;
     // Alliance : réputation 80, intervalle écoulé
-    const g = window.__t.faction({ reputation: 80, metAt: S.meta.gameMin - 30 * 24 * 60 });
+    const g = window.__t.faction({ reputation: 80, metAt: S.meta.gameMin - 5 * 86400 });   // V1 : dons tous les 3-4 jours réels
     const metal0 = S.res.metal = 0;
     S.techCompleted = {};
     app.tickFactions();
@@ -164,7 +164,7 @@ try {
     const gift = S.res.metal > metal0;
     // Droits acquis : alliance nouée avant 0.32.1 (lastAllianceGift posé), sans la tech
     S.techCompleted = {};
-    const h = window.__t.faction({ reputation: 80, lastAllianceGift: S.meta.gameMin - 30 * 24 * 60 });
+    const h = window.__t.faction({ reputation: 80, lastAllianceGift: S.meta.gameMin - 5 * 86400 });
     const m1 = S.res.metal;
     app.tickFactions();
     const legacyGift = S.res.metal > m1 && h.lastAllianceGift === S.meta.gameMin;

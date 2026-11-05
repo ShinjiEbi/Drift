@@ -45,6 +45,12 @@ try {
     check(g2 - g1 >= 0 && g2 - g1 <= 2, `retour au premier plan : pas de double simulation (+${g2 - g1})`);
 
     console.log('2. Page gelée 3 h, réveillée en arrière-plan puis affichée');
+    // Un bilan d'expédition pas encore lu : la reprise du contact doit y mener
+    await page.evaluate(async () => {
+      const { S } = await import('./src/state.js');
+      S.expHistory.push({ expId: 'e_bilan_test', bilanVu: false, bilan: { expId: 'e_bilan_test', lieu: 'Lune de test', systeme: 'Test', duree: 1800,
+        equipe: [], gains: { metal: 40 }, objets: [], schemas: [], blesses: [], morts: [], chronique: null, faits: [], final: true } });
+    });
     await setHidden(page, true);
     await page.clock.fastForward(3 * 3600e3);
     const g3 = await gameMin(page);
@@ -56,7 +62,12 @@ try {
     check(Math.abs(g4 - g3 - 3 * 3600) <= 5, `retour : rattrapage des 3 h (+${g4 - g3} min de jeu, attendu ≈ 10800)`);
     const title = await page.textContent('#modal h3').catch(() => '');
     check(/Reprise du contact/.test(title) && await page.$('#modalBg.show'), '« Reprise du contact » affichée');
-    await page.click('#modalOk');
+    const bilanBtn = await page.$('#modal [data-catchup-bilan="e_bilan_test"]');
+    check(!!bilanBtn && /Lune de test/.test(await bilanBtn.textContent()), 'bouton vers le bilan non lu dans la reprise du contact');
+    await bilanBtn?.click();
+    await page.waitForTimeout(200);
+    check(/Lune de test/.test(await page.textContent('#modal').catch(() => '')), 'le bouton ouvre le bilan');
+    await page.evaluate(() => document.querySelector('#modalBg')?.classList.remove('show'));
 
     console.log('3. Horloge système qui recule');
     const g5 = await gameMin(page);
@@ -106,6 +117,9 @@ try {
       for (const k of Object.keys(S.res)) S.res[k] = st.capOf(k) * 0.6;
       S.nextIncidentMin = S.meta.gameMin;
       S.nextEventMin = S.meta.gameMin;
+      // Un incident mineur garanti pendant l'absence (le tirage, lui, s'arrête
+      // quand la file des décisions est pleine) : il doit être tranché seul
+      S.pendingChainIncidents.push({ incidentId: 'habitat_anniversaire', triggerAt: S.meta.gameMin + 3600 });
       S.meta.lastTickRealMs = Date.now() - 12 * 3600e3;
       st.save();
       st.lockSaves('test');   // la page ne réécrit plus rien avant le rechargement
@@ -120,8 +134,13 @@ try {
     const dt = (Date.now() - t0) / 1000;
     const r = await page.evaluate(async () => {
       const { S } = await import('./src/state.js');
+      const app = await import('./src/app.js');
       const gaps = window.__gaps.slice(5);
+      const rep = app.getLastReturnReport();
       return {
+        report: rep && { faits: Array.isArray(rep.faits), deces: Array.isArray(rep.deces), ev: rep.evenementRetour, enAttente: rep.enAttente },
+        pendingKinds: S.pendingDecisions.map(d => d.kind + ':' + d.refId),
+        minorQueued: S.pendingDecisions.filter(d => d.kind === 'incident' && app.INCIDENTS[d.refId]?.gravite === 'mineur' && d.offline).length,
         gm: S.meta.gameMin, pending: S.pendingDecisions.length,
         maxGap: Math.max(...gaps), incidentModals: window.__incidentModals, progress: window.__progressSeen,
         modal: document.querySelector('#modal').textContent,
@@ -132,7 +151,10 @@ try {
     check(simulated >= 43200 && simulated <= 43200 + dt + 5, `12 h simulées sans double comptage (+${simulated} min de jeu, ${dt.toFixed(1)} s réelles)`);
     check(r.progress, 'barre de progression affichée pendant le rattrapage');
     check(r.maxGap < 250, `page réactive pendant le rattrapage (blocage max ${r.maxGap.toFixed(0)} ms)`);
-    check(r.incidentModals === 0 && r.pending === 0, 'aucune fenêtre d\'incident ouverte ni mise en attente');
+    check(r.incidentModals === 0 && r.pending <= 3, `aucune fenêtre d'incident pendant le rattrapage ; ${r.pending} décision(s) gardée(s) pour le retour (${r.pendingKinds.join(', ')})`);
+    check(r.minorQueued === 0, 'hors ligne, les incidents mineurs ne sont pas mis en attente');
+    check(r.report?.faits && r.report?.deces && r.report.enAttente === r.pending, 'rapport de retour : récit et données (getLastReturnReport)');
+    check(!r.report?.ev || r.pendingKinds.some(k => k.startsWith('event:')), `événement garanti au retour (${r.report?.ev || 'aucun éligible'})`);
     check(/Incidents gérés automatiquement/.test(r.modal) && r.autoLogs > 0, `incidents appliqués automatiquement (${r.autoLogs} entrées de journal)`);
     b.noErrors(page, 'aucune erreur de page');
     await ctx.close();
