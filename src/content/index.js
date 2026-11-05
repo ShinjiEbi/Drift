@@ -26,6 +26,46 @@ import civilisations from './scenes/civilisations.js';
 import biomes from './scenes/biomes.js';
 import haltes from './scenes/haltes.js';
 
+// ---- Incidents de module, un fichier par module ----
+import incidentsMine from './incidents/mine.js';
+import incidentsHydroponie from './incidents/hydroponie.js';
+import incidentsSolaire from './incidents/solaire.js';
+import incidentsHangar from './incidents/hangar.js';
+import incidentsLaboratoire from './incidents/laboratoire.js';
+import incidentsAtelier from './incidents/atelier.js';
+import incidentsInfirmerie from './incidents/infirmerie.js';
+import incidentsHabitat from './incidents/habitat.js';
+
+// ---- Événements de colonie, par thème ou par personnage ----
+import evPrologue from './evenements/prologue.js';
+import evSocial from './evenements/social.js';
+import evInitiatives from './evenements/initiatives.js';
+import evPlaintes from './evenements/plaintes.js';
+import evDecouvertes from './evenements/decouvertes.js';
+import evIlya from './evenements/ilya.js';
+import evSeren from './evenements/seren.js';
+import evMaud from './evenements/maud.js';
+
+// ---- Fils rouges, un fichier par fil ----
+import arcAtterrissage from './arcs/atterrissage.js';
+import arcAvantPoste from './arcs/avant-poste.js';
+import arcEffondrement from './arcs/effondrement.js';
+import arcCristaux from './arcs/cristaux.js';
+import arcCouvee from './arcs/couvee.js';
+
+// ---- Personnages partagés (PNJ récurrents), un fichier par personnage ----
+import ilya from './personnages/ilya.js';
+import seren from './personnages/seren.js';
+import maud from './personnages/maud.js';
+
+// ---- Archives (lore), par catégorie ----
+import loreHistoire from './lore/histoire.js';
+import loreColonie from './lore/colonie.js';
+import loreMondes from './lore/mondes.js';
+import loreRuines from './lore/ruines.js';
+import lorePeuples from './lore/peuples.js';
+import loreTechniques from './lore/techniques.js';
+
 const parId = list => Object.fromEntries(list.map(x => [x.id, x]));
 
 // Histoires par id (l'ordre de la liste est l'ordre d'affichage par défaut)
@@ -37,10 +77,26 @@ export const SCENES = [
   ...fauneFlore, ...anomaliesSignaux, ...epavesStations, ...dangers, ...civilisations, ...biomes, ...haltes,
 ];
 
-// ---- Vague 2 : dossiers prêts, encore vides (voir le LISEZMOI de chaque dossier) ----
-export const EVENEMENTS = [];   // ./evenements/  événements de colonie
-export const INCIDENTS = [];    // ./incidents/   incidents de module
-export const ARCS = [];         // ./arcs/        fils rouges
-export const PERSONNAGES = {};  // ./personnages/ PNJ partagés entre plusieurs contenus
+// Incidents de module (tableau ; app.js les indexe par id sous le nom INCIDENTS)
+export const INCIDENTS = [
+  ...incidentsMine, ...incidentsHydroponie, ...incidentsSolaire, ...incidentsHangar,
+  ...incidentsLaboratoire, ...incidentsAtelier, ...incidentsInfirmerie, ...incidentsHabitat,
+];
+
+// Événements de colonie (tableau ; app.js les indexe par id sous le nom COLONY_EVENTS)
+export const EVENEMENTS = [
+  ...evPrologue, ...evSocial, ...evInitiatives, ...evPlaintes, ...evDecouvertes,
+  ...evIlya, ...evSeren, ...evMaud,
+];
+
+// Fils rouges (ordre d'affichage : le prologue, le fil principal, puis les autres)
+export const ARCS = [arcAtterrissage, arcAvantPoste, arcEffondrement, arcCristaux, arcCouvee];
+
+// Personnages partagés par id ({ personnage: 'ilya' }, {pnj:ilya}, { recrute: 'maud' })
+export const PERSONNAGES = parId([ilya, seren, maud]);
+
+// Pages d'archives (lore)
+export const LORE = [...loreHistoire, ...loreColonie, ...loreMondes, ...loreRuines, ...lorePeuples, ...loreTechniques];
+
+// ---- Dossier prêt, encore vide (voir son LISEZMOI) ----
 export const FACTIONS = [];     // ./factions/    types de factions et porte-parole
-export const LORE = [];         // ./lore/        pages d'archives

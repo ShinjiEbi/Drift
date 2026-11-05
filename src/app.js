@@ -1286,7 +1286,8 @@ function corpsDeHistoire(id) {
 }
 
 // Valeur d'un identifiant du mini-langage de conditions (espaces de noms :
-// src/content/vocabulaire.js, ESPACES). ctx : { drapeaux, equipe, exp, body }.
+// src/content/vocabulaire.js, ESPACES). ctx : { drapeaux, equipe, exp, body,
+// colonie (décision de colonie : objets de l'inventaire), candidat, precedent (acteurs) }.
 function lireEtat(id, ctx = {}) {
   const parts = id.split('.');
   if (parts.length === 1) return ctx.drapeaux ? ctx.drapeaux[id] : undefined;
@@ -1298,7 +1299,7 @@ function lireEtat(id, ctx = {}) {
       if (a === 'chef') return equipe[0]?.name ?? null;
       if (a === 'carac') return equipe.length ? Math.max(...equipe.map(m => m.stats?.[b] ?? 5)) : 0;
       if (a === 'trait') return equipe.some(m => (m.traits || []).includes(b));
-      if (a === 'objet') return ctx.exp?.equipment?.[b] || 0;
+      if (a === 'objet') return ctx.exp ? ctx.exp.equipment?.[b] || 0 : ctx.colonie ? S.inventory?.[b] || 0 : 0;
       return equipe.length ? Math.max(0, ...equipe.map(m => m.skills?.[a] || 0)) : 0;
     case 'colonie':
       if (a === 'colons') return aliveCrew().length;
@@ -1307,7 +1308,7 @@ function lireEtat(id, ctx = {}) {
       if (a === 'module') return S.modules?.[b]?.level || 0;
       if (a === 'tech') return !!S.techCompleted?.[b];
       if (a === 'objet') return S.inventory?.[b] || 0;
-      return undefined;
+      return lireColonie(a, b);   // colonie.batiments, colonie.vivres_ok… (section COLONIE)
     case 'corps':
       if (!ctx.body) return undefined;
       return a === 'visites' ? (ctx.body.visites || 0) : ctx.body[a];
@@ -1326,6 +1327,9 @@ function lireEtat(id, ctx = {}) {
     }
     case 'monde': return S.monde?.[parts.slice(1).join('.')];
     case 'compteur': return S.compteurs?.[parts.slice(1).join('.')] || 0;
+    // Espaces de la colonie (section COLONIE) : expeditions, factions, evenement, fil, archives, acteur
+    case 'expeditions': case 'factions': case 'evenement': case 'fil': case 'archives': case 'acteur':
+      return lireEspaceColonie(parts, ctx);
   }
   return undefined;
 }
@@ -2544,409 +2548,24 @@ export function progressMemberStatuts(member) {
 }
 
 // ============================================================
-//   INCIDENTS LOCALISÉS PAR BÂTIMENT (0.17)
+//   COLONIE (V1) — incidents, événements, fils rouges, archives
 // ============================================================
-// Chaque bâtiment peut générer des incidents à intervalle aléatoire.
-// La probabilité dépend du niveau, du taux de sécurité (postes Sécurité pourvus),
-// du taux d'occupation, et du bonus de commandement global.
-//
-// Format d'un incident :
-//   id, modKey, severity (1-3), narrative
-//   tagsRequired? : tags du bâtiment requis (pour incidents conditionnels)
-//   titre : libellé lisible (notifications, file des décisions)
-//   choices: [{ label, req?, consume?, pay?, outcome }]
-//   pay: true → la perte (loss) est un paiement volontaire : le choix n'est
-//                proposé que si le stock suffit (sinon perte subie, plafonnée au stock)
-//
-// Outcome de choix :
-//   loss: { metal: N, ... }      ressources perdues
-//   status: 'blessure_legere'    inflige un statut à un colon
-//   target: 'random' | 'staff'   cible (random parmi vivants, staff = du bâtiment)
-//   moralAll: -N | +N            moral global
-//   delayMin: N                  retard sur recherche/fabrication en cours du bâtiment
-//   itemLoss: 'random'           perd un item de l'inventaire
-//   log: string                   ligne narrative
+// Le contenu est de la donnée pure (src/content/incidents, evenements, arcs,
+// personnages, lore — format : docs/ecrire-pour-drift.md), interprété par
+// src/engine/narration.js. Le moteur de la colonie est plus bas (section
+// « COLONIE — moteur des décisions »).
 
 // Imports propres à la zone incidents / événements / sauvegarde / démarrage.
 // Alias pour ne pas entrer en collision avec les imports du haut du fichier.
 import { MAX_PENDING_DECISIONS } from './constants.js';
-import { loadSave, exportRawSave, lockSaves, unlockSaves, setSimPaused, isSimPaused, isCatchingUp, runCatchUp, markSessionStart, reportTickError } from './state.js';
+import { loadSave, exportRawSave, lockSaves, unlockSaves, setSimPaused, isSimPaused, isCatchingUp, runCatchUp, markSessionStart, reportTickError, calendarOf } from './state.js';
+import { INCIDENTS as CONTENU_INCIDENTS, EVENEMENTS as CONTENU_EVENEMENTS, ARCS as CONTENU_ARCS, PERSONNAGES, LORE } from './content/index.js';
+import { GRAVITES as GRAVITES_INCIDENT, CATEGORIES_LORE } from './content/vocabulaire.js';
 
-export const INCIDENTS = {
-  // ===== MINE DE SURFACE =====
-  mine_eboulement: {
-    titre: "Éboulement dans la mine",
-    modKey: 'mine_surface',
-    severity: 2,
-    text: "Une galerie de la mine s'effondre partiellement. {worker} était à proximité.",
-    choices: [
-      {
-        label: "Évacuer immédiatement",
-        outcome: {
-          loss: { metal: 30, cristal: 15 },
-          disableModule: 360,  // 0.28 : mine HS pendant 6h jeu
-          log: "Évacuation rapide. La mine est mise hors service le temps de la sécurisation."
-        }
-      },
-      {
-        label: "Tenter de stabiliser et continuer",
-        req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: {
-          loss: { metal: 10 },
-          log: "L'équipe stabilise le boyau. Le travail reprend rapidement."
-        }
-      },
-      {
-        label: "Sauver d'abord la victime",
-        outcome: {
-          status: 'blessure_legere',
-          target: 'staff',
-          loss: { metal: 50, cristal: 25 },
-          moralAll: 1,  // 0.28 : ×3 → +3 moral pour tous (acte humain reconnu)
-          historicalMark: "{worker} a été sauvé d'un éboulement au prix de matériel.",
-          log: "{worker} est dégagé. Le geste a marqué l'équipage."
-        }
-      },
-      {
-        label: "Forcer la reprise immédiate, ignorer les risques",
-        outcome: {
-          status: 'blessure_grave', target: 'staff',
-          damageModule: true,  // 0.28 : mine perd un niveau
-          moralAll: -2,  // ×3 = -6 moral collectif
-          generateRivalry: true,
-          chainIncident: { id: 'mine_eboulement', delay: 1440 },  // un autre éboulement dans 24h
-          historicalMark: "Le commandement a forcé une reprise dans une galerie instable. {worker} y est resté.",
-          log: "{worker} est gravement blessé. La structure souffre. L'équipage murmure."
-        }
-      }
-    ]
-  },
-  mine_filon_riche: {
-    titre: "Filon inattendu",
-    modKey: 'mine_surface',
-    severity: 1,
-    positive: true,
-    text: "Les foreurs tombent sur un filon inattendu. Plus pur que la moyenne. Mais l'extraction est risquée.",
-    choices: [
-      { label: "Exploiter prudemment", outcome: { gain: { metal: 40 }, log: "Filon exploité sans incident." } },
-      { label: "Forer agressivement", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { gain: { metal: 80, cristal: 30 }, log: "Pari gagnant. Récolte exceptionnelle." } },
-      { label: "Reporter à plus tard", outcome: { log: "Le filon est marqué pour exploitation différée." } }
-    ]
-  },
-  mine_predateur: {
-    titre: "Créature dans la mine",
-    modKey: 'mine_surface',
-    severity: 3,
-    requireMinLevel: 3,
-    text: "Une créature inconnue émerge des profondeurs de la mine. {worker} la voit en premier.",
-    choices: [
-      {
-        label: "Repousser à coups de pioche",
-        risky: {
-          stat: 'vigueur', dc: 6,
-          success: { loss: { metal: 15 }, log: "La créature retraite. Travail interrompu, mais rien de plus." },
-          fail: {
-            status: 'blessure_grave', target: 'staff',
-            loss: { metal: 30 },
-            disableModule: 480,  // 8h HS
-            historicalMark: "Une créature a surgi de la mine et blessé {worker}.",
-            log: "{worker} a été blessé sérieusement. La galerie est temporairement abandonnée."
-          }
-        }
-      },
-      {
-        label: "Sceller la galerie",
-        outcome: {
-          loss: { metal: 20, cristal: 10 },
-          damageModule: true,  // perd un niveau définitivement
-          historicalMark: "Une galerie de la mine a été scellée — une créature inconnue y dort encore.",
-          log: "Galerie scellée définitivement. La créature est prisonnière en bas. La mine est diminuée."
-        }
-      },
-      {
-        label: "Attaquer en groupe armé",
-        req: { skill: { key: 'combat', min: 2 } },
-        outcome: {
-          gain: { biomasse: 30 },
-          moralAll: 1,  // ×3 = +3
-          historicalMark: "L'équipage a abattu une créature des profondeurs.",
-          log: "La créature est abattue. Sa carcasse fournit de la matière organique. L'équipage en parle longtemps."
-        }
-      }
-    ]
-  },
-
-  // ===== HYDROPONIE =====
-  hydro_contamination: {
-    titre: "Contamination hydroponique",
-    modKey: 'hydroponie',
-    severity: 2,
-    text: "Une cuve d'hydroponie présente des signes de contamination. Couleur, odeur, mucus en surface.",
-    choices: [
-      {
-        label: "Vider et désinfecter",
-        outcome: {
-          loss: { biomasse: 40 },
-          disableModule: 240,  // 4h jeu HS
-          log: "Cuve sauvée mais récolte perdue. L'hydroponie reste arrêtée le temps du nettoyage."
-        }
-      },
-      {
-        label: "Identifier l'agent",
-        req: { skill: { key: 'medecine', min: 2 } },
-        outcome: {
-          loss: { biomasse: 15 },
-          gain: { datacubes: 8 },
-          log: "Diagnostic rapide. Pertes minimisées et données récoltées."
-        }
-      },
-      {
-        label: "Ignorer et espérer",
-        risky: {
-          stat: 'sangfroid', dc: 5,
-          success: { loss: { biomasse: 5 }, log: "La contamination se résorbe d'elle-même. Coup de chance." },
-          fail: {
-            loss: { biomasse: 80 },
-            status: 'pathogene_alien', target: 'staff',
-            debuff: { type: 'prodMult', value: 0.7, duration: 720, label: 'Hydroponie contaminée' },
-            damageModule: true,
-            moralAll: -2,  // ×3 = -6
-            historicalMark: "L'hydroponie a été abandonnée à la contamination. {worker} en a payé le prix.",
-            log: "La contamination s'est étendue. {worker} est touché. La production souffre durablement."
-          }
-        }
-      }
-    ]
-  },
-  hydro_recolte_abondante: {
-    titre: "Récolte abondante",
-    modKey: 'hydroponie',
-    severity: 1,
-    positive: true,
-    text: "Une variété montre un rendement inattendu. Le Bio-technicien suggère une sélection.",
-    choices: [
-      { label: "Conserver les graines", req: { skill: { key: 'science', min: 1 } },
-        outcome: { gain: { biomasse: 30, datacubes: 5 }, log: "Souche améliorée intégrée à l'hydroponie." } },
-      { label: "Récolter tout maintenant", outcome: { gain: { biomasse: 50 }, log: "Récolte exceptionnelle, mais la souche est perdue." } }
-    ]
-  },
-
-  // ===== GÉNÉRATEUR SOLAIRE =====
-  solaire_panne: {
-    titre: "Voilure à la dérive",
-    modKey: 'generateur_solaire',
-    severity: 1,
-    text: "Une voilure se met à dériver. Production en chute libre.",
-    choices: [
-      { label: "Réparation d'urgence", req: { skill: { key: 'ingenierie', min: 1 } },
-        outcome: { loss: { energie: 20 }, log: "Réparation rapide. Production relancée." } },
-      { label: "Remplacer la voilure", pay: true, outcome: { loss: { metal: 15, cristal: 10, energie: 10 }, log: "Voilure neuve installée. Plus durable." } },
-      { label: "Patcher avec un kit", consume: { item: 'kit_reparation' },
-        outcome: { gain: { energie: 5 }, log: "Le kit fait des merveilles. Aucun temps perdu." } },
-      // 0.33 : choix de repli, toujours disponible (les autres demandent compétence, objet ou stock)
-      { label: "Attendre la prochaine maintenance", outcome: { disableModule: 180, log: "La voilure reste repliée en attendant la maintenance." } }
-    ]
-  },
-  solaire_surcharge: {
-    titre: "Surcharge solaire",
-    modKey: 'generateur_solaire',
-    severity: 2,
-    requireMinLevel: 3,
-    text: "Une éruption locale crée un pic électrique. Les régulateurs saturent.",
-    choices: [
-      {
-        label: "Couper le réseau immédiatement",
-        outcome: {
-          loss: { energie: 30 },
-          log: "Réseau coupé à temps. Stocks préservés."
-        }
-      },
-      {
-        label: "Tenter de canaliser",
-        risky: {
-          stat: 'sangfroid', dc: 6,
-          success: {
-            gain: { energie: 50 },
-            log: "Pic canalisé en stockage. Bonus inattendu."
-          },
-          fail: {
-            loss: { energie: 60, cristal: 20 },
-            status: 'blessure_legere',
-            target: 'staff',
-            damageModule: true,  // 0.28 : générateur perd 1 niveau
-            historicalMark: "Le générateur solaire a brûlé sous une éruption. Un opérateur a été blessé.",
-            log: "L'opérateur a pris une décharge. Les panneaux sont partiellement détruits."
-          }
-        }
-      }
-    ]
-  },
-
-  // ===== HANGAR =====
-  hangar_sabotage: {
-    titre: "Sabotage au hangar",
-    modKey: 'hangar',
-    severity: 3,
-    requireMinLevel: 2,
-    text: "Un de nos vaisseaux a été saboté pendant la nuit. Coque rayée, conduits trafiqués.",
-    choices: [
-      {
-        label: "Enquêter sérieusement",
-        req: { skill: { key: 'science', min: 2 } },
-        outcome: {
-          gain: { datacubes: 8 },
-          historicalMark: "Une enquête a mis au jour un saboteur dans nos rangs.",
-          log: "Indices recueillis. Le saboteur a peut-être laissé une signature."
-        }
-      },
-      {
-        label: "Réparer en urgence",
-        pay: true,
-        outcome: {
-          loss: { metal: 50, cristal: 20 },
-          log: "Réparations effectuées. Origine du sabotage non identifiée."
-        }
-      },
-      {
-        label: "Renforcer la sécurité — couvre-feu généralisé",
-        outcome: {
-          loss: { metal: 20 },
-          moralAll: -2,  // ×3 = -6 moral durable
-          debuff: {
-            type: 'prodMult',
-            value: 0.85,
-            duration: 2880,  // 48h jeu (2 jours)
-            label: "Climat de méfiance — prod -15%"
-          },
-          historicalMark: "Un couvre-feu a été imposé après un sabotage. L'équipage en garde le souvenir.",
-          log: "Patrouille renforcée et couvre-feu. La méfiance s'installe pour quelques jours."
-        }
-      }
-    ]
-  },
-  hangar_decouverte: {
-    titre: "Trouvaille au hangar",
-    modKey: 'hangar',
-    severity: 1,
-    positive: true,
-    text: "Un mécano de bord trouve une amélioration inutilisée dans un coffre oublié.",
-    choices: [
-      { label: "L'installer sur un vaisseau", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { gain: { datacubes: 6, cristal: 15 }, log: "L'amélioration est intégrée à un vaisseau de la flotte." } },
-      { label: "L'archiver", outcome: { gain: { datacubes: 4 }, log: "Le composant est documenté pour usage futur." } }
-    ]
-  },
-
-  // ===== LABORATOIRE =====
-  labo_fuite_donnees: {
-    titre: "Données corrompues",
-    modKey: 'laboratoire',
-    severity: 2,
-    text: "Une partie des données de recherche s'est corrompue. Cause inconnue.",
-    choices: [
-      { label: "Récupérer ce qui peut l'être", req: { skill: { key: 'science', min: 2 } },
-        outcome: { loss: { datacubes: 10 }, log: "Récupération partielle. Pertes limitées." } },
-      { label: "Tout recommencer", outcome: { loss: { datacubes: 30 }, delayResearch: 60, log: "Recherche en cours retardée d'une heure jeu." } },
-      { label: "Suspendre temporairement", outcome: { loss: { datacubes: 5 }, log: "Pause stratégique. Le labo investigue." } }
-    ]
-  },
-  labo_etude_inattendue: {
-    titre: "Corrélation inattendue",
-    modKey: 'laboratoire',
-    severity: 1,
-    positive: true,
-    text: "Une corrélation inattendue est repérée dans les données existantes.",
-    choices: [
-      { label: "Approfondir", req: { skill: { key: 'science', min: 3 } },
-        outcome: { gain: { datacubes: 25 }, log: "Découverte mineure mais réelle. Données précieuses." } },
-      { label: "Documenter et continuer", outcome: { gain: { datacubes: 10 }, log: "Note ajoutée au registre du labo." } }
-    ]
-  },
-
-  // ===== ATELIER =====
-  atelier_accident: {
-    titre: "Accident à l'atelier",
-    modKey: 'atelier',
-    severity: 2,
-    text: "Un accident de fabrication. {worker} était sur le poste.",
-    choices: [
-      { label: "Soigner et reprendre", outcome: { status: 'blessure_legere', target: 'staff', loss: { metal: 10 }, log: "{worker} est légèrement blessé. La fabrication a perdu des composants." } },
-      { label: "Audit de sécurité", req: { skill: { key: 'ingenierie', min: 2 } },
-        outcome: { loss: { metal: 5 }, log: "Audit effectué. Cause identifiée. Reprise propre." } },
-      { label: "Évacuer la pièce immédiatement", outcome: { loss: { metal: 25, cristal: 10 }, log: "Évacuation préventive. Aucune blessure mais perte matérielle." } }
-    ]
-  },
-  atelier_innovation: {
-    titre: "Innovation de procédé",
-    modKey: 'atelier',
-    severity: 1,
-    positive: true,
-    text: "Le Maître-artisan propose une amélioration de procédé.",
-    choices: [
-      { label: "Tester l'idée", req: { skill: { key: 'ingenierie', min: 3 } },
-        outcome: { gain: { datacubes: 8, metal: 15 }, log: "L'amélioration fonctionne. Procédé adopté." } },
-      { label: "Garder la procédure standard", outcome: { gain: { metal: 5 }, log: "Statu quo préservé." } }
-    ]
-  },
-
-  // ===== INFIRMERIE =====
-  infirmerie_patient_fuit: {
-    titre: "Patient en fuite",
-    modKey: 'infirmerie',
-    severity: 2,
-    text: "Un patient a quitté l'infirmerie sans autorisation.",
-    choices: [
-      { label: "Le retrouver et le ramener", outcome: { log: "Patient retrouvé. Soins repris." } },
-      { label: "Le laisser. Il sait ce qu'il fait.", outcome: { moralAll: -1, log: "L'équipage commente. Le moral en pâtit." } },
-      { label: "Enquête disciplinaire", outcome: { moralAll: -2, log: "Mesure ferme. Le patient est rappelé. Mais l'ambiance pèse." } }
-    ]
-  },
-  infirmerie_remede: {
-    titre: "Nouvelle formule de soin",
-    modKey: 'infirmerie',
-    severity: 1,
-    positive: true,
-    text: "Un Spécialiste a synthétisé une nouvelle formule de soin à partir de réserves.",
-    choices: [
-      { label: "Documenter et stocker", outcome: { gain: { datacubes: 6 }, log: "La formule rejoint les protocoles standard." } }
-    ]
-  },
-
-  // ===== HABITAT =====
-  habitat_panne_climatisation: {
-    titre: "Climatisation en panne",
-    modKey: 'habitat',
-    severity: 2,
-    text: "La climatisation d'une partie de l'habitat tombe en panne. Les colons se plaignent.",
-    choices: [
-      { label: "Réparer immédiatement", req: { skill: { key: 'ingenierie', min: 1 } }, pay: true,
-        outcome: { loss: { metal: 10, energie: 15 }, log: "Climatisation rétablie. L'équipage apprécie." } },
-      { label: "Distribuer des rations supplémentaires", consume: { item: 'ration_concentree' },
-        outcome: { moralAll: +1, log: "Geste apprécié. L'équipe tient le coup." } },
-      { label: "Ignorer (attendre une réparation prévue)", outcome: { moralAll: -2, log: "L'équipage a chaud. Et ne se prive pas de le dire." } }
-    ]
-  },
-  habitat_anniversaire: {
-    titre: "Anniversaire",
-    modKey: 'habitat',
-    severity: 1,
-    positive: true,
-    text: "C'est l'anniversaire d'un colon. L'équipage propose une petite célébration.",
-    choices: [
-      { label: "Organiser une fête", pay: true, outcome: { loss: { biomasse: 20 }, moralAll: +3, log: "Soirée mémorable. Le moral grimpe." } },
-      { label: "Geste discret", outcome: { moralAll: +1, log: "Cadeau modeste mais sincère." } },
-      { label: "Trop occupés cette fois", outcome: { moralAll: -1, log: "Personne ne dit rien. Mais quelque chose s'éteint un peu." } }
-    ]
-  }
-};
-
-  // 1 an jeu = 30 jours jeu
-
-
-
-
-
+// Incidents et événements par id (contenu de src/content/incidents et evenements)
+export const INCIDENTS = Object.fromEntries(CONTENU_INCIDENTS.map(x => [x.id, x]));
+export const COLONY_EVENTS = Object.fromEntries(CONTENU_EVENEMENTS.map(x => [x.id, x]));
+export { PERSONNAGES, LORE, CATEGORIES_LORE };
 
 // Clé canonique pour une paire de membres (ordre lexico pour unicité)
 function relKey(a, b) {
@@ -3129,58 +2748,927 @@ export function significantRelations(memberId) {
 }
 
 // ============================================================
-//   INCIDENTS LOCALISÉS (0.17) — suite
+//   COLONIE — moteur des décisions (V1)
 // ============================================================
-// 0.28 : multiplicateur d'impact des choix d'incident ET d'événement (×3)
-const OUTCOME_MULT = 3;
+// Une « décision » est un incident de module ou un événement de colonie qui
+// attend le joueur dans la file S.pendingDecisions :
+//   { id, kind: 'incident'|'event', refId, acteurs: { nom: memberId },
+//     recrues?: { [index du choix]: candidat }, createdAt, offline?, v: 1 }
+// Le contenu (titre, texte, choix, effets) est lu dans INCIDENTS / COLONY_EVENTS
+// et interprété par le moteur narratif : mêmes choix et mêmes effets que les
+// scènes d'expédition, appliqués ici à la colonie.
+//
+// Règles de la file (0.33, gardées) : une seule fenêtre à la fois ; acteurs
+// revalidés à l'affichage (mort, parti en mission…) ; au-delà de
+// MAX_PENDING_DECISIONS, la plus ancienne décision mineure est tranchée
+// automatiquement. Hors ligne, seuls les incidents mineurs sont résolus seuls.
+// Une résolution automatique ne fait jamais entrer un colon (effet recrute) :
+// accueillir quelqu'un reste une décision du joueur.
 
-// V1 : les durées écrites dans le contenu hérité (incidents, événements) sont en
-// « minutes de jeu » (360 = « 6 h jeu ») → secondes réelles × PACING.LEGACY_GAME_MIN.
-const legacyDuration = d => Math.round((Number(d) || 0) * PACING.LEGACY_GAME_MIN);
+const GRAVITE_DEFAUT = 'serieux';
+const niveauGravite = g => GRAVITES_INCIDENT[g]?.niveau || GRAVITES_INCIDENT[GRAVITE_DEFAUT].niveau;
+const membreParId = id => (id ? S.crew.find(m => m.id === id) || null : null);
+const presentBase = m => !!m && m.statut !== 'mort' && memberLocation(m) === 'base';
+const sansBalises = s => String(s ?? '').replace(/<[^>]*>/g, '');
+const melanger = list => { const a = [...list]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const plurielColons = n => `${n} colon${n > 1 ? 's' : ''}`;
 
 // Libellés lisibles (notifications, file des décisions, résumé de rattrapage)
 function incidentTitle(incidentId) {
   return INCIDENTS[incidentId]?.titre || 'Incident';
 }
 function colonyEventTitle(eventId) {
-  const ev = COLONY_EVENTS[eventId];
+  const ev = COLONY_EVENTS[idEvenement(eventId)];
   return ev?.titre || ev?.theme || 'Événement';
 }
-
-// Montants réels (multiplicateur compris) d'un bloc loss/gain, en texte
-function amountsText(block) {
-  return Object.entries(block || {})
-    .map(([k, v]) => `${Math.round(v * OUTCOME_MULT)} ${RES_LABELS[k] || k}`)
-    .join(' · ');
+function defDecision(dec) {
+  if (!dec) return null;
+  return dec.kind === 'incident' ? INCIDENTS[dec.refId] || null : dec.kind === 'event' ? COLONY_EVENTS[dec.refId] || null : null;
 }
 
-// Remplace {loss.metal}, {gain.datacubes}… d'un libellé par les montants réels
-function fillAmounts(label, outcome) {
-  return String(label || '').replace(/\{(loss|gain)\.(\w+)\}/g, (_, kind, res) => {
-    const v = outcome?.[kind]?.[res];
-    return typeof v === 'number' ? String(Math.round(v * OUTCOME_MULT)) : '?';
+// Incident mineur : résolu automatiquement pendant une absence
+function isMinorIncident(incidentId) {
+  return niveauGravite(INCIDENTS[incidentId]?.gravite) <= 1;
+}
+
+// ---- Anciennes décisions (0.33) ----
+// Événements : « event_romance » → « romance ». Acteurs : actorIds.primary /
+// secondary → premier et second acteurs déclarés ; victimId → acteurs.victime.
+export function idEvenement(refId) {
+  if (COLONY_EVENTS[refId]) return refId;
+  const m = /^event_(\w+)$/.exec(String(refId || ''));
+  return m && COLONY_EVENTS[m[1]] ? m[1] : refId;
+}
+export function convertirDecision(dec) {
+  if (!dec || typeof dec !== 'object' || dec.v === 1) return dec;
+  if (dec.kind === 'event') {
+    dec.refId = idEvenement(dec.refId);
+    if (dec.actorIds && typeof dec.actorIds === 'object') {
+      const noms = Object.keys(COLONY_EVENTS[dec.refId]?.acteurs || {});
+      dec.acteurs = {};
+      ['primary', 'secondary'].forEach((role, i) => { if (noms[i] && dec.actorIds[role]) dec.acteurs[noms[i]] = dec.actorIds[role]; });
+    }
+  } else if (dec.kind === 'incident' && dec.victimId !== undefined) {
+    dec.acteurs = { victime: dec.victimId || null };
+  }
+  delete dec.actorIds; delete dec.actorsDead; delete dec.victimId;
+  if (!dec.acteurs || typeof dec.acteurs !== 'object' || Array.isArray(dec.acteurs)) dec.acteurs = {};
+  dec.v = 1;
+  return dec;
+}
+// Conversion d'une file entière (chargement d'une sauvegarde : state.js)
+export function convertirDecisionsColonie(list) {
+  for (const dec of Array.isArray(list) ? list : []) convertirDecision(dec);
+  return list;
+}
+
+// ---- Mémoire de la colonie (sauvegarde) ----
+// S.evenements : { [id]: { n: fois résolu, derniere: tick du dernier déclenchement,
+//                         acteurs: { memberId: tick } } }
+// S.statutsVus : { [statut]: [memberId] } — colons déjà atteints (colonie.gueris.x)
+// S.archives   : { [pageId]: { at, lu } } — pages d'archives débloquées
+// Normalisation idempotente, appelée au chargement (state.js) ; elle reprend les
+// minuteries de 0.33 (eventLastAt, lastHommageMin…) et le suivi du pathogène
+// de « La Couvée » (S.arcs.arc_couvee.pathogenSeen).
+export function normaliserMemoireColonie(d) {
+  const obj = v => v && typeof v === 'object' && !Array.isArray(v);
+  if (!obj(d.evenements)) d.evenements = {};
+  if (!obj(d.statutsVus)) d.statutsVus = {};
+  if (!obj(d.archives)) d.archives = {};
+  const memo = id => (d.evenements[id] ||= { n: 0, derniere: null, acteurs: {} });
+  const legacy = d.flags?.eventLastAt;
+  if (obj(legacy)) {
+    for (const [old, at] of Object.entries(legacy)) {
+      const id = idEvenement(old);
+      if (COLONY_EVENTS[id] && typeof at === 'number') memo(id).derniere = Math.max(memo(id).derniere ?? -Infinity, at);
+    }
+    delete d.flags.eventLastAt;
+  }
+  for (const [champ, id] of [['lastHommageMin', 'hommage'], ['lastVisitorMin', 'visiteur_isole'], ['lastMerchantMin', 'marchand']]) {
+    if (typeof d[champ] === 'number' && d[champ] > -99999) memo(id).derniere = Math.max(memo(id).derniere ?? -Infinity, d[champ]);
+    delete d[champ];
+  }
+  if (typeof d.lastColonyEventId === 'string') d.lastColonyEventId = idEvenement(d.lastColonyEventId);
+  for (const m of Array.isArray(d.crew) ? d.crew : []) {
+    if (m && typeof m.lastBirthdayCelebrated === 'number') {
+      memo('anniversaire').acteurs[m.id] = m.lastBirthdayCelebrated;
+      delete m.lastBirthdayCelebrated;
+    }
+  }
+  for (const e of Object.values(d.evenements)) {
+    if (!obj(e)) continue;
+    if (typeof e.n !== 'number') e.n = 0;
+    if (!obj(e.acteurs)) e.acteurs = {};
+  }
+  const vus = d.arcs?.arc_couvee?.pathogenSeen;
+  if (Array.isArray(vus)) {
+    d.statutsVus.pathogene_alien = [...new Set([...(d.statutsVus.pathogene_alien || []), ...vus])];
+    delete d.arcs.arc_couvee.pathogenSeen;
+  }
+  for (const [k, v] of Object.entries(d.statutsVus)) if (!Array.isArray(v)) delete d.statutsVus[k];
+  for (const [k, v] of Object.entries(d.archives)) if (!obj(v)) d.archives[k] = { at: 0, lu: true };
+}
+const memoireEvenement = id => {
+  if (!S.evenements || typeof S.evenements !== 'object') S.evenements = {};
+  return (S.evenements[id] ||= { n: 0, derniere: null, acteurs: {} });
+};
+
+// ---- Lecture des conditions propres à la colonie (appelée par lireEtat) ----
+// colonie.batiments, colonie.en_poste, colonie.vivres_ok… ; espaces expeditions,
+// factions, evenement, fil, archives, acteur (vocabulaire.js, ESPACES).
+const CHAMPS_EXPEDITION = { biome: 1, ruines: 1, vie: 1, type: 1, atmosphere: 1 };
+
+// Colons vivants guéris d'un statut (vus atteints, ou porteurs de ses séquelles)
+function gueris(statutKey) {
+  const vus = new Set(S.statutsVus?.[statutKey] || []);
+  const sequelles = STATUTS[statutKey]?.onCured?.sequels || [];
+  return aliveCrew().filter(m =>
+    (m.sequels || []).some(s => sequelles.includes(s.key)) ||
+    (vus.has(m.id) && !(m.statuts || []).some(s => s.key === statutKey))).length;
+}
+
+// Vivres suffisants pour accueillir un colon de plus : une couchette libre, de la
+// biomasse en stock et un bilan de biomasse qui ne baisse pas.
+export function vivresOk() {
+  const u = crewUsage();
+  if (u.total - u.used < 1) return false;
+  if ((S.res?.biomasse || 0) <= 0) return false;
+  try { return computeRates().biomasse >= 0; } catch { return false; }
+}
+
+function lireColonie(a, b) {
+  switch (a) {
+    case 'batiments': return Object.values(S.modules || {}).filter(m => (m?.level || 0) > 0).length;
+    case 'en_poste': return new Set(Object.values(S.assignments || {}).filter(id => membreParId(id)?.statut !== 'mort')).size;
+    case 'couchettes_libres': { const u = crewUsage(); return Math.max(0, u.total - u.used); }
+    case 'vivres_ok': return vivresOk();
+    case 'flotte': return (S.fleet || []).length;
+    case 'techs': return Object.keys(S.techCompleted || {}).length;
+    case 'recherches': return (S.research || []).length;
+    case 'schemas': return Object.keys(S.discoveries || {}).filter(id => BLUEPRINTS[id]?.origin === b).length;
+    case 'datacubes_alien': return S.alienDatacubes || 0;
+    case 'competence': return Math.max(0, ...aliveCrew().map(m => m.skills?.[b] || 0));
+    case 'reserve': { const cap = capOf(b); return cap > 0 ? (S.res?.[b] || 0) / cap : 0; }
+    case 'gueris': return gueris(b);
+    case 'morts': return (S.crew || []).filter(m => m.statut === 'mort').length;
+  }
+  return undefined;
+}
+
+function lireEspaceColonie(parts, ctx = {}) {
+  const [ns, a, b] = parts;
+  switch (ns) {
+    case 'expeditions': {
+      if (a === 'total') return (S.expHistory || []).length;
+      if (a === 'en_cours') return (S.expeditions || []).length;
+      const filtres = [];
+      for (let i = 1; i + 1 < parts.length; i += 2) filtres.push([parts[i], parts[i + 1]]);
+      return (S.expHistory || []).filter(e => filtres.every(([k, v]) =>
+        k === 'scene' ? (e.scenesPlayed || []).includes(v)
+          : k === 'objet' ? (e.itemsConsumed || []).includes(v)
+            : CHAMPS_EXPEDITION[k] ? e.body?.[k] === v : false)).length;
+    }
+    case 'factions': {
+      const fs = Object.values(S.factions || {});
+      if (a === 'total') return fs.length;
+      if (a === 'allies') return fs.filter(f => (f.reputation || 0) >= 75).length;
+      return fs.filter(f => f.type === a).length;
+    }
+    case 'evenement': {
+      const m = S.evenements?.[a];
+      if (b === 'fois') return m?.n || 0;
+      if (b === 'depuis') return typeof m?.derniere === 'number' ? (S.meta.gameMin || 0) - m.derniere : null;
+      return undefined;
+    }
+    case 'fil': {
+      const st = S.arcs?.[a];
+      const def = CONTENU_ARCS.find(x => x.id === a);
+      if (b === 'etape') return st?.completedSteps?.length || 0;
+      if (b === 'termine') return !!st?.rewardClaimed || (!!def && (st?.completedSteps?.length || 0) >= def.etapes.length);
+      return undefined;
+    }
+    case 'archives':
+      if (a === 'total') return Object.keys(S.archives || {}).length;
+      return !!S.archives?.[a];
+    case 'acteur':
+      return ctx.candidat ? champActeur(ctx.candidat, parts.slice(1), ctx.precedent) : undefined;
+  }
+  return undefined;
+}
+
+// Champ « acteur.x » d'un colon candidat à un rôle d'événement
+function champActeur(m, path, precedent) {
+  const [a, b] = path;
+  switch (a) {
+    case 'age': return currentAge(m);
+    case 'age_rond': { const age = currentAge(m); return age > 0 && age % 5 === 0; }
+    case 'moral': return m.moral ?? 0;
+    case 'sante': return m.sante ?? 0;
+    case 'role': return m.startRole || null;
+    case 'libre': return m.statut === 'libre';
+    case 'poste': return memberAssignment(m.id)?.modKey || null;
+    case 'mort': return m.statut === 'mort';
+    case 'mort_depuis': return m.statut === 'mort' && typeof m.diedAt === 'number' ? (S.meta.gameMin || 0) - m.diedAt : null;
+    case 'affinite': return precedent ? affinityBetween(m.id, precedent.id) : 0;
+    case 'carac': return m.stats?.[b] ?? 5;
+    case 'trait': return (m.traits || []).includes(b);
+  }
+  if (SKILL_LABELS[a]) return m.skills?.[a] || 0;
+  return undefined;
+}
+
+// ---- Acteurs d'un événement ----
+// acteurs: { nom: { parmi: 'colons'|'vivants'|'morts', filtre, prefere } } — dans l'ordre
+// déclaré (colons : présents à la base ; vivants : même partis en mission) ;
+// « acteur.affinite » compare au précédent. delaiActeur : un colon déjà
+// acteur de cet événement depuis moins longtemps n'est pas repris.
+function candidatsActeur(def, spec, precedent, exclus) {
+  const now = S.meta.gameMin || 0;
+  const vu = memoireEvenement(def.id).acteurs;
+  const delai = def.delaiActeur !== undefined ? N.parseDuree(def.delaiActeur) : 0;
+  let pool = (spec.parmi === 'morts' ? S.crew.filter(m => m.statut === 'mort')
+    : spec.parmi === 'vivants' ? aliveCrew() : S.crew.filter(presentBase))
+    .filter(m => !exclus.has(m.id))
+    .filter(m => !(delai > 0 && typeof vu[m.id] === 'number' && now - vu[m.id] < delai));
+  const lire = m => id => lireEtat(id, { candidat: m, precedent, colonie: true });
+  if (spec.filtre !== undefined) pool = pool.filter(m => conditionSure(spec.filtre, lire(m)));
+  if (spec.prefere !== undefined) {
+    const pref = pool.filter(m => conditionSure(spec.prefere, lire(m)));
+    if (pref.length) return pref;
+  }
+  return pool;
+}
+
+// Tire des acteurs pour un événement : { nom: membre } (vide s'il n'en déclare
+// aucun), ou null si un rôle ne trouve personne.
+function choisirActeurs(def) {
+  const specs = Object.entries(def.acteurs || {});
+  const choisis = {};
+  let essais = 0;
+  const essayer = (i, precedent, exclus) => {
+    if (i >= specs.length) return true;
+    const [nom, spec] = specs[i];
+    for (const m of melanger(candidatsActeur(def, spec || {}, precedent, exclus))) {
+      if (++essais > 400) return false;
+      choisis[nom] = m;
+      if (essayer(i + 1, m, new Set([...exclus, m.id]))) return true;
+    }
+    delete choisis[nom];
+    return false;
+  };
+  return essayer(0, null, new Set()) ? choisis : null;
+}
+
+// Victime d'un incident : le personnel du module, sinon un colon libre, sinon
+// n'importe quel colon présent à la base (jamais un absent)
+function pickIncidentVictim(inc) {
+  const staff = staffOf(inc.module).map(s => s.member).filter(presentBase);
+  if (staff.length) return rPick(staff);
+  const free = aliveCrew().filter(m => m.statut === 'libre' && presentBase(m));
+  if (free.length) return rPick(free);
+  const atBase = aliveCrew().filter(presentBase);
+  return atBase.length ? rPick(atBase) : null;
+}
+
+// Acteurs d'une décision en attente, revalidés : { nom: membre } ou null (caduque).
+// Incident : une victime partie ou morte est remplacée par un colon présent.
+// Événement : un acteur mort (sauf un défunt attendu) ou parti rend l'événement
+// caduc s'il ne trouve plus d'acteurs ; sinon les nouveaux acteurs sont gardés.
+function acteursDecision(dec, def) {
+  convertirDecision(dec);
+  if (dec.kind === 'incident') {
+    const v = membreParId(dec.acteurs.victime);
+    if (presentBase(v)) return { victime: v };
+    const nv = pickIncidentVictim(def);
+    if (!nv) return null;
+    dec.acteurs.victime = nv.id;
+    return { victime: nv };
+  }
+  const out = {};
+  let ok = true;
+  for (const [nom, spec] of Object.entries(def.acteurs || {})) {
+    const m = membreParId(dec.acteurs[nom]);
+    const valide = !!m && (spec?.parmi === 'morts' ? m.statut === 'mort' : spec?.parmi === 'vivants' ? m.statut !== 'mort' : presentBase(m));
+    if (!valide) { ok = false; break; }
+    out[nom] = m;
+  }
+  if (ok) return out;
+  if (def.si !== undefined && !conditionSure(def.si, lecteurColonie())) return null;
+  const nouveaux = choisirActeurs(def);
+  if (!nouveaux) return null;
+  dec.acteurs = Object.fromEntries(Object.entries(nouveaux).map(([k, m]) => [k, m.id]));
+  return nouveaux;
+}
+
+// ---- Contexte d'une décision : équipe mobilisable, acteurs, gabarits ----
+// Équipe d'un incident : le personnel du module et les colons libres présents ;
+// d'un événement : tous les colons présents à la base.
+function equipeDecision(def, kind) {
+  if (kind === 'incident') {
+    const staff = staffOf(def.module).map(s => s.member).filter(presentBase);
+    const libres = aliveCrew().filter(m => m.statut === 'libre' && presentBase(m) && !staff.includes(m));
+    return [...staff, ...libres];
+  }
+  return S.crew.filter(presentBase);
+}
+
+function contexteDecision(dec, def, acteurs) {
+  const noms = Object.keys(def.acteurs || {});
+  return {
+    dec, def, kind: dec.kind, acteurs: acteurs || {},
+    victime: acteurs?.victime || null,
+    secondaire: noms[1] ? acteurs?.[noms[1]] || null : null,
+    principal: dec.kind === 'incident' ? acteurs?.victime || null : (noms[0] ? acteurs?.[noms[0]] || null : null),
+    module: def.module || null,
+    equipe: equipeDecision(def, dec.kind),
+    source: dec.kind === 'incident' ? 'incident' : 'événement',
+    recrues: dec.recrues || {},
+  };
+}
+
+const lecteurColonie = (ctx = {}) => id => lireEtat(id, { equipe: ctx.equipe || [], colonie: true });
+
+function nomDe(genre, id) {
+  if (genre === 'objet') return itemDef(id)?.nom;
+  if (genre === 'trait') return TRAITS[id]?.nom;
+  if (genre === 'module') return MODULES[id]?.nom;
+  if (genre === 'tech') return TECH_TREE[id]?.nom;
+  return id;
+}
+
+function envChoixColonie(ctx) {
+  return {
+    lire: lecteurColonie(ctx),
+    equipe: ctx.equipe.map(colonV1),
+    equipeRequise: false,
+    objetEmbarque: id => S.inventory?.[id] || 0,
+    peutPayer: cout => Object.keys(cout || {}).filter(k => (S.res[k] || 0) < cout[k]),
+    nom: nomDe,
+  };
+}
+
+// Personnage (partagé, ou d'histoire « histoire/perso ») pour les gabarits {pnj:id}
+function personnageDe(ref) {
+  if (PERSONNAGES[ref]) return PERSONNAGES[ref];
+  const [hId, pId] = String(ref).split('/');
+  return CHRONICLES[hId]?.personnages?.[pId] || null;
+}
+
+function envTexteColonie(ctx, extra = {}) {
+  return {
+    condition: src => conditionSure(src, lecteurColonie(ctx)),
+    inconnu: () => '',
+    gabarit: nom => {
+      switch (nom) {
+        case 'colonie': return S.meta?.colonyName || 'Avant-poste';
+        case 'module': return MODULES[ctx.module]?.nom || 'le module';
+        case 'acteur': return personne(extra.acteur || ctx.acteur || ctx.principal) || 'quelqu’un';
+        case 'victime': return personne(extra.victime || ctx.victime || ctx.principal) || 'quelqu’un';
+        case 'secondaire': return personne(ctx.secondaire) || 'quelqu’un';
+        case 'recrue': return personne(ctx.recrue || extra.recrue) || 'le nouveau venu';
+      }
+      if (nom.startsWith('pnj:')) {
+        const p = personnageDe(nom.slice(4));
+        return p ? { nom: p.nom, pronoms: p.pronoms } : null;
+      }
+      const m = /^(\w+)\.age$/.exec(nom);
+      if (m && ctx.acteurs[m[1]]) return String(currentAge(ctx.acteurs[m[1]]));
+      if (ctx.acteurs[nom]) return personne(ctx.acteurs[nom]);
+      return null;
+    },
+  };
+}
+
+// ---- Recrues : un colon de plus est toujours une décision du joueur ----
+// Visiteur préparé à la création de la décision (son salaire est affiché sur le
+// choix) ; personnage partagé ou d'histoire construit depuis sa définition.
+const effetsDuChoix = c => (c?.test ? [...(c.test.reussite || []), ...(c.test.echec || [])] : (c?.effets || []));
+const recrueDuChoix = c => effetsDuChoix(c).find(e => e && e.recrute !== undefined)?.recrute;
+const ajouteUnColon = c => recrueDuChoix(c) !== undefined;
+
+function salaireCandidat(c) {
+  let s = 1 + Math.max(0, ...Object.values(c.skills || {}).filter(v => typeof v === 'number'));
+  if ((c.traits || []).includes('ambitieux')) s += 1;
+  if ((c.traits || []).includes('cynique')) s += 1;
+  if ((c.traits || []).includes('curieux')) s -= 1;
+  return Math.max(1, s);
+}
+
+function genVisiteur(bonus = 0) {
+  const c = genCandidate();
+  if (bonus > 0) {
+    const k = SKILL_LIST[Math.floor(Math.random() * SKILL_LIST.length)];
+    c.skills[k] = Math.min(5, (c.skills[k] || 0) + bonus);
+    c.salary = salaireCandidat(c);
+  }
+  return c;
+}
+
+function candidatPersonnage(id) {
+  const def = PERSONNAGES[id];
+  if (!def) return null;
+  const c = genCandidate();
+  c.name = def.nom;
+  if (typeof def.age === 'number' && def.age > 0) c.age = def.age;
+  if (def.pronoms) c.pronoms = def.pronoms;
+  else delete c.pronoms;
+  c.origin = { id: 'personnage', label: def.role || 'Rencontre', notes: def.portrait || '' };
+  const r = def.recrue || {};
+  if (r.caracs) Object.assign(c.stats, r.caracs);
+  for (const k of SKILL_LIST) c.skills[k] = r.competences?.[k] || 0;
+  c.traits = (r.traits || []).filter(t => TRAITS[t]);
+  c.salary = salaireCandidat(c);
+  c.personnage = id;
+  return c;
+}
+
+// Prépare les recrues des choix d'une décision (stockées dans la décision)
+function preparerRecrues(dec, def) {
+  (def.choix || []).forEach((c, i) => {
+    const r = recrueDuChoix(c);
+    if (!r || typeof r !== 'object' || !r.inconnu) return;
+    if (!dec.recrues) dec.recrues = {};
+    if (!dec.recrues[i]) dec.recrues[i] = genVisiteur(r.bonus || 0);
   });
 }
 
-// Choix « payant » (achat, échange, don — pay:true) : le stock doit couvrir
-// le coût AVANT de choisir. Les pertes subies (dégâts) restent plafonnées au stock.
-function choiceAffordable(choice) {
-  if (!choice?.pay || !choice.outcome?.loss) return true;
-  for (const k in choice.outcome.loss) {
-    if ((S.res[k] || 0) < choice.outcome.loss[k] * OUTCOME_MULT) return false;
+// Recrue que proposerait un choix (pour afficher son nom et son salaire)
+function recruePrevue(dec, choix, i) {
+  const r = recrueDuChoix(choix);
+  if (r === undefined) return null;
+  if (typeof r === 'object') return dec.recrues?.[i] || null;
+  if (PERSONNAGES[r]) return candidatPersonnage(r);
+  const [hId, pId] = String(r).split('/');
+  const p = CHRONICLES[hId]?.personnages?.[pId];
+  return p ? { name: p.nom, pronoms: p.pronoms, salary: salaireCandidat({ skills: p.recrue?.competences || {}, traits: p.recrue?.traits || [] }) } : null;
+}
+
+function accueillir(c, ctx, dire) {
+  const cap = crewUsage();
+  if (cap.used >= cap.total) {
+    dire('bad', `Habitat plein : impossible d'accueillir ${c.name}.`, true);
+    return null;
   }
-  return true;
+  const avant = S.crew.length;
+  S.candidates.push(c);
+  acceptCandidate(c.id);
+  const m = S.crew.length > avant ? S.crew[S.crew.length - 1] : null;
+  if (!m) return null;
+  ctx.recrue = m;
+  dire('good', `${c.name} rejoint la colonie (${cap.used + 1}/${cap.total}) · salaire ${salaryPerDay(c)} biomasse par jour`, true);
+  return m;
 }
 
-// Équipe mobilisable pour un incident : staff du bâtiment + colons libres
-function incidentTeam(inc) {
-  return staffOf(inc.modKey).map(s => s.member).concat(aliveCrew().filter(m => m.statut === 'libre'));
-}
-function skillReqMet(req, team) {
-  if (!req?.skill) return true;
-  return team.some(m => (m.skills?.[req.skill.key] || 0) >= req.skill.min);
+function recruterColonie(valeur, ctx, dire) {
+  if (valeur && typeof valeur === 'object') {
+    const c = ctx.recrues?.[ctx.choixIndex] || genVisiteur(valeur.bonus || 0);
+    return accueillir({ ...c, id: uid('c') }, ctx, dire);
+  }
+  const ref = String(valeur);
+  if (PERSONNAGES[ref]) {
+    if ([...S.crew, ...S.candidates].some(p => p.personnage === ref)) return null;
+    return accueillir(candidatPersonnage(ref), ctx, dire);
+  }
+  const [hId, pId] = ref.split('/');
+  if (CHRONICLES[hId]?.personnages?.[pId]) {
+    recruitChronicleCharacter({ characterId: pId, chronicleId: hId });
+    dire('good', `${CHRONICLES[hId].personnages[pId].nom} rejoint la colonie`, true);
+  }
+  return null;
 }
 
+// Faction visée par un effet reputation : id, ou type (la faction connue de ce
+// type la mieux disposée), ou celle du personnage de l'événement.
+function factionVisee(ref, ctx) {
+  const fs = Object.values(S.factions || {});
+  if (ref && S.factions?.[ref]) return S.factions[ref];
+  const type = ref || PERSONNAGES[ctx.def?.personnage]?.faction;
+  if (!type) return null;
+  return fs.filter(f => f.type === type).sort((a, b) => (b.reputation || 0) - (a.reputation || 0))[0] || null;
+}
+
+// ---- Cibles des effets à la colonie ----
+function ciblesColonie(cible, ctx, exclure = null) {
+  const colonie = S.crew.filter(presentBase);
+  const vivant = m => (m && m.statut !== 'mort' ? [m] : []);
+  switch (cible) {
+    case 'colonie': return colonie;
+    case 'colonie_hasard': { const p = colonie.filter(m => m !== exclure); return p.length ? [rPick(p)] : []; }
+    case 'equipe': return ctx.equipe.filter(presentBase);
+    case 'equipe_hasard': { const p = ctx.equipe.filter(m => presentBase(m) && m !== exclure); return p.length ? [rPick(p)] : []; }
+    case 'chef': return vivant(ctx.equipe[0]);
+    case 'acteur': return vivant(ctx.acteur || ctx.principal || ctx.victime);
+    case 'victime': return vivant(ctx.victime || ctx.acteur || ctx.principal);
+    case 'secondaire': return vivant(ctx.secondaire);
+  }
+  if (ctx.acteurs[cible]) return vivant(ctx.acteurs[cible]);
+  return [];
+}
+
+// Climat moral : une colonie à bout encaisse plus mal ; soudée, elle encaisse mieux.
+function climatMoral(valeur) {
+  const team = S.crew.filter(presentBase);
+  const avg = team.length ? team.reduce((s, m) => s + (m.moral || 0), 0) / team.length : 50;
+  if (valeur < 0 && avg < 35) return { mult: 1.5, note: "L'équipage est déjà à bout : le coup porte plus fort." };
+  if (valeur < 0 && avg > 75) return { mult: 0.6, note: "L'équipage est soudé : il encaisse sans broncher." };
+  if (valeur > 0 && avg < 35) return { mult: 1.4, note: 'Après les jours difficiles, ce répit fait d’autant plus de bien.' };
+  return { mult: 1, note: null };
+}
+
+// Dégâts sur un module : perd un niveau (minimum 1). Les postes au-delà du
+// nouveau niveau disparaissent : leurs occupants sont libérés (et réaffectés
+// si possible). Un chantier en cours sur ce module reconstruit le niveau perdu
+// au lieu de sauter un niveau. Renvoie un texte simple.
+function damageModule(modKey) {
+  const mod = S.modules[modKey];
+  if (!mod) return null;
+  const nom = MODULES[modKey]?.nom || modKey;
+  if (mod.level <= 1) return `${nom} a subi des dégâts mais reste fonctionnel au minimum.`;
+  mod.level--;
+  const freed = [];
+  for (const key of Object.keys(S.assignments || {})) {
+    const [k, idxStr] = key.split(':');
+    const idx = parseInt(idxStr, 10);
+    if (k !== modKey || !(idx >= mod.level)) continue;
+    freed.push(S.assignments[key]);
+    unassignSlot(modKey, idx);
+  }
+  for (const id of freed) autoAssignMember(id);
+  if (S.build?.id === modKey && S.build.targetLevel > mod.level + 1) S.build.targetLevel = mod.level + 1;
+  return `${nom} est endommagé : niveau ramené à ${mod.level}.`;
+}
+
+// Ligne des Annales posée par le moteur (chantiers, fils rouges…)
+function noterMarque(texte, kind = 'annales') {
+  if (!Array.isArray(S.historicalMarks)) S.historicalMarks = [];
+  S.historicalMarks.push({ at: S.meta.gameMin, text: texte, kind });
+}
+
+// ---- Effets appliqués à la colonie ----
+// ctx : contexte d'une décision (ou d'une récompense de fil rouge). Renvoie
+// { textes: [source], effets: [{ kind: 'good'|'bad'|'neutral', text, note }] } :
+// ce qui a RÉELLEMENT été appliqué (montants plafonnés, recrue refusée…).
+// `note` marque les conséquences durables reprises dans le journal.
+export function appliquerEffetsColonie(effets, ctx = {}) {
+  ctx.acteurs ||= {}; ctx.equipe ||= []; ctx.recrues ||= {};
+  const out = ctx.sortie ||= { textes: [], effets: [], moral: 0 };
+  const dire = (kind, text, note = false) => out.effets.push({ kind, text, note });
+  const rendu = t => N.rendreTexte(t, envTexteColonie(ctx));
+  const now = S.meta.gameMin || 0;
+  for (const brut of effets || []) {
+    const e = N.normaliserEffet(brut);
+    const v = brut?.[e.type];
+    switch (e.type) {
+      case 'texte': out.textes.push(...rendu(e.valeur).paragraphes.map(p => p.source)); break;
+      case 'gain':
+        for (const [k, n] of Object.entries(e.valeurs)) {
+          if (!(n > 0)) continue;
+          const got = addResourceCapped(k, n);
+          dire('good', `+${Math.round(got)} ${RES_LABELS[k] || k}${got < n ? ' (stock plein)' : ''}`);
+        }
+        break;
+      case 'perte':
+        for (const [k, n] of Object.entries(e.valeurs)) {
+          if (!(n > 0)) continue;
+          const lost = removeResourceCapped(k, n);
+          if (lost > 0) dire('bad', `−${Math.round(lost)} ${RES_LABELS[k] || k}`);
+        }
+        break;
+      case 'objet':
+        if (BLUEPRINTS[e.id]) { for (let i = 0; i < e.n; i++) addBlueprintToInventory(e.id, ctx.source || 'colonie'); }
+        else { if (!S.inventory) S.inventory = {}; S.inventory[e.id] = (S.inventory[e.id] || 0) + e.n; }
+        dire('good', `Objet : ${itemDef(e.id)?.nom || e.id}${e.n > 1 ? ' ×' + e.n : ''}`, true);
+        break;
+      case 'schema': {
+        const precis = Array.isArray(e.origines) ? e.origines.find(o => BLUEPRINTS[o]) : null;
+        const bpId = precis || rollBlueprint(e.origines === 'auto' ? ['humain'] : e.origines);
+        if (bpId) {
+          addBlueprintToInventory(bpId, ctx.source || 'colonie');
+          dire('good', `Schéma acquis : ${BLUEPRINTS[bpId]?.nom || bpId}`, true);
+        }
+        break;
+      }
+      case 'statut':
+        for (const m of ciblesColonie(e.cible, ctx)) {
+          inflictStatus(m, e.id, ctx.source || 'colonie');
+          ctx.victime = m;
+          dire('bad', `${m.name} : ${STATUTS[e.id]?.nom || e.id}`, true);
+        }
+        break;
+      case 'moral': {
+        const ms = ciblesColonie(e.cible === 'equipe' && typeof v === 'number' ? 'colonie' : e.cible, ctx);
+        if (!ms.length || !e.valeur) break;
+        const climat = e.cible === 'colonie' || typeof v === 'number' ? climatMoral(e.valeur) : { mult: 1, note: null };
+        const delta = Math.round(e.valeur * climat.mult);
+        for (const m of ms) m.moral = Math.max(0, Math.min(100, (m.moral || 0) + delta));
+        out.moral += delta;
+        const qui = ms.length === 1 ? ms[0].name : `${plurielColons(ms.length)}`;
+        dire(delta >= 0 ? 'good' : 'bad', ms.length === 1 ? `Moral de ${qui} ${delta >= 0 ? '+' : ''}${delta}` : `Moral de l'équipage ${delta >= 0 ? '+' : ''}${delta} (${qui})`);
+        if (climat.note) dire('neutral', climat.note);
+        break;
+      }
+      case 'affinite': {
+        const [a] = ciblesColonie(v?.a, ctx), [b] = ciblesColonie(v?.b, ctx, a);
+        if (!a || !b || a === b) break;
+        const d = Number(v.delta) || 0;
+        adjustAffinity(a.id, b.id, d);
+        dire(d >= 0 ? 'good' : 'bad', `Entente ${a.name} ↔ ${b.name} ${d >= 0 ? '+' : ''}${d} → ${relationType(affinityBetween(a.id, b.id)).label}`);
+        break;
+      }
+      case 'brouille': {
+        const [a] = ciblesColonie(v?.a, ctx), [b] = ciblesColonie(v?.b, ctx, a);
+        if (!a || !b || a === b) break;
+        const k = relKey(a.id, b.id);
+        if (!S.relations) S.relations = {};
+        S.relations[k] = Math.min(-30, (S.relations[k] || 0) - 25);
+        dire('bad', `${a.name} et ${b.name} se brouillent durablement.`, true);
+        break;
+      }
+      case 'monde':
+        if (!S.monde || typeof S.monde !== 'object') S.monde = {};
+        N.appliquerDrapeaux(S.monde, e.valeurs);
+        break;
+      case 'recrute': recruterColonie(e.valeur, ctx, dire); break;
+      case 'reputation': {
+        const f = factionVisee(e.faction, ctx);
+        if (!f || !e.delta) break;
+        adjustReputation(f.id, e.delta);
+        dire(e.delta > 0 ? 'good' : 'bad', `${f.name} : réputation ${e.delta > 0 ? '+' : ''}${e.delta}`, true);
+        break;
+      }
+      case 'journal': log('neutral', rendu(e.valeur).html.replace(/<\/?p>/g, ' ').trim()); break;
+      case 'annales': noterMarque(rendu(e.valeur).brut); break;
+      case 'module': {
+        const id = v?.id || ctx.module;
+        if (!S.modules?.[id]) break;
+        for (let i = 0; i < Math.min(5, -(Number(v.niveau) || 0)); i++) {
+          const msg = damageModule(id);
+          if (msg) dire('bad', msg, true);
+        }
+        if (v.horsService !== undefined) {
+          const d = N.parseDuree(v.horsService);
+          if (Number.isFinite(d) && d > 0) {
+            S.modules[id].disabledUntil = Math.max(S.modules[id].disabledUntil || 0, now + d);
+            dire('bad', `${MODULES[id]?.nom || id} hors service pendant ${fmtDuree(d)}`, true);
+          }
+        }
+        break;
+      }
+      case 'effetTemporaire': {
+        const d = N.parseDuree(v?.duree);
+        if (typeof v?.prod !== 'number' || !Number.isFinite(d)) break;
+        if (!Array.isArray(S.activeBuffs)) S.activeBuffs = [];
+        S.activeBuffs.push({ type: 'prodMult', value: v.prod, label: v.titre || 'Effet temporaire', sourceLabel: ctx.titre || 'Colonie', duration: d, startedAt: now, expiresAt: now + d });
+        dire(v.prod < 1 ? 'bad' : 'good', `Effet en cours : ${v.titre || 'production modifiée'} (${fmtDuree(d)})`, true);
+        break;
+      }
+      case 'incident': {
+        const dans = N.parseDuree(v?.dans ?? '1h');
+        if (!INCIDENTS[v?.id] || !Number.isFinite(dans)) break;
+        if (!Array.isArray(S.pendingChainIncidents)) S.pendingChainIncidents = [];
+        S.pendingChainIncidents.push({ incidentId: v.id, triggerAt: now + dans });
+        break;
+      }
+      case 'retardRecherche': {
+        const d = N.parseDuree(e.valeur);
+        if (!Number.isFinite(d) || !(S.research || []).length) break;
+        for (const r of S.research) r.doneMin = Math.max(0, (r.doneMin || 0) - d);
+        dire('bad', `Recherche en cours retardée de ${fmtDuree(d)}`, true);
+        break;
+      }
+      case 'bonusPermanent':
+        if (!BONUS_PERMANENTS[e.valeur]) break;
+        if (!S.permanentBonuses) S.permanentBonuses = {};
+        S.permanentBonuses[e.valeur] = true;
+        dire('good', `Bonus permanent : ${BONUS_PERMANENTS[e.valeur]}`, true);
+        break;
+      case 'technologie':
+        // Trace : canResearch() vérifie l'arc requis (prereq.requireArc) ; la liste
+        // sert à l'affichage et aux sauvegardes.
+        if (!S.unlockedLegendaryTechs) S.unlockedLegendaryTechs = {};
+        S.unlockedLegendaryTechs[e.valeur] = true;
+        dire('good', `Technologie accessible : ${TECH_TREE[e.valeur]?.nom || e.valeur}`, true);
+        break;
+    }
+  }
+  return out;
+}
+
+// Bonus permanents connus (effet bonusPermanent) → libellé
+export const BONUS_PERMANENTS = {
+  avant_poste_autonome: '+10 % sur toute production',
+};
+
+// Réactions des proches : ce qui arrive au protagoniste d'un événement touche
+// ses amis (et réjouit ses rivaux). Tonalité : le moral donné, sinon le ton.
+function reactionsDesProches(ctx, out) {
+  const p = ctx.principal;
+  if (!p || p.statut === 'mort' || ctx.kind !== 'event') return;
+  const tone = out.moral ? Math.sign(out.moral) : ctx.def.ton === 'positif' ? 1 : ctx.def.ton === 'negatif' ? -1 : 0;
+  if (!tone) return;
+  const { friends, rivals } = significantRelations(p.id);
+  const proches = friends.filter(f => f.member !== ctx.secondaire && presentBase(f.member));
+  if (proches.length) {
+    const d = tone > 0 ? 4 : -5;
+    for (const f of proches) f.member.moral = Math.max(0, Math.min(100, f.member.moral + d));
+    const noms = proches.map(f => f.member.name).join(', ');
+    out.effets.push({ kind: tone > 0 ? 'good' : 'bad', text: tone > 0 ? `Ses proches (${noms}) partagent le moment — moral +${d}` : `Ses proches (${noms}) encaissent avec ${p.name} — moral ${d}` });
+  }
+  if (tone < 0 && rivals.length) {
+    for (const r of rivals) r.member.moral = Math.min(100, r.member.moral + 2);
+    out.effets.push({ kind: 'neutral', text: `${rivals.map(r => r.member.name).join(', ')} ne cache${rivals.length > 1 ? 'nt' : ''} pas une certaine satisfaction.` });
+  }
+}
+
+// ---- Choix : vue, résolution automatique, application ----
+// Score d'une liste d'effets pour le choix automatique : on évite d'abord les
+// dégâts durables (niveau perdu, blessure, incident en chaîne), puis ce qui coûte.
+function scoreEffets(list) {
+  let s = 0;
+  for (const brut of list || []) {
+    const e = N.normaliserEffet(brut), v = brut?.[e.type];
+    switch (e.type) {
+      case 'perte': for (const n of Object.values(e.valeurs)) s -= n * 0.1; break;
+      case 'gain': for (const n of Object.values(e.valeurs)) s += n * 0.1; break;
+      case 'moral': s += (e.valeur || 0) * 5 / 3; break;
+      case 'statut': s -= 30; break;
+      case 'module': if ((v?.niveau || 0) < 0) s -= 100; if (v?.horsService) s -= (N.parseDuree(v.horsService) || 0) / 600; break;
+      case 'incident': s -= 50; break;
+      case 'effetTemporaire': s += (v?.prod ?? 1) < 1 ? -20 : 10; break;
+      case 'brouille': s -= 15; break;
+      case 'retardRecherche': s -= (N.parseDuree(e.valeur) || 0) / 300; break;
+      case 'schema': case 'objet': s += 10; break;
+      case 'affinite': s += (Number(v?.delta) || 0) * 0.2; break;
+    }
+  }
+  return s;
+}
+
+// Choix automatique « sûr » (rattrapage, file pleine) : visible et possible, sans
+// prérequis ni objet consommé, et qui ne fait entrer personne ; un coût est
+// accepté s'il est payable. Un choix sans test est préféré, au meilleur score.
+function choixAuto(def, ctx) {
+  const env = envChoixColonie(ctx);
+  const elig = [];
+  (def.choix || []).forEach((c, i) => {
+    if (c.requiert !== undefined || c.consomme !== undefined || ajouteUnColon(c)) return;
+    const a = N.analyserChoix(c, env);
+    if (a.visible && a.disponible) elig.push({ c, i });
+  });
+  const surs = elig.filter(x => !x.c.test);
+  const pool = surs.length ? surs : elig;
+  let best = null, bestScore = -Infinity;
+  for (const x of pool) {
+    const sc = x.c.test ? 0 : scoreEffets(x.c.effets) - Object.values(x.c.cout || {}).reduce((s, n) => s + n * 0.1, 0);
+    if (sc > bestScore) { best = x; bestScore = sc; }
+  }
+  return best ? best.i : -1;
+}
+
+const libelleDe = (c, ctx) => N.rendreTexte(c.label, envTexteColonie(ctx)).brut;
+
+// Vue d'une décision pour l'interface :
+// { id, kind, refId, titre, surtitre, ton, gravite: { id, nom, niveau } | null,
+//   module, personnage, texteHTML,
+//   choix: [{ index, label, disponible, raison, chance, acteur, test, cout, consomme, recrue }] }
+// Les choix cachés (si faux) ne figurent pas dans la liste ; index = celui du contenu.
+export function vueDecision(decOrId) {
+  const dec = typeof decOrId === 'string' ? (S.pendingDecisions || []).find(d => d.id === decOrId) : decOrId;
+  if (!dec) return null;
+  convertirDecision(dec);
+  const def = defDecision(dec);
+  if (!def) return null;
+  const acteurs = acteursDecision(dec, def);
+  if (!acteurs) return null;
+  preparerRecrues(dec, def);
+  const ctx = contexteDecision(dec, def, acteurs);
+  const env = envChoixColonie(ctx);
+  const choix = [];
+  def.choix.forEach((c, i) => {
+    const a = N.analyserChoix(c, env);
+    if (!a.visible) return;
+    const recrue = recruePrevue(dec, c, i);
+    choix.push({
+      index: i,
+      label: libelleDe(c, ctx),
+      disponible: a.disponible,
+      raison: a.raison ? a.raison.replace(/ dans l'équipe/g, ' parmi les colons présents') : null,
+      chance: a.chance,
+      acteur: a.acteur?.nom || null,
+      test: a.test,
+      cout: Object.entries(c.cout || {}).map(([res, n]) => ({ res, nom: RES_LABELS[res] || res, n, ok: (S.res[res] || 0) >= n })),
+      consomme: [].concat(c.consomme ?? []).map(id => ({ id, nom: itemDef(id)?.nom || id, ok: (S.inventory?.[id] || 0) > 0 })),
+      recrue: recrue ? { nom: recrue.name, salaire: salaryPerDay(recrue) } : null,
+    });
+  });
+  const g = dec.kind === 'incident' ? (GRAVITES_INCIDENT[def.gravite] ? def.gravite : GRAVITE_DEFAUT) : null;
+  return {
+    id: dec.id, kind: dec.kind, refId: dec.refId,
+    titre: def.titre,
+    surtitre: dec.kind === 'incident' ? (def.ton === 'positif' ? 'Bonne nouvelle' : 'Incident') : 'Événement',
+    theme: def.theme || null,
+    ton: def.ton || (dec.kind === 'incident' ? 'negatif' : 'neutre'),
+    gravite: g ? { id: g, nom: GRAVITES_INCIDENT[g].nom, niveau: GRAVITES_INCIDENT[g].niveau } : null,
+    module: def.module ? MODULES[def.module]?.nom || def.module : null,
+    personnage: def.personnage ? PERSONNAGES[def.personnage]?.nom || null : null,
+    texteHTML: N.rendreTexte(def.texte, envTexteColonie(ctx)).html,
+    choix,
+  };
+}
+
+// Applique le choix `index` d'une décision (sans la retirer de la file).
+// Renvoie { ok: false, why } ou { ok: true, resultat: { titre, label, texteHTML,
+// textes, effets, jet, ton } }. opts.auto : décision automatique (journal résumé).
+function resoudre(dec, index, opts = {}) {
+  convertirDecision(dec);
+  const def = defDecision(dec);
+  if (!def) return { ok: false, why: 'Décision inconnue', caduque: true };
+  const acteurs = acteursDecision(dec, def);
+  if (!acteurs) return { ok: false, why: 'Cette situation n’a plus lieu d’être', caduque: true };
+  const choix = def.choix?.[index];
+  if (!choix) return { ok: false, why: 'Choix inconnu' };
+  if (opts.auto && ajouteUnColon(choix)) return { ok: false, why: 'Accueillir un colon est une décision du joueur' };
+  preparerRecrues(dec, def);
+  const ctx = contexteDecision(dec, def, acteurs);
+  ctx.titre = def.titre;
+  ctx.choixIndex = index;
+  const env = envChoixColonie(ctx);
+  const a = N.analyserChoix(choix, env);
+  if (!a.visible || !a.disponible) return { ok: false, why: a.raison || 'Choix impossible' };
+  const label = libelleDe(choix, ctx);
+  const out = ctx.sortie = { textes: [], effets: [], moral: 0 };
+  // Coût et objets consommés, payés avant les effets
+  for (const [k, n] of Object.entries(choix.cout || {})) {
+    S.res[k] = Math.max(0, (S.res[k] || 0) - n);
+    out.effets.push({ kind: 'bad', text: `−${n} ${RES_LABELS[k] || k}` });
+  }
+  for (const id of [].concat(choix.consomme ?? [])) {
+    S.inventory[id] = (S.inventory[id] || 0) - 1;
+    if (S.inventory[id] <= 0) delete S.inventory[id];
+    out.effets.push({ kind: 'neutral', text: `${itemDef(id)?.nom || id} utilisé` });
+  }
+  let jet = null;
+  if (choix.test) {
+    jet = N.lancerTest(choix.test, env.equipe, Math.random);
+    ctx.acteur = membreParId(jet.colon?.id) || null;
+  } else if (a.acteur) {
+    ctx.acteur = membreParId(a.acteur.id);
+  }
+  appliquerEffetsColonie(N.brancheDe(choix, jet), ctx);
+  reactionsDesProches(ctx, out);
+  if (!out.effets.length) out.effets.push({ kind: 'neutral', text: 'Aucune conséquence notable.' });
+  // Mémoire : nombre de résolutions, acteurs (délai par acteur)
+  if (dec.kind === 'event') {
+    const mem = memoireEvenement(def.id);
+    mem.n = (mem.n || 0) + 1;
+    for (const m of Object.values(acteurs)) if (m?.id) mem.acteurs[m.id] = S.meta.gameMin;
+    S.lastColonyEventId = def.id;
+  }
+  // Journal : une ligne (titre, choix, récit, conséquences durables)
+  const positif = def.ton === 'positif';
+  const recit = out.textes.map(t => esc(sansBalises(t)).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\*(.+?)\*/g, '<em>$1</em>')).join(' ');
+  const notes = out.effets.filter(x => x.note).map(x => esc(x.text)).join(' · ');
+  const quoi = opts.auto ? `décision automatique : « ${esc(label)} »` : `« ${esc(label)} »`;
+  log(positif ? 'success' : 'warn', `<b>${esc(def.titre)}</b> — ${quoi}. ${[recit, notes].filter(Boolean).join(' ')}`.trim());
+  if (opts.auto) recordAutoResolution(dec.kind, def.titre, label);
+  return {
+    ok: true,
+    resultat: {
+      titre: def.titre, label, ton: def.ton || null,
+      textes: out.textes,
+      texteHTML: N.htmlDepuisSource(out.textes),
+      effets: out.effets.map(({ kind, text }) => ({ kind, text })),
+      jet: jet ? { libelle: jet.libelle, jet: jet.jet, bonus: jet.bonus, total: jet.total, difficulte: jet.difficulte, reussite: jet.reussite, colon: jet.colon?.nom || null } : null,
+    },
+  };
+}
+
+// Choix du joueur sur une décision de la file : appliqué puis retiré de la file.
+// → { ok, why?, resultat? }
+export function choisirDecision(decId, index) {
+  const dec = (S.pendingDecisions || []).find(d => d.id === decId);
+  if (!dec) return { ok: false, why: 'Décision déjà tranchée' };
+  const r = resoudre(dec, index);
+  if (r.ok || r.caduque) removeDecision(decId);
+  return r;
+}
+
+// Résolution automatique d'une décision (file pleine, rattrapage) ; false si
+// aucun choix sûr n'existe (elle est alors abandonnée).
+function autoResolveDecision(dec) {
+  convertirDecision(dec);
+  const def = defDecision(dec);
+  if (!def) return false;
+  const acteurs = acteursDecision(dec, def);
+  if (!acteurs) return false;
+  const idx = choixAuto(def, contexteDecision(dec, def, acteurs));
+  if (idx < 0) return false;
+  return resoudre(dec, idx, { auto: true }).ok;
+}
+
+// ============================================================
+//   INCIDENTS — tirage et déclenchement
+// ============================================================
 // Applique un gain plafonné à la capacité (sans jamais réduire un stock
 // déjà au-dessus). Renvoie la quantité réellement gagnée.
 function addResourceCapped(k, amt) {
@@ -3195,53 +3683,16 @@ function removeResourceCapped(k, amt) {
   return before - S.res[k];
 }
 
-// Score d'un résultat pour le choix automatique : on évite d'abord les dégâts
-// durables (niveau perdu, blessure, incident en chaîne), puis ce qui coûte.
-function outcomeScore(o) {
-  let s = 0;
-  for (const k in o.loss || {}) s -= o.loss[k] * OUTCOME_MULT * 0.1;
-  for (const k in o.gain || {}) s += o.gain[k] * OUTCOME_MULT * 0.1;
-  if (o.moralAll) s += o.moralAll * 5;
-  if (o.status) s -= 30;
-  if (o.damageModule) s -= 100;
-  if (o.chainIncident) s -= 50;
-  if (o.debuff) s -= 20;
-  if (o.disableModule) s -= o.disableModule / 60;
-  if (o.generateRivalry) s -= 15;
-  if (o.delayResearch) s -= o.delayResearch * OUTCOME_MULT / 30;
-  if (o.spawnVisitor) s += 10;
-  if (o.randomBlueprint) s += 10;
-  if (o.adjustAffinity) s += (o.adjustAffinity.delta || 0) * 0.2;
-  return s;
-}
-
-// Choix automatique « sûr » (rattrapage hors ligne, file de décisions pleine) :
-// ni prérequis, ni objet consommé, ni coût impayable ; un choix non risqué
-// est préféré, au meilleur score.
-function pickAutoChoice(choices) {
-  const eligible = (choices || []).filter(c => !c.req && !c.consume && choiceAffordable(c));
-  const safe = eligible.filter(c => !c.risky);
-  const pool = safe.length ? safe : eligible;
-  let best = null;
-  let bestScore = -Infinity;
-  for (const c of pool) {
-    const sc = c.risky ? 0 : outcomeScore(c.outcome || {});
-    if (sc > bestScore) { best = c; bestScore = sc; }
-  }
-  return best;
-}
-
-// Liste les bâtiments construits qui peuvent générer un incident
+// Bâtiments construits qui peuvent générer un incident, avec leurs candidats
 function eligibleIncidentBuildings() {
   const out = [];
+  const lire = lecteurColonie();
   for (const modKey in S.modules) {
-    if (!S.modules[modKey] || !S.modules[modKey].level) continue;
-    const candidates = Object.entries(INCIDENTS).filter(([_, inc]) => {
-      if (inc.modKey !== modKey) return false;
-      if (inc.requireMinLevel && S.modules[modKey].level < inc.requireMinLevel) return false;
-      return true;
-    });
-    if (candidates.length > 0) out.push({ modKey, candidates: candidates.map(([id]) => id) });
+    const lvl = S.modules[modKey]?.level || 0;
+    if (!lvl) continue;
+    const candidates = CONTENU_INCIDENTS.filter(inc => inc.module === modKey && lvl >= (inc.niveauMin || 1)
+      && (inc.si === undefined || conditionSure(inc.si, lire)));
+    if (candidates.length) out.push({ modKey, candidates });
   }
   return out;
 }
@@ -3251,14 +3702,13 @@ function incidentProbability(modKey) {
   const lvl = S.modules[modKey]?.level || 0;
   if (lvl === 0) return 0;
   const eff = moduleEfficiency(modKey);
-  // Base : ~1 incident toutes les 12-24h selon niveau
   // V1 : une fois l'espacement écoulé, l'incident survient en quelques minutes ;
   // la sécurité et le commandement retardent son arrivée.
-  const baseHourlyRate = 0.04 + 0.01 * lvl;       // niv 1 = 5 %, niv 5 = 9 % (par minute réelle)
+  const baseRate = 0.04 + 0.01 * lvl;                     // niv 1 = 5 %, niv 5 = 9 % (par minute réelle)
   const securityFactor = 1 - (eff.securityBonus * 0.30);  // chaque poste sécurité = -30%
-  const cmdFactor = 1 - globalCommandBonus() * 0.08;  // chaque cmd = -8% global
-  const hourlyRate = Math.max(0.005, baseHourlyRate * securityFactor * cmdFactor);
-  return hourlyRate * (MIN_PER_TICK / 60);
+  const cmdFactor = 1 - globalCommandBonus() * 0.08;      // chaque cmd = -8% global
+  const rate = Math.max(0.005, baseRate * securityFactor * cmdFactor);
+  return rate * (MIN_PER_TICK / 60);
 }
 
 // Tirage par tick : pour chaque bâtiment, tente un incident.
@@ -3266,23 +3716,16 @@ function incidentProbability(modKey) {
 // tirage tant que PACING.INCIDENT_QUEUE_MAX incidents attendent le joueur.
 // silent (rattrapage) : seuls les incidents mineurs sont résolus automatiquement.
 export function tickIncidents(silent = false) {
-  // Cooldown global : pas d'incident trop rapproché
   if (S.meta.gameMin < S.nextIncidentMin) return;
   const waiting = (S.pendingDecisions || []).filter(d => d.kind === 'incident').length;
   if (waiting >= PACING.INCIDENT_QUEUE_MAX) {
     S.nextIncidentMin = S.meta.gameMin + PACING.INCIDENT_GAP_MIN / 2;
     return;
   }
-
-  const elig = eligibleIncidentBuildings();
-  if (elig.length === 0) return;
-
-  // Pour chaque bâtiment, tente de tirer un incident
-  for (const { modKey, candidates } of elig) {
+  for (const { modKey, candidates } of eligibleIncidentBuildings()) {
     if (Math.random() < incidentProbability(modKey)) {
-      // Choisit aléatoirement un incident parmi les candidats du bâtiment
-      const id = candidates[Math.floor(Math.random() * candidates.length)];
-      triggerIncident(id, silent);
+      const inc = tirerPondere(candidates, x => x.poids ?? 1, Math.random);
+      if (inc) triggerIncident(inc.id, silent);
       S.nextIncidentMin = S.meta.gameMin + PACING.INCIDENT_GAP_MIN
         + Math.floor(Math.random() * (PACING.INCIDENT_GAP_MAX - PACING.INCIDENT_GAP_MIN));
       return;
@@ -3290,202 +3733,27 @@ export function tickIncidents(silent = false) {
   }
 }
 
-// Colon « victime » : préfère le staff du bâtiment, sinon un libre, sinon n'importe quel vivant
-function pickIncidentVictim(inc) {
-  const staff = staffOf(inc.modKey).map(s => s.member);
-  if (staff.length) return rPick(staff);
-  const free = aliveCrew().filter(m => m.statut === 'libre');
-  if (free.length) return rPick(free);
-  // Dernier repli : n'importe quel colon présent à la base (jamais un absent)
-  const atBase = aliveCrew().filter(m => memberLocation(m) === 'base');
-  return atBase.length ? rPick(atBase) : null;
-}
-
-// Incident mineur : gravité 1 (résolu automatiquement pendant une absence)
-function isMinorIncident(incidentId) {
-  return (INCIDENTS[incidentId]?.severity || 1) <= 1;
-}
-
 // Déclenche un incident : en direct, il rejoint la file des décisions du
-// joueur ; en silencieux (rattrapage), V1 : seul un incident mineur est résolu
+// joueur ; en silencieux (rattrapage), seul un incident mineur est résolu
 // automatiquement, les autres attendent le retour du joueur dans la file.
 export function triggerIncident(incidentId, silent = false) {
   const inc = INCIDENTS[incidentId];
-  if (!inc) return;
-  if (!MODULES[inc.modKey]) return;
+  if (!inc || !MODULES[inc.module]) return;
   const victim = pickIncidentVictim(inc);
   if (!victim) return;
-
+  const dec = { id: uid('dec'), kind: 'incident', refId: incidentId, acteurs: { victime: victim.id }, createdAt: S.meta.gameMin, v: 1 };
   if (silent && isMinorIncident(incidentId)) {
-    autoResolveIncident(incidentId, victim);
+    autoResolveDecision(dec);
     return;
   }
-  enqueueDecision({ kind: 'incident', refId: incidentId, victimId: victim.id, offline: silent || undefined });
-  // 0.26 : notification dédiée (critique, pour qu'on la voie même si on est ailleurs)
+  if (silent) dec.offline = true;
+  enqueueDecision(dec);
   if (!silent) notif.incident(incidentTitle(incidentId));
 }
 
-function autoResolveIncident(incidentId, victim) {
-  const inc = INCIDENTS[incidentId];
-  if (!inc) return;
-  const choice = pickAutoChoice(inc.choices);
-  if (!choice) return;
-  if (applyIncidentChoice(inc, choice, victim, { auto: true }) !== false) {
-    recordAutoResolution('incident', incidentTitle(incidentId), fillAmounts(choice.label, choice.outcome));
-  }
-}
-
-// Dégâts sur un module : perd un niveau (minimum 1). Les postes au-delà du
-// nouveau niveau disparaissent : leurs occupants sont libérés (et réaffectés
-// si possible). Un chantier en cours sur ce module reconstruit le niveau perdu
-// au lieu de sauter un niveau. Renvoie la ligne de journal.
-function damageModule(modKey) {
-  const mod = S.modules[modKey];
-  if (!mod) return null;
-  const nom = MODULES[modKey]?.nom || modKey;
-  if (mod.level <= 1) return `<em>${nom}</em> a subi des dégâts mais reste fonctionnel au minimum.`;
-  mod.level--;
-  const freed = [];
-  for (const key of Object.keys(S.assignments || {})) {
-    const [k, idxStr] = key.split(':');
-    const idx = parseInt(idxStr, 10);
-    if (k !== modKey || !(idx >= mod.level)) continue;
-    freed.push(S.assignments[key]);
-    unassignSlot(modKey, idx);
-  }
-  for (const id of freed) autoAssignMember(id);
-  if (S.build?.id === modKey && S.build.targetLevel > mod.level + 1) S.build.targetLevel = mod.level + 1;
-  return `<em>${nom}</em> est endommagé : niveau ramené à ${mod.level}.`;
-}
-
-// Applique l'outcome d'un choix d'incident. Renvoie false si le choix est
-// impossible (prérequis, objet, stock). opts.auto : décision automatique —
-// pas de toast, et une seule ligne de journal résume tout.
-export function applyIncidentChoice(inc, choice, victim, opts = {}) {
-  const auto = !!opts.auto;
-  const notes = [];
-  const say = (kind, txt) => { if (auto) notes.push(txt); else log(kind, txt); };
-  const team = incidentTeam(inc);
-
-  // Vérifications de prérequis (skill, stock, item)
-  if (choice.req?.skill && !skillReqMet(choice.req, team)) {
-    if (!auto) toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`);
-    return false;
-  }
-  if (!choiceAffordable(choice)) {
-    if (!auto) toast(`Stock insuffisant : ${amountsText(choice.outcome.loss)}`);
-    return false;
-  }
-  if (choice.consume?.item) {
-    const itemId = choice.consume.item;
-    if ((S.inventory?.[itemId] || 0) <= 0) {
-      if (!auto) toast(`Stock insuffisant : ${ITEMS[itemId]?.nom || itemId}`);
-      return false;
-    }
-    S.inventory[itemId]--;
-    if (S.inventory[itemId] <= 0) delete S.inventory[itemId];
-  }
-
-  // Détermine outcome (gestion risky)
-  let outcome = choice.outcome;
-  if (choice.risky) {
-    const bestStat = team.length > 0 ? Math.max(...team.map(m => m.stats?.[choice.risky.stat] || 5)) : 5;
-    const roll = 1 + Math.floor(Math.random() * 10);
-    const total = roll + Math.floor((bestStat - 5) / 2);
-    const success = total >= choice.risky.dc;
-    outcome = success ? choice.risky.success : choice.risky.fail;
-  }
-  if (!outcome) return true;
-
-  const workerHTML = victim ? `<em>${esc(victim.name)}</em>` : 'un colon';
-  if (outcome.log) say(inc.positive ? 'success' : 'warn', outcome.log.replace(/\{worker\}/g, workerHTML));
-
-  // Applique (pertes plafonnées au stock ; gains plafonnés à la capacité)
-  if (outcome.loss) {
-    for (const k in outcome.loss) removeResourceCapped(k, outcome.loss[k] * OUTCOME_MULT);
-  }
-  if (outcome.gain) {
-    for (const k in outcome.gain) addResourceCapped(k, outcome.gain[k] * OUTCOME_MULT);
-  }
-  if (outcome.status) {
-    let target = victim;
-    if (outcome.target === 'random') {
-      const pool = aliveCrew();
-      target = pool[Math.floor(Math.random() * pool.length)] || victim;
-    }
-    if (target) inflictStatus(target, outcome.status, "incident");
-  }
-  if (outcome.moralAll) {
-    // 0.28 : moral durable — la valeur est × 3 pour avoir un impact ressenti
-    // (était souvent -2/+2 jusqu'ici, donc devient -6/+6, et ça affecte TOUS les colons)
-    for (const m of aliveCrew()) {
-      m.moral = Math.max(0, Math.min(100, m.moral + outcome.moralAll * 3));
-    }
-  }
-  if (outcome.delayResearch && S.research?.length > 0) {
-    for (const r of S.research) r.doneMin = Math.max(0, r.doneMin - legacyDuration(outcome.delayResearch * OUTCOME_MULT));
-  }
-
-  // 0.28 : NOUVEAUX EFFETS DURABLES
-  // — damageModule : module perd un niveau (effet sévère, permanent jusqu'à reconstruction)
-  if (outcome.damageModule && inc.modKey) {
-    const msg = damageModule(inc.modKey);
-    if (msg) say('warn', msg);
-  }
-  // — disableModule : module hors service pendant N minutes-jeu
-  if (outcome.disableModule && inc.modKey) {
-    const duration = legacyDuration(outcome.disableModule);
-    const mod = S.modules[inc.modKey];
-    if (mod) {
-      mod.disabledUntil = (S.meta.gameMin || 0) + duration;
-      say('warn', `<em>${MODULES[inc.modKey].nom}</em> hors service pour ${fmtDuree(duration)}.`);
-    }
-  }
-  // — debuff : pénalité globale temporaire (ex: { type: 'prodMult', value: 0.8, duration: 1440 })
-  if (outcome.debuff) {
-    if (!S.activeBuffs) S.activeBuffs = [];
-    S.activeBuffs.push({
-      ...outcome.debuff,
-      sourceLabel: inc.titre || 'Incident',
-      startedAt: S.meta.gameMin,
-      expiresAt: (S.meta.gameMin || 0) + legacyDuration(outcome.debuff.duration || 720)
-    });
-    say('warn', `Effet en cours : ${outcome.debuff.label || 'modulation temporaire'}.`);
-  }
-  // — generateRivalry : crée une rivalité durable entre la victime et un autre colon
-  if (outcome.generateRivalry && victim) {
-    const others = aliveCrew().filter(m => m.id !== victim.id);
-    if (others.length > 0) {
-      const other = others[Math.floor(Math.random() * others.length)];
-      const key = [victim.id, other.id].sort().join('|');
-      if (!S.relations) S.relations = {};
-      S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-      say('warn', `<em>${esc(victim.name)}</em> et <em>${esc(other.name)}</em> se brouillent durablement.`);
-    }
-  }
-  // — chainIncident : déclenche un autre incident plus tard (cf. tickOnce)
-  if (outcome.chainIncident) {
-    if (!S.pendingChainIncidents) S.pendingChainIncidents = [];
-    S.pendingChainIncidents.push({
-      incidentId: outcome.chainIncident.id,
-      triggerAt: (S.meta.gameMin || 0) + legacyDuration(outcome.chainIncident.delay || 720)
-    });
-  }
-  // — historicalMark : entrée dans le journal historique de la colonie
-  if (outcome.historicalMark) {
-    if (!S.historicalMarks) S.historicalMarks = [];
-    S.historicalMarks.push({
-      at: S.meta.gameMin,
-      text: outcome.historicalMark,
-      victim: victim?.name || null
-    });
-  }
-
-  if (auto) {
-    log(inc.positive ? 'success' : 'warn',
-      `<b>${esc(inc.titre || 'Incident')}</b> — décision automatique : « ${esc(fillAmounts(choice.label, choice.outcome))} ». ${notes.join(' ')}`.trim());
-  }
-  return true;
+// Compatibilité : ancien rollColonyIncident remplacé par tickIncidents
+export function rollColonyIncident(silent = false) {
+  tickIncidents(silent);
 }
 
 // ============================================================
@@ -3520,11 +3788,12 @@ function syncPendingFlags() {
 
 function enqueueDecision(dec) {
   if (!Array.isArray(S.pendingDecisions)) S.pendingDecisions = [];
-  S.pendingDecisions.push({ id: uid('dec'), createdAt: S.meta.gameMin, ...dec });
+  S.pendingDecisions.push({ id: uid('dec'), createdAt: S.meta.gameMin, v: 1, ...dec });
   while (S.pendingDecisions.length > MAX_PENDING_DECISIONS) {
-    // V1 : la plus ancienne décision MINEURE (incident de gravité 1) qui n'est pas
-    // à l'écran est tranchée automatiquement ; à défaut, la plus ancienne.
+    // La plus ancienne décision MINEURE (incident de gravité 1) qui n'est pas à
+    // l'écran est tranchée automatiquement ; à défaut, la plus ancienne.
     const q = S.pendingDecisions;
+    q.forEach(convertirDecision);
     let idx = q.findIndex(d => d.id !== _shownDecisionId && d.kind === 'incident' && isMinorIncident(d.refId));
     if (idx < 0) idx = q.findIndex(d => d.id !== _shownDecisionId);
     const [old] = q.splice(idx, 1);
@@ -3539,62 +3808,6 @@ function removeDecision(id) {
   if (i >= 0) S.pendingDecisions.splice(i, 1);
   if (_shownDecisionId === id) _shownDecisionId = null;
   syncPendingFlags();
-}
-
-function autoResolveDecision(dec) {
-  if (dec.kind === 'incident') {
-    if (INCIDENTS[dec.refId]) autoResolveIncident(dec.refId, resolveIncidentVictim(dec));
-  } else if (dec.kind === 'event') {
-    const actors = resolveEventActors(dec);
-    if (actors) autoResolveColonyEvent(dec.refId, actors);
-  }
-}
-
-// Victime d'un incident en attente, revalidée : morte ou partie de la base
-// entre-temps (expédition, mission) → un autre colon présent
-function resolveIncidentVictim(dec) {
-  const v = S.crew.find(m => m.id === dec.victimId);
-  if (v && v.statut !== 'mort' && memberLocation(v) === 'base') return v;
-  const inc = INCIDENTS[dec.refId];
-  const nv = inc ? pickIncidentVictim(inc) : null;
-  if (nv) dec.victimId = nv.id;
-  return nv;
-}
-
-// Acteurs d'un événement en attente, revalidés : un acteur vivant à la
-// création et mort depuis (ou disparu) rend l'événement caduc → nouveaux
-// acteurs si l'événement est toujours d'actualité, sinon null.
-function resolveEventActors(dec) {
-  const ev = COLONY_EVENTS[dec.refId];
-  if (!ev) return null;
-  const ids = dec.actorIds || {};
-  const wasDead = dec.actorsDead || {};
-  const get = role => (ids[role] ? S.crew.find(m => m.id === ids[role]) || null : null);
-  const valid = role => {
-    if (!ids[role]) return true;
-    const m = get(role);
-    // Un acteur mort à la création reste valable (deuil…) ; sinon il doit
-    // être vivant et présent à la base au moment de la décision.
-    return !!m && (wasDead[role] || (m.statut !== 'mort' && memberLocation(m) === 'base'));
-  };
-  if (valid('primary') && valid('secondary')) return { primary: get('primary'), secondary: get('secondary') };
-  try {
-    if (ev.condition()) {
-      const a = ev.pickActors();
-      if (a) {
-        Object.assign(dec, decisionActors(a));
-        return a;
-      }
-    }
-  } catch (e) { /* événement plus d'actualité */ }
-  return null;
-}
-
-function decisionActors(actors) {
-  return {
-    actorIds: { primary: actors?.primary?.id || null, secondary: actors?.secondary?.id || null },
-    actorsDead: { primary: actors?.primary?.statut === 'mort', secondary: actors?.secondary?.statut === 'mort' }
-  };
 }
 
 // Une fenêtre est-elle déjà ouverte (modale, scène d'expédition) ?
@@ -3635,441 +3848,148 @@ export function pumpDecisions() {
   }
 }
 
+// Affiche une décision ; false si elle est caduque (ou tranchée faute de colon).
 function showDecision(dec) {
-  if (dec.kind === 'incident') {
-    const inc = INCIDENTS[dec.refId];
-    if (!inc) return false;
-    const victim = resolveIncidentVictim(dec);
-    if (!victim) {
-      // Plus personne pour y faire face : résolu automatiquement
-      autoResolveIncident(dec.refId, null);
-      return false;
-    }
-    _shownDecisionId = dec.id;
-    openDecisionModal(renderIncidentContent(inc, victim), () => hookIncidentModal(dec.id));
-    return true;
+  convertirDecision(dec);
+  const def = defDecision(dec);
+  if (!def) return false;
+  if (dec.kind === 'incident' && !acteursDecision(dec, def)) {
+    // Plus personne pour y faire face : résolu automatiquement s'il existe un choix sûr
+    resoudreSansActeur(dec, def);
+    return false;
   }
-  if (dec.kind === 'event') {
-    if (!COLONY_EVENTS[dec.refId]) return false;
-    const actors = resolveEventActors(dec);
-    if (!actors) return false;   // événement caduc
-    _shownDecisionId = dec.id;
-    openDecisionModal(renderColonyEventContent(dec.refId, actors), () => hookColonyEventModal(dec.id));
-    return true;
-  }
-  return false;
+  const vue = vueDecision(dec);
+  if (!vue) return false;   // événement caduc
+  _shownDecisionId = dec.id;
+  openDecisionModal(renderDecision(vue), () => hookDecisionModal(dec.id));
+  return true;
 }
 
-function renderIncidentContent(inc, victim) {
-  const def = MODULES[inc.modKey];
-  const text = inc.text.replace(/\{worker\}/g, victim ? esc(victim.name) : 'un colon');
-  const severityLabel = ['', 'Mineur', 'Sérieux', 'Critique'][inc.severity || 1];
-  const severityClass = ['', 'ok', 'warn', 'rust'][inc.severity || 1];
-  const team = incidentTeam(inc);
+// Incident sans personne à la base : choix sûr appliqué, sans victime
+function resoudreSansActeur(dec, def) {
+  const ctx = contexteDecision(dec, def, {});
+  const idx = choixAuto(def, ctx);
+  if (idx < 0) return;
+  const c = def.choix[idx];
+  ctx.titre = def.titre;
+  const out = appliquerEffetsColonie(c.effets || [], ctx);
+  const label = libelleDe(c, ctx);
+  log('warn', `<b>${esc(def.titre)}</b> — décision automatique : « ${esc(label)} ». ${out.effets.filter(x => x.note).map(x => esc(x.text)).join(' · ')}`.trim());
+  recordAutoResolution(dec.kind, def.titre, label);
+}
 
-  // Liste des choix avec évaluation
-  const choicesHTML = inc.choices.map((ch, i) => {
-    let extras = [];
-    let available = true;
+const pct = x => `${Math.round((x || 0) * 100)} %`;
 
-    // Vérif req skill
-    if (ch.req?.skill) {
-      const has = skillReqMet(ch.req, team);
-      extras.push(`<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`);
-      if (!has) available = false;
-    }
-    // Vérif item
-    if (ch.consume?.item) {
-      const itDef = ITEMS[ch.consume.item];
-      const has = (S.inventory?.[ch.consume.item] || 0) > 0;
-      extras.push(`<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`);
-      if (!has) available = false;
-    }
-    // Vérif coût (choix payant)
-    if (ch.pay && ch.outcome?.loss) {
-      const ok = choiceAffordable(ch);
-      extras.push(`<span class="cost ${ok ? '' : 'ko'}">COÛT : ${amountsText(ch.outcome.loss)}${ok ? '' : ' — stock insuffisant'}</span>`);
-      if (!ok) available = false;
-    }
-    if (ch.risky) {
-      extras.push(`<span class="risk">RISQUÉ · jet de ${STAT_LABELS[ch.risky.stat]} (DC ${ch.risky.dc})</span>`);
-    }
-
-    return `<button class="incident-choice" data-incident-choice="${i}" ${available ? '' : 'disabled'}>
-      ${fillAmounts(ch.label, ch.outcome)}
-      ${extras.join('')}
-    </button>`;
+// Fenêtre de décision : titre, texte du moteur, choix (raison si indisponible,
+// chance de réussite d'un test, coût, objet consommé, recrue et son salaire).
+function renderDecision(vue) {
+  const isInc = vue.kind === 'incident';
+  const attr = isInc ? 'data-incident-choice' : 'data-event-choice';
+  const sevCls = { 1: 'ok', 2: 'warn', 3: 'rust' }[vue.gravite?.niveau] || '';
+  const eyebrow = isInc
+    ? `${esc(vue.surtitre)} · <span class="${sevCls}">${esc(vue.gravite?.nom || '')}</span>${vue.module ? ' · ' + esc(vue.module) : ''}`
+    : `Événement${vue.theme ? ` · <span class="${vue.ton === 'positif' ? 'ok' : vue.ton === 'negatif' ? 'warn' : ''}">${esc(vue.theme)}</span>` : ''}${vue.personnage ? ' · ' + esc(vue.personnage) : ''}`;
+  const choix = vue.choix.map(c => {
+    const extras = [];
+    for (const r of c.cout) extras.push(`<span class="cost ${r.ok ? '' : 'ko'}">Coût : ${esc(r.n)} ${esc(r.nom)}${r.ok ? '' : ' — stock insuffisant'}</span>`);
+    for (const o of c.consomme) extras.push(`<span class="cost ${o.ok ? '' : 'ko'}">Consomme : ${esc(o.nom)}${o.ok ? '' : ' — aucun en stock'}</span>`);
+    if (c.recrue) extras.push(`<span class="req">Accueille ${esc(c.recrue.nom)} · salaire ${esc(c.recrue.salaire)} biomasse par jour</span>`);
+    if (c.test) extras.push(`<span class="risk">${pct(c.chance)} — ${esc(c.test.libelle)}${c.acteur ? ' de ' + esc(c.acteur) : ''}</span>`);
+    const autres = (c.raison || '').split(' · ').filter(r => r && !/^Manque |^Nécessite : /.test(r));
+    if (!c.disponible && autres.length) extras.push(`<span class="req locked">${esc(autres.join(' · '))}</span>`);
+    return `<button type="button" class="incident-choice" ${attr}="${c.index}" ${c.disponible ? '' : 'disabled'}>${esc(c.label)}${extras.join('')}</button>`;
   }).join('');
-
   return `
-    <div class="incident-eyebrow ${inc.positive ? 'positive' : ''}">
-      ${inc.positive ? 'Événement' : 'Incident'} · <span class="${severityClass}">${severityLabel}</span> · ${def.nom}
-    </div>
-    <h3 class="incident-title">${inc.titre || (inc.positive ? 'Bonne nouvelle' : 'Quelque chose s\'est passé')}</h3>
-    <p class="incident-body">${text}</p>
-    <div class="incident-choices">${choicesHTML}</div>
-  `;
+    <div class="incident-eyebrow ${vue.ton === 'positif' ? 'positive' : ''}">${eyebrow}</div>
+    <h3 class="incident-title">${esc(vue.titre)}</h3>
+    <div class="incident-body">${vue.texteHTML}</div>
+    <div class="incident-choices">${choix}</div>`;
 }
 
-function hookIncidentModal(decId) {
+function hookDecisionModal(decId) {
   const m = $('#modal');
-  m.querySelectorAll('button[data-incident-choice]').forEach(btn => {
+  m.querySelectorAll('button[data-incident-choice], button[data-event-choice]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
-      const dec = (S.pendingDecisions || []).find(d => d.id === decId);
-      if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
-      const inc = INCIDENTS[dec.refId];
-      const victim = resolveIncidentVictim(dec);
-      const choice = inc.choices[parseInt(btn.dataset.incidentChoice, 10)];
-      const ok = applyIncidentChoice(inc, choice, victim);
-      if (ok === false) return;
-      removeDecision(decId);
-      closeDecisionModal();
+      if (!(S.pendingDecisions || []).some(d => d.id === decId)) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
+      const idx = parseInt(btn.dataset.incidentChoice ?? btn.dataset.eventChoice, 10);
+      const r = choisirDecision(decId, idx);
+      if (!r.ok) {
+        if (r.caduque) { closeDecisionModal(); render(); return; }
+        toast(r.why || 'Choix impossible');
+        return;
+      }
       save();
+      // Écran de conséquences : ce que le choix a réellement provoqué
+      m.innerHTML = renderConsequences(r.resultat);
+      $('#consContinue')?.addEventListener('click', () => { closeDecisionModal(); render(); });
       render();
     });
   });
 }
 
-// Compatibilité : ancien rollColonyIncident remplacé par tickIncidents
-export function rollColonyIncident(silent = false) {
-  tickIncidents(silent);
+function renderConsequences(res) {
+  const effets = res.effets.map(e => {
+    const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
+    const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
+    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${esc(e.text)}</span></li>`;
+  }).join('');
+  const jet = res.jet
+    ? `<p class="cons-roll">${esc(res.jet.libelle)}${res.jet.colon ? ' de ' + esc(res.jet.colon) : ''} : ${esc(res.jet.jet)} ${res.jet.bonus >= 0 ? '+' : '−'} ${esc(Math.abs(res.jet.bonus))} = ${esc(res.jet.total)} contre ${esc(res.jet.difficulte)} — <b>${res.jet.reussite ? 'réussite' : 'échec'}</b></p>`
+    : '';
+  return `
+    <div class="incident-eyebrow ${res.ton === 'positif' ? 'positive' : ''}">Conséquences · ${esc(res.titre)}</div>
+    <h3 class="incident-title">« ${esc(res.label)} »</h3>
+    ${jet}
+    ${res.texteHTML ? `<div class="incident-body">${res.texteHTML}</div>` : ''}
+    <ul class="cons-list">${effets}</ul>
+    <div class="incident-choices">
+      <button type="button" class="incident-choice cons-continue" id="consContinue">Continuer</button>
+    </div>`;
 }
 
 // ============================================================
-//   ÉVÉNEMENTS DE COLONIE (0.19)
+//   ÉVÉNEMENTS DE COLONIE — tirage
 // ============================================================
-// Distinction avec les incidents :
-//   - Incidents : causés par les choix du joueur (sécurité), liés à un bâtiment
-//   - Événements : organiques, indépendants de la sécurité, conditions globales
-//
-// Format :
-//   id, theme, positive (bool)
-//   condition: () => bool    — peut-il se déclencher maintenant ?
-//   pickActors: () => { primary, secondary? } — qui est concerné
-//   text: "..." (peut référencer {primary} et {secondary})
-//   titre : libellé lisible (notifications, effets temporaires)
-//   choices: [...] comme les incidents (pay, req, consume) ; un libellé peut
-//            citer les montants réels via {loss.metal}, {gain.datacubes}…
+// Un événement est éligible s'il survient de lui-même (spontane !== false), n'est
+// ni en attente ni déjà vécu (unique), respecte son délai (delai, 36 h par
+// défaut), que sa condition est vraie et que ses acteurs se trouvent.
+const DELAI_EVENEMENT = PACING.EVENT_REPEAT_GAP;
 
-export const COLONY_EVENTS = {
-  // ===== ÉVÉNEMENTS SOCIAUX =====
-  event_anniversaire: {
-    titre: "Anniversaire",
-    theme: 'Anniversaire',
-    positive: true,
-    condition: () => aliveCrew().some(m => {
-      const age = currentAge(m);
-      return age > 0 && age % 5 === 0 && (S.meta.gameMin - (m.lastBirthdayCelebrated || -99999)) > 30 * 24 * 60;
-    }),
-    pickActors: () => {
-      const candidates = aliveCrew().filter(m => {
-        const age = currentAge(m);
-        return age > 0 && age % 5 === 0 && (S.meta.gameMin - (m.lastBirthdayCelebrated || -99999)) > 30 * 24 * 60;
-      });
-      return { primary: candidates[Math.floor(Math.random() * candidates.length)] };
-    },
-    text: "C'est l'anniversaire de {primary}. {age} ans. L'équipage attend de voir si on marque le coup.",
-    choices: [
-      { label: "Organiser une vraie fête", pay: true, outcome: { loss: { biomasse: 25 }, moralAll: +4, log: "Soirée mémorable. {primary} sourit toute la nuit.", markBirthday: true } },
-      { label: "Geste discret entre amis", outcome: { moralAll: +1, log: "Cadeau modeste, sincère. {primary} apprécie.", markBirthday: true } },
-      { label: "Ne pas s'en occuper", outcome: { moralAll: -2, log: "Personne n'a rien dit. {primary} a remarqué.", markBirthday: true } }
-    ]
-  },
+function evenementEligible(ev, pending, lire) {
+  if (ev.spontane === false || pending.has(ev.id)) return false;
+  const mem = S.evenements?.[ev.id];
+  if (ev.unique && (mem?.n || 0) >= 1) return false;
+  const delai = ev.delai !== undefined ? N.parseDuree(ev.delai) : DELAI_EVENEMENT;
+  if (typeof mem?.derniere === 'number' && S.meta.gameMin - mem.derniere < delai) return false;
+  if (ev.si !== undefined && !conditionSure(ev.si, lire)) return false;
+  return true;
+}
 
-  event_hommage: {
-    titre: "Hommage aux disparus",
-    theme: 'Hommage',
-    positive: false,
-    condition: () => {
-      const recent = (S.crew || []).filter(m => m.statut === 'mort' && m.diedAt && (S.meta.gameMin - m.diedAt) < 7 * 24 * 60);
-      return recent.length > 0 && (S.meta.gameMin - (S.lastHommageMin || -99999)) > 7 * 24 * 60;
-    },
-    pickActors: () => {
-      const recent = S.crew.filter(m => m.statut === 'mort' && m.diedAt && (S.meta.gameMin - m.diedAt) < 7 * 24 * 60);
-      return { primary: recent[Math.floor(Math.random() * recent.length)] };
-    },
-    text: "L'équipage propose une cérémonie en mémoire de {primary}. Une pause dans la routine.",
-    choices: [
-      { label: "Tenir la cérémonie", outcome: { moralAll: +3, log: "L'hommage rend du courage à l'équipage.", markHommage: true } },
-      { label: "Une minute de silence simple", outcome: { moralAll: +1, log: "Geste sobre. Mais sincère.", markHommage: true } },
-      { label: "Refuser, focus sur le présent", outcome: { moralAll: -3, log: "L'équipage murmure. La présence des morts pèse plus encore.", markHommage: true } }
-    ]
-  },
-
-  event_conflit_rivaux: {
-    titre: "Dispute entre rivaux",
-    theme: 'Conflit',
-    positive: false,
-    condition: () => {
-      // Au moins une paire avec affinité ≤ -50
-      const all = aliveCrew();
-      for (let i = 0; i < all.length; i++) {
-        for (let j = i+1; j < all.length; j++) {
-          if (affinityBetween(all[i].id, all[j].id) <= -50) return true;
-        }
-      }
-      return false;
-    },
-    pickActors: () => {
-      const all = aliveCrew();
-      const pairs = [];
-      for (let i = 0; i < all.length; i++) {
-        for (let j = i+1; j < all.length; j++) {
-          if (affinityBetween(all[i].id, all[j].id) <= -50) {
-            pairs.push([all[i], all[j]]);
-          }
-        }
-      }
-      const pair = pairs[Math.floor(Math.random() * pairs.length)];
-      return { primary: pair[0], secondary: pair[1] };
-    },
-    text: "Une dispute éclate entre {primary} et {secondary}. Les autres assistent en silence. Ça pourrait empirer.",
-    choices: [
-      { label: "Médiation officielle", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { adjustAffinity: { a: 'primary', b: 'secondary', delta: +25 }, log: "La médiation calme les esprits. Les deux acceptent un statu quo." } },
-      { label: "Sanction stricte des deux", outcome: { moralAll: -2, adjustAffinity: { a: 'primary', b: 'secondary', delta: -10 }, log: "Discipline rétablie. Mais les ressentiments restent." } },
-      { label: "Séparer leurs affectations", outcome: { moralAll: +1, log: "Les deux ne se croisent plus. Tension désamorcée." } },
-      { label: "Laisser faire", outcome: { moralAll: -3, adjustAffinity: { a: 'primary', b: 'secondary', delta: -15 }, log: "Le conflit s'envenime. L'équipe s'inquiète." } }
-    ]
-  },
-
-  event_romance: {
-    titre: "Romance naissante",
-    theme: 'Romance',
-    positive: true,
-    condition: () => {
-      const all = aliveCrew();
-      for (let i = 0; i < all.length; i++) {
-        for (let j = i+1; j < all.length; j++) {
-          const aff = affinityBetween(all[i].id, all[j].id);
-          if (aff >= 75 && aff < 95) return true;
-        }
-      }
-      return false;
-    },
-    pickActors: () => {
-      const all = aliveCrew();
-      const pairs = [];
-      for (let i = 0; i < all.length; i++) {
-        for (let j = i+1; j < all.length; j++) {
-          const aff = affinityBetween(all[i].id, all[j].id);
-          if (aff >= 75 && aff < 95) pairs.push([all[i], all[j]]);
-        }
-      }
-      const pair = pairs[Math.floor(Math.random() * pairs.length)];
-      return { primary: pair[0], secondary: pair[1] };
-    },
-    text: "Quelque chose d'évident pour tout le monde sauf eux-mêmes : {primary} et {secondary} se cherchent. L'équipage prend les paris.",
-    choices: [
-      { label: "Encourager discrètement", outcome: { adjustAffinity: { a: 'primary', b: 'secondary', delta: +20 }, moralAll: +2, log: "{primary} et {secondary} osent enfin. L'équipage applaudit." } },
-      { label: "Ne rien dire et laisser faire", outcome: { adjustAffinity: { a: 'primary', b: 'secondary', delta: +5 }, log: "L'équipage observe, en silence." } }
-    ]
-  },
-
-  // ===== INITIATIVES INDIVIDUELLES =====
-  event_initiative_jardin: {
-    titre: "Nouvelle technique de culture",
-    theme: 'Initiative',
-    positive: true,
-    condition: () => S.modules.hydroponie?.level >= 2 && aliveCrew().some(m => (m.skills.survie || 0) >= 2),
-    pickActors: () => {
-      const candidates = aliveCrew().filter(m => (m.skills.survie || 0) >= 2);
-      return { primary: candidates[Math.floor(Math.random() * candidates.length)] };
-    },
-    text: "{primary} propose une nouvelle technique de culture. Elle nécessite un peu de temps.",
-    choices: [
-      { label: "Lui donner les moyens", pay: true, outcome: { loss: { biomasse: 15 }, gain: { biomasse: 50, datacubes: 4 }, log: "{primary} double le rendement de la cuve d'essai." } },
-      { label: "Plus tard", outcome: { moralAll: -1, log: "{primary} comprend. Mais l'élan est passé." } }
-    ]
-  },
-
-  event_initiative_atelier: {
-    titre: "Idée pour l'atelier",
-    theme: 'Initiative',
-    positive: true,
-    condition: () => S.modules.atelier?.level >= 2 && aliveCrew().some(m => (m.skills.ingenierie || 0) >= 3),
-    pickActors: () => {
-      const candidates = aliveCrew().filter(m => (m.skills.ingenierie || 0) >= 3);
-      return { primary: candidates[Math.floor(Math.random() * candidates.length)] };
-    },
-    text: "{primary} a une idée pour optimiser l'atelier. Elle pense pouvoir doubler la précision de fabrication.",
-    choices: [
-      { label: "L'autoriser à expérimenter", pay: true, outcome: { loss: { metal: 20, cristal: 10 }, gain: { datacubes: 12 }, log: "{primary} valide son hypothèse. Données techniques précieuses." } },
-      { label: "Demander un mémo détaillé d'abord", req: { skill: { key: 'science', min: 2 } },
-        outcome: { gain: { datacubes: 8 }, log: "{primary} produit un dossier rigoureux. La méthode est intégrée sans coût." } },
-      { label: "Refuser, trop coûteux", outcome: { moralAll: -1, log: "{primary} se replie sur ses tâches. Un peu déçu." } }
-    ]
-  },
-
-  // ===== PLAINTES & DEMANDES COLLECTIVES =====
-  event_plainte_repas: {
-    titre: "Plainte sur les rations",
-    theme: 'Plainte',
-    positive: false,
-    condition: () => aliveCrew().length >= 4 && (S.res.biomasse || 0) < (capOf('biomasse') * 0.3),
-    pickActors: () => ({ primary: aliveCrew()[Math.floor(Math.random() * aliveCrew().length)] }),
-    text: "L'équipage se plaint des rations. Plusieurs colons mangent à peine. {primary} parle au nom des autres.",
-    choices: [
-      { label: "Augmenter les portions à court terme", pay: true, outcome: { loss: { biomasse: 30 }, moralAll: +3, log: "L'équipage est apaisé. Les estomacs sont pleins ce soir." } },
-      { label: "Distribuer une ration concentrée", consume: { item: 'ration_concentree' },
-        outcome: { moralAll: +2, log: "La ration est partagée. Geste apprécié." } },
-      { label: "Promettre une amélioration future", outcome: { moralAll: -2, log: "{primary} hoche la tête, peu convaincu." } },
-      { label: "Refuser sèchement", outcome: { moralAll: -5, log: "Le silence retombe. La rancœur monte." } }
-    ]
-  },
-
-  event_plainte_logement: {
-    titre: "Plainte sur le logement",
-    theme: 'Plainte',
-    positive: false,
-    condition: () => aliveCrew().length >= 3 && crewUsage().used >= crewUsage().total - 1 && (S.modules.habitat?.level || 0) < 4,
-    pickActors: () => ({ primary: aliveCrew()[Math.floor(Math.random() * aliveCrew().length)] }),
-    text: "L'habitat est saturé. {primary} évoque l'inconfort, le manque d'intimité, le bruit constant.",
-    choices: [
-      { label: "Promettre une expansion prioritaire", outcome: { moralAll: +1, log: "L'équipage attend des actes." } },
-      { label: "Distribuer des kits de réparation pour bricoler", consume: { item: 'kit_reparation' },
-        outcome: { moralAll: +2, log: "Les colons aménagent leurs espaces. C'est mieux." } },
-      { label: "Trop occupé pour ça", outcome: { moralAll: -3, log: "L'équipe note. La frustration grandit." } }
-    ]
-  },
-
-  // ===== VISITEURS / RECRUTEMENTS RARES =====
-  event_visiteur_isole: {
-    titre: "Visiteur isolé",
-    theme: 'Visiteur',
-    positive: true,
-    condition: () => crewUsage().used < crewUsage().total && (S.meta.gameMin - (S.lastVisitorMin || -99999)) > 14 * 24 * 60,
-    pickActors: () => ({ primary: null }),  // Pas d'acteur préexistant
-    text: "Une silhouette inconnue se présente à l'avant-poste. Sans vaisseau, sans escorte. Elle dit avoir voyagé seule longtemps.",
-    choices: [
-      { label: "L'accueillir comme colon", outcome: { spawnVisitor: true, log: "Un nouveau visage rejoint l'avant-poste. L'équipage est curieux.", markVisitor: true } },
-      { label: "L'interroger d'abord", req: { skill: { key: 'linguistique', min: 2 } },
-        outcome: { spawnVisitor: 'safe', gain: { datacubes: 8 }, log: "Histoire vérifiée. Le visiteur rejoint la colonie sereinement.", markVisitor: true } },
-      { label: "La renvoyer poliment", outcome: { moralAll: -1, log: "La silhouette s'éloigne. Personne ne sait ce qu'elle est devenue.", markVisitor: true } }
-    ]
-  },
-
-  event_marchand: {
-    titre: "Marchand de passage",
-    theme: 'Visiteur',
-    positive: true,
-    // 0.33 : le marchand ne vient que si au moins un échange est payable (montants ×OUTCOME_MULT)
-    condition: () => (S.meta.gameMin - (S.lastMerchantMin || -99999)) > 21 * 24 * 60
-      && ((S.res.metal || 0) >= 80 * OUTCOME_MULT || (S.res.cristal || 0) >= 50 * OUTCOME_MULT),
-    pickActors: () => ({ primary: null }),
-    text: "Un vaisseau marchand se pose pour quelques heures. Le pilote propose un échange unique.",
-    choices: [
-      { label: "Échanger {loss.metal} métal contre {gain.datacubes} datacubes", pay: true, outcome: { loss: { metal: 80 }, gain: { datacubes: 30 }, log: "L'échange est conclu.", markMerchant: true } },
-      { label: "Échanger {loss.cristal} cristal contre 1 schéma humain", pay: true, outcome: { loss: { cristal: 50 }, randomBlueprint: 'humain', log: "Un plan technique change de mains.", markMerchant: true } },
-      { label: "Rien d'intéressant", outcome: { markMerchant: true, log: "Le marchand repart sans rien vendre." } }
-    ]
-  },
-
-  // ===== DÉCOUVERTES & INSIGHTS =====
-  event_insight_labo: {
-    titre: "Intuition au laboratoire",
-    theme: 'Découverte',
-    positive: true,
-    condition: () => S.modules.laboratoire?.level >= 2 && (S.research?.length > 0 || Object.keys(S.techCompleted || {}).length >= 2),
-    pickActors: () => {
-      const staff = staffOf('laboratoire').map(s => s.member);
-      if (staff.length > 0) return { primary: staff[Math.floor(Math.random() * staff.length)] };
-      return { primary: aliveCrew()[Math.floor(Math.random() * aliveCrew().length)] };
-    },
-    text: "{primary} relit ses notes pour la dixième fois. Cette fois, quelque chose lui saute aux yeux.",
-    choices: [
-      { label: "L'autoriser à publier", outcome: { gain: { datacubes: 18 }, moralAll: +1, log: "{primary} formalise une découverte mineure. Un palier intellectuel." } },
-      { label: "Garder confidentiel", outcome: { gain: { datacubes: 12 }, log: "Les données restent dans le coffre. Pour plus tard." } }
-    ]
-  },
-
-  event_decouverte_archive: {
-    titre: "Archive retrouvée",
-    theme: 'Découverte',
-    positive: true,
-    condition: () => aliveCrew().some(m => (m.skills.linguistique || 0) >= 2),
-    pickActors: () => {
-      const candidates = aliveCrew().filter(m => (m.skills.linguistique || 0) >= 2);
-      return { primary: candidates[Math.floor(Math.random() * candidates.length)] };
-    },
-    text: "{primary} retombe sur une vieille archive numérique de la colonie. Il y a quelque chose dedans.",
-    choices: [
-      { label: "Décrypter en profondeur", outcome: { gain: { datacubes: 15 }, log: "Données pré-Effondrement décryptées. Insight historique." } },
-      { label: "Survol rapide", outcome: { gain: { datacubes: 5 }, log: "Quelques bribes intéressantes." } }
-    ]
-  },
-
-  // ===== SONGES COLLECTIFS =====
-  event_songe: {
-    titre: "Songe collectif",
-    theme: 'Songe',
-    positive: false,
-    condition: () => aliveCrew().length >= 3 && Object.keys(S.discoveries || {}).some(id => {
-      const bp = BLUEPRINTS[id];
-      return bp && (bp.origin === 'alien_a' || bp.origin === 'alien_b' || bp.origin === 'fusion');
-    }),
-    pickActors: () => ({ primary: aliveCrew()[Math.floor(Math.random() * aliveCrew().length)] }),
-    text: "Plusieurs colons font le même rêve cette nuit. {primary} l'évoque le lendemain. Une grande forme qui regarde. Aucun visage.",
-    choices: [
-      { label: "Documenter pour étude", req: { skill: { key: 'science', min: 2 } },
-        outcome: { gain: { datacubes: 10 }, log: "Le rêve collectif est consigné. Étrange. Précieux." } },
-      { label: "Faire comme si de rien n'était", outcome: { moralAll: -2, log: "Tout le monde se tait. Mais quelque chose plane." } },
-      { label: "Renforcer les heures de sommeil", outcome: { moralAll: +1, log: "Repos forcé. Les rêves s'estompent." } }
-    ]
-  },
-
-  // ===== PROPOSITION D'EXPLORATION =====
-  event_volontaire: {
-    titre: "Volontaire pour patrouiller",
-    theme: 'Initiative',
-    positive: true,
-    condition: () => aliveCrew().some(m => m.statut === 'libre' && (m.skills.combat || 0) >= 2),
-    pickActors: () => {
-      const candidates = aliveCrew().filter(m => m.statut === 'libre' && (m.skills.combat || 0) >= 2);
-      return { primary: candidates[Math.floor(Math.random() * candidates.length)] };
-    },
-    text: "{primary} demande à former une patrouille de reconnaissance autour de la colonie.",
-    choices: [
-      { label: "L'autoriser pour 12h", outcome: { gain: { biomasse: 20, datacubes: 4 }, log: "{primary} ramène quelques échantillons et une cartographie locale." } },
-      { label: "Demander un planning précis", req: { skill: { key: 'science', min: 1 } },
-        outcome: { gain: { datacubes: 10 }, log: "Mission cadrée. Données utiles, sans perte de temps." } },
-      { label: "Refuser. Trop risqué.", outcome: { moralAll: -1, log: "{primary} comprend. Frustration discrète." } }
-    ]
-  }
-};
-
-// Trouve un événement éligible pondéré
 function pickColonyEvent() {
-  // Un événement déjà en attente du joueur n'est pas re-tiré
-  const pending = new Set((S.pendingDecisions || []).filter(d => d.kind === 'event').map(d => d.refId));
-  // V1 : un même événement ne revient pas avant PACING.EVENT_REPEAT_GAP
-  const lastAt = S.flags.eventLastAt || {};
-  const eligible = Object.entries(COLONY_EVENTS).filter(([id, ev]) => {
-    if (pending.has(id)) return false;
-    if (typeof lastAt[id] === 'number' && S.meta.gameMin - lastAt[id] < PACING.EVENT_REPEAT_GAP) return false;
-    try { return ev.condition(); } catch (e) { return false; }
-  });
-  if (eligible.length === 0) return null;
+  const pending = new Set((S.pendingDecisions || []).filter(d => d.kind === 'event').map(d => idEvenement(d.refId)));
+  const lire = lecteurColonie();
+  let eligible = CONTENU_EVENEMENTS.filter(ev => evenementEligible(ev, pending, lire));
   // Évite la répétition immédiate
-  if (S.lastColonyEventId) {
-    const filtered = eligible.filter(([id]) => id !== S.lastColonyEventId);
-    if (filtered.length > 0) return filtered[Math.floor(Math.random() * filtered.length)][0];
+  if (S.lastColonyEventId && eligible.length > 1) eligible = eligible.filter(ev => ev.id !== S.lastColonyEventId);
+  while (eligible.length) {
+    const ev = tirerPondere(eligible, x => x.poids ?? 1, Math.random);
+    const acteurs = choisirActeurs(ev);
+    if (acteurs) return { ev, acteurs };
+    eligible = eligible.filter(x => x !== ev);
   }
-  return eligible[Math.floor(Math.random() * eligible.length)][0];
+  return null;
 }
 
 // V1 : un événement toutes les 3 à 6 h réelles (PACING.EVENT_GAP_*). Pendant une
-// absence, il n'est plus tranché à la place du joueur : il attend dans la file
+// absence, il n'est pas tranché à la place du joueur : il attend dans la file
 // (PACING.EVENT_QUEUE_MAX au plus).
 export function tickColonyEvents(silent = false) {
   if (S.meta.gameMin < (S.nextEventMin || 0)) return;
   S.nextEventMin = S.meta.gameMin + PACING.EVENT_GAP_MIN + Math.random() * (PACING.EVENT_GAP_MAX - PACING.EVENT_GAP_MIN);
   if ((S.pendingDecisions || []).filter(d => d.kind === 'event').length >= PACING.EVENT_QUEUE_MAX) return;
-
-  const eventId = pickColonyEvent();
-  if (!eventId) return;
-  triggerColonyEvent(eventId, silent);
+  const pick = pickColonyEvent();
+  if (pick) declencherEvenement(pick.ev, pick.acteurs, silent);
 }
 
 // V1 : au retour d'une absence de plus de PACING.EVENT_ON_RETURN_AFTER, un
@@ -4077,387 +3997,46 @@ export function tickColonyEvents(silent = false) {
 // Renvoie l'identifiant de l'événement déclenché, ou null.
 export function guaranteeReturnEvent() {
   if ((S.pendingDecisions || []).some(d => d.kind === 'event')) return null;
-  const eventId = pickColonyEvent();
-  if (!eventId) return null;
-  if (!triggerColonyEvent(eventId, false)) return null;
+  const pick = pickColonyEvent();
+  if (!pick) return null;
+  declencherEvenement(pick.ev, pick.acteurs, false);
   S.nextEventMin = Math.max(S.nextEventMin || 0, S.meta.gameMin + PACING.EVENT_GAP_MIN);
-  return eventId;
+  return pick.ev.id;
 }
 
-function triggerColonyEvent(eventId, silent = false) {
-  const ev = COLONY_EVENTS[eventId];
-  if (!ev) return false;
-  let actors;
-  try { actors = ev.pickActors(); } catch (e) { return false; }
-  if (!actors) return false;
-  S.lastColonyEventId = eventId;
-  if (!S.flags.eventLastAt) S.flags.eventLastAt = {};
-  S.flags.eventLastAt[eventId] = S.meta.gameMin;
-  enqueueDecision({ kind: 'event', refId: eventId, ...decisionActors(actors), offline: silent || undefined });
-  // 0.26.1 : notification dédiée (warn — événement en attente de décision)
-  if (!silent) notif.colonyEvent(colonyEventTitle(eventId));
+function declencherEvenement(ev, acteurs, silent = false) {
+  const mem = memoireEvenement(ev.id);
+  mem.derniere = S.meta.gameMin;
+  S.lastColonyEventId = ev.id;
+  const dec = { kind: 'event', refId: ev.id, acteurs: Object.fromEntries(Object.entries(acteurs).map(([k, m]) => [k, m.id])) };
+  preparerRecrues(dec, ev);
+  if (silent) dec.offline = true;
+  enqueueDecision(dec);
+  if (!silent) notif.colonyEvent(ev.titre || ev.theme || 'Événement');
   return true;
 }
 
-function autoResolveColonyEvent(eventId, actors) {
-  const ev = COLONY_EVENTS[eventId];
-  if (!ev) return;
-  const choice = pickAutoChoice(ev.choices);
-  if (!choice) return;
-  if (applyColonyEventChoice(eventId, choice, actors, { auto: true }) !== false) {
-    recordAutoResolution('event', colonyEventTitle(eventId), fillAmounts(choice.label, choice.outcome));
-  }
+// Déclenche un événement précis (scène d'un fil rouge, outils, tests) en
+// ignorant son délai et `spontane`, mais pas sa condition ni ses acteurs.
+// → true si l'événement a rejoint la file.
+export function triggerColonyEvent(eventId, silent = false) {
+  const ev = COLONY_EVENTS[idEvenement(eventId)];
+  if (!ev) return false;
+  if ((S.pendingDecisions || []).some(d => d.kind === 'event' && idEvenement(d.refId) === ev.id)) return false;
+  if (ev.si !== undefined && !conditionSure(ev.si, lecteurColonie())) return false;
+  const acteurs = choisirActeurs(ev);
+  if (!acteurs) return false;
+  return declencherEvenement(ev, acteurs, silent);
 }
-
-// Libellé d'un choix d'événement : montants réels et nom du protagoniste (échappé)
-function eventChoiceLabelHTML(ch, actors) {
-  return esc(fillAmounts(ch.label, ch.outcome)).replace(/\{primary\}/g, esc(actors?.primary?.name || ''));
-}
-
-function renderColonyEventContent(eventId, actors) {
-  const ev = COLONY_EVENTS[eventId];
-  const primaryName = actors.primary?.name || '';
-  const secondaryName = actors.secondary?.name || '';
-  const age = actors.primary ? currentAge(actors.primary) : '';
-  const text = ev.text
-    .replace(/\{primary\}/g, primaryName ? `<em>${esc(primaryName)}</em>` : 'un colon')
-    .replace(/\{secondary\}/g, secondaryName ? `<em>${esc(secondaryName)}</em>` : '')
-    .replace(/\{age\}/g, age);
-
-  const choicesHTML = ev.choices.map((ch, i) => {
-    let extras = [];
-    let available = true;
-    if (ch.req?.skill) {
-      const has = skillReqMet(ch.req, aliveCrew());
-      extras.push(`<span class="req ${has ? '' : 'locked'}">REQUIERT : ${SKILL_LABELS[ch.req.skill.key]} ≥ ${ch.req.skill.min}</span>`);
-      if (!has) available = false;
-    }
-    if (ch.consume?.item) {
-      const itDef = ITEMS[ch.consume.item];
-      const has = (S.inventory?.[ch.consume.item] || 0) > 0;
-      extras.push(`<span class="cost ${has ? '' : 'ko'}" style="${has ? 'color:#b09bd0' : ''}">CONSOMME : ${itDef?.nom || ch.consume.item}</span>`);
-      if (!has) available = false;
-    }
-    if (ch.pay && ch.outcome?.loss) {
-      const ok = choiceAffordable(ch);
-      extras.push(`<span class="cost ${ok ? '' : 'ko'}">COÛT : ${amountsText(ch.outcome.loss)}${ok ? '' : ' — stock insuffisant'}</span>`);
-      if (!ok) available = false;
-    }
-    return `<button class="incident-choice" data-event-choice="${i}" ${available ? '' : 'disabled'}>
-      ${eventChoiceLabelHTML(ch, actors)}
-      ${extras.join('')}
-    </button>`;
-  }).join('');
-
-  const themeColor = ev.positive ? 'var(--moss)' : 'var(--amber)';
-  return `
-    <div class="incident-eyebrow ${ev.positive ? 'positive' : ''}">
-      Événement · <span style="color:${themeColor}">${ev.theme}</span>
-    </div>
-    <h3 class="incident-title">${ev.titre || (ev.positive ? 'Une bonne nouvelle' : 'Quelque chose se passe')}</h3>
-    <p class="incident-body">${text}</p>
-    <div class="incident-choices">${choicesHTML}</div>
-  `;
-}
-
-function hookColonyEventModal(decId) {
-  const m = $('#modal');
-  m.querySelectorAll('button[data-event-choice]').forEach(btn => {
-    if (btn.disabled) return;
-    btn.addEventListener('click', () => {
-      const dec = (S.pendingDecisions || []).find(d => d.id === decId);
-      if (!dec) { closeDecisionModal(); return; }   // déjà résolue (double clic…)
-      const ev = COLONY_EVENTS[dec.refId];
-      const actors = resolveEventActors(dec);
-      if (!ev || !actors) {
-        // Devenu caduc entre l'affichage et le clic
-        removeDecision(decId);
-        closeDecisionModal();
-        render();
-        return;
-      }
-      const choice = ev.choices[parseInt(btn.dataset.eventChoice, 10)];
-      const result = applyColonyEventChoice(dec.refId, choice, actors);
-      if (result === false) return;   // échec (ex : stock insuffisant) — on laisse choisir
-      S.lastColonyEventId = dec.refId;
-      removeDecision(decId);
-      save();
-      // 0.30 — Affiche l'écran de conséquences avant de fermer.
-      m.innerHTML = renderColonyConsequence(result, choice, actors);
-      hookColonyConsequence();
-      // Met à jour l'arrière-plan (ressources, etc.) tout de suite
-      render();
-    });
-  });
-}
-
-// 0.30 — Écran de conséquences : ce que le choix a réellement provoqué.
-function renderColonyConsequence(result, choice, actors) {
-  const label = eventChoiceLabelHTML(choice, actors);
-  const effectsHTML = (result.effects || []).map(e => {
-    const cls = e.kind === 'good' ? 'good' : e.kind === 'bad' ? 'bad' : 'neutral';
-    const sign = e.kind === 'good' ? '▲' : e.kind === 'bad' ? '▼' : '•';
-    return `<li class="cons-effect ${cls}"><span class="cons-icon">${sign}</span><span>${esc(e.text)}</span></li>`;
-  }).join('');
-  const narrativeHTML = result.narrative
-    ? `<p class="incident-body">${result.narrative}</p>`
-    : '';
-  return `
-    <div class="incident-eyebrow ${result.positive ? 'positive' : ''}">Conséquences</div>
-    <h3 class="incident-title">« ${label} »</h3>
-    ${narrativeHTML}
-    <ul class="cons-list">${effectsHTML}</ul>
-    <div class="incident-choices">
-      <button class="incident-choice" id="consContinue" style="text-align:center">Continuer</button>
-    </div>
-  `;
-}
-
-function hookColonyConsequence() {
-  $('#consContinue')?.addEventListener('click', () => {
-    closeDecisionModal();
-    render();
-  });
-}
-
-// Applique un choix d'événement. Renvoie false si impossible (prérequis,
-// objet, stock), sinon { ok, narrative (HTML), effects (texte brut), positive }.
-// opts.auto : décision automatique — pas de toast, une seule ligne de journal.
-export function applyColonyEventChoice(eventId, choice, actors, opts = {}) {
-  const ev = COLONY_EVENTS[eventId];
-  const auto = !!opts.auto;
-  const notes = [];
-  const say = (kind, txt) => { if (auto) notes.push(txt); else log(kind, txt); };
-  const primary = actors.primary;
-  const secondary = actors.secondary;
-
-  // Prérequis et coût vérifiés AVANT tout effet
-  if (choice.req?.skill && !skillReqMet(choice.req, aliveCrew())) {
-    if (!auto) toast(`Personne ne remplit : ${SKILL_LABELS[choice.req.skill.key]} ≥ ${choice.req.skill.min}`);
-    return false;
-  }
-  if (!choiceAffordable(choice)) {
-    if (!auto) toast(`Stock insuffisant : ${amountsText(choice.outcome.loss)}`);
-    return false;
-  }
-  // Consume item
-  if (choice.consume?.item) {
-    if (!S.inventory?.[choice.consume.item]) {
-      if (!auto) toast(`Stock insuffisant : ${ITEMS[choice.consume.item]?.nom}`);
-      return false;
-    }
-    S.inventory[choice.consume.item]--;
-    if (S.inventory[choice.consume.item] <= 0) delete S.inventory[choice.consume.item];
-  }
-
-  const o = choice.outcome || {};
-
-  // 0.30 — Conséquences concrètes recensées et renvoyées à l'UI.
-  // Elles varient selon l'équipage et les ententes (réactions des proches, climat moral).
-  const effects = [];   // { kind:'good'|'bad'|'neutral', text } — texte brut (échappé au rendu)
-  const team = aliveCrew();
-
-  // Climat moral de la colonie : module l'intensité des conséquences négatives.
-  // Une colonie déjà à cran encaisse plus mal les mauvaises décisions.
-  const avgMoral = team.length ? team.reduce((s, m) => s + (m.moral || 0), 0) / team.length : 50;
-  let moodMult = 1;
-  let moodNote = null;
-  if ((o.moralAll || 0) < 0) {
-    if (avgMoral < 35) { moodMult = 1.5; moodNote = "L'équipage est déjà à bout : le coup porte plus fort."; }
-    else if (avgMoral > 75) { moodMult = 0.6; moodNote = "L'équipage est soudé : il encaisse sans broncher."; }
-  } else if ((o.moralAll || 0) > 0) {
-    if (avgMoral < 35) { moodMult = 1.4; moodNote = "Après les jours difficiles, ce répit fait d'autant plus de bien."; }
-  }
-
-  // Pertes / gains de ressources — montants RÉELLEMENT appliqués
-  if (o.loss) {
-    for (const k in o.loss) {
-      const lost = removeResourceCapped(k, o.loss[k] * OUTCOME_MULT);
-      if (lost > 0) effects.push({ kind: 'bad', text: `−${Math.round(lost)} ${RES_LABELS[k] || k}` });
-    }
-  }
-  if (o.gain) {
-    for (const k in o.gain) {
-      const amt = o.gain[k] * OUTCOME_MULT;
-      const got = addResourceCapped(k, amt);
-      effects.push({ kind: 'good', text: `+${Math.round(got)} ${RES_LABELS[k] || k}${got < amt ? ' (stock plein)' : ''}` });
-    }
-  }
-  // Moral collectif — 0.28 : impact durable (×3), 0.30 : modulé par le climat
-  if (o.moralAll) {
-    const delta = Math.round(o.moralAll * 3 * moodMult);
-    for (const m of team) {
-      m.moral = Math.max(0, Math.min(100, m.moral + delta));
-    }
-    effects.push({
-      kind: delta >= 0 ? 'good' : 'bad',
-      text: `Moral de l'équipage ${delta >= 0 ? '+' : ''}${delta} (${team.length} colon${team.length > 1 ? 's' : ''})`
-    });
-    if (moodNote) effects.push({ kind: 'neutral', text: moodNote });
-  }
-  // Ajustement d'affinité ciblé
-  if (o.adjustAffinity) {
-    const a = o.adjustAffinity.a === 'primary' ? primary?.id : (o.adjustAffinity.a === 'secondary' ? secondary?.id : null);
-    const b = o.adjustAffinity.b === 'primary' ? primary?.id : (o.adjustAffinity.b === 'secondary' ? secondary?.id : null);
-    if (a && b) {
-      adjustAffinity(a, b, o.adjustAffinity.delta);
-      const an = S.crew.find(m => m.id === a)?.name || '?';
-      const bn = S.crew.find(m => m.id === b)?.name || '?';
-      const rel = relationType(affinityBetween(a, b));
-      effects.push({
-        kind: o.adjustAffinity.delta >= 0 ? 'good' : 'bad',
-        text: `Entente ${an} ↔ ${bn} ${o.adjustAffinity.delta >= 0 ? '+' : ''}${o.adjustAffinity.delta} → ${rel.label}`
-      });
-    }
-  }
-
-  // 0.30 — RÉACTIONS DES PROCHES : le cœur de "ça dépend des ententes".
-  // Ce qui arrive au protagoniste touche émotionnellement ses proches (et réjouit ses rivaux).
-  // La tonalité vient du signe de moralAll, sinon du caractère positif/négatif de l'événement.
-  if (primary) {
-    let tone = 0;
-    if (typeof o.moralAll === 'number' && o.moralAll !== 0) tone = o.moralAll > 0 ? 1 : -1;
-    else if (o.gain || o.spawnVisitor || o.randomBlueprint) tone = 1;
-    else if (o.loss || o.debuff || o.generateRivalry) tone = -1;
-    else tone = ev.positive ? 1 : -1;
-
-    const { friends, rivals } = significantRelations(primary.id);
-    // Les proches (hors secondary déjà traité) ressentent le contrecoup
-    const reactingFriends = friends.filter(f => f.memberId !== secondary?.id);
-    if (reactingFriends.length > 0 && tone !== 0) {
-      const fDelta = tone > 0 ? 4 : -5;
-      for (const f of reactingFriends) {
-        f.member.moral = Math.max(0, Math.min(100, f.member.moral + fDelta));
-      }
-      const names = reactingFriends.map(f => f.member.name).join(', ');
-      effects.push({
-        kind: tone > 0 ? 'good' : 'bad',
-        text: tone > 0
-          ? `Ses proches (${names}) partagent le moment — moral +${fDelta}`
-          : `Ses proches (${names}) encaissent avec lui — moral ${fDelta}`
-      });
-    }
-    // Les rivaux savourent (ou compatissent à peine) — effet inverse, plus discret
-    if (tone < 0 && rivals.length > 0) {
-      const rNames = rivals.map(r => r.member.name).join(', ');
-      for (const r of rivals) {
-        r.member.moral = Math.max(0, Math.min(100, r.member.moral + 2));
-      }
-      effects.push({ kind: 'neutral', text: `${rNames} ne cache${rivals.length > 1 ? 'nt' : ''} pas une certaine satisfaction.` });
-    }
-  }
-
-  // Marqueurs (pour cooldown spécifique)
-  if (o.markBirthday && primary) primary.lastBirthdayCelebrated = S.meta.gameMin;
-  if (o.markHommage) S.lastHommageMin = S.meta.gameMin;
-  if (o.markVisitor) S.lastVisitorMin = S.meta.gameMin;
-  if (o.markMerchant) S.lastMerchantMin = S.meta.gameMin;
-  // Spawn d'un nouveau colon (visiteur)
-  if (o.spawnVisitor) {
-    const cap = crewUsage();
-    if (cap.used < cap.total) {
-      const cand = genCandidate();
-      // Visiteur "safe" : un peu meilleur
-      if (o.spawnVisitor === 'safe') {
-        // Boost léger : +1 à un skill aléatoire
-        const skills = SKILL_LIST;
-        const k = skills[Math.floor(Math.random() * skills.length)];
-        cand.skills[k] = Math.min(5, (cand.skills[k] || 0) + 1);
-      }
-      const member = {
-        ...cand,
-        id: uid('m'),
-        joinedAt: S.meta.gameMin,
-        birthGameMin: S.meta.gameMin - (cand.age || 30) * YEAR_IN_GAME_MIN,
-        statut: 'libre',
-        sante: 100,
-        statuts: [],
-        sequels: [],
-        blessures: []
-      };
-      S.crew.push(member);
-      autoAssignMember(member.id);
-      effects.push({ kind: 'good', text: `${member.name} rejoint la colonie (${cap.used + 1}/${cap.total})` });
-    } else {
-      effects.push({ kind: 'bad', text: `Habitat plein : impossible d'accueillir le visiteur.` });
-    }
-  }
-  // Schéma aléatoire
-  if (o.randomBlueprint) {
-    const bpId = rollBlueprint([o.randomBlueprint]);
-    if (bpId) {
-      addBlueprintToInventory(bpId, 'événement');
-      effects.push({ kind: 'good', text: `Schéma acquis : ${BLUEPRINTS[bpId]?.nom || bpId}` });
-    }
-  }
-
-  // 0.28 : NOUVEAUX EFFETS DURABLES (mêmes que pour les incidents)
-  // — debuff : pénalité globale temporaire
-  if (o.debuff) {
-    if (!S.activeBuffs) S.activeBuffs = [];
-    S.activeBuffs.push({
-      ...o.debuff,
-      sourceLabel: colonyEventTitle(eventId),
-      startedAt: S.meta.gameMin,
-      expiresAt: (S.meta.gameMin || 0) + legacyDuration(o.debuff.duration || 720)
-    });
-    say('warn', `Effet en cours : ${o.debuff.label || 'modulation temporaire'}.`);
-    effects.push({ kind: 'bad', text: `Effet en cours : ${o.debuff.label || 'modulation temporaire'}` });
-  }
-  // — generateRivalry entre primary et secondary
-  if (o.generateRivalry && primary && secondary) {
-    const key = [primary.id, secondary.id].sort().join('|');
-    if (!S.relations) S.relations = {};
-    S.relations[key] = Math.min(-30, (S.relations[key] || 0) - 25);
-    say('warn', `<em>${esc(primary.name)}</em> et <em>${esc(secondary.name)}</em> se brouillent durablement.`);
-    effects.push({ kind: 'bad', text: `${primary.name} et ${secondary.name} se brouillent durablement.` });
-  }
-  // — historicalMark : entrée dans le journal historique de la colonie
-  if (o.historicalMark) {
-    if (!S.historicalMarks) S.historicalMarks = [];
-    S.historicalMarks.push({
-      at: S.meta.gameMin,
-      text: o.historicalMark,
-      victim: primary?.name || null
-    });
-  }
-
-  // Log final + narratif renvoyé à l'UI (HTML : noms échappés)
-  let narrative = '';
-  if (o.log) {
-    narrative = o.log
-      .replace(/\{primary\}/g, primary ? `<em>${esc(primary.name)}</em>` : 'un colon')
-      .replace(/\{secondary\}/g, secondary ? `<em>${esc(secondary.name)}</em>` : '');
-  }
-  if (auto) {
-    log(ev.positive ? 'success' : 'warn',
-      `<b>${esc(colonyEventTitle(eventId))}</b> — décision automatique : « ${eventChoiceLabelHTML(choice, actors)} ». ${[narrative, ...notes].filter(Boolean).join(' ')}`.trim());
-  } else if (narrative) {
-    log(ev.positive ? 'success' : 'warn', narrative);
-  }
-  if (effects.length === 0) {
-    effects.push({ kind: 'neutral', text: 'Aucune conséquence notable.' });
-  }
-  return { ok: true, narrative, effects, positive: ev.positive };
-}
-
-// Identifiants uniques (factions, missions, vaisseaux) — import local et aliasé
-// pour ne pas entrer en conflit avec l'import principal de util.js.
 
 // ============================================================
-//   ARCS NARRATIFS (0.20)
+//   FILS ROUGES (arcs) — contenu de src/content/arcs/
 // ============================================================
-// Quatre arcs longs qui donnent une direction au jeu.
-// Chaque arc a des étapes (steps) vérifiées automatiquement à chaque tick.
-// Une étape se complète quand sa condition() devient true.
-// Les arcs se débloquent quand leur unlock() devient true.
-//
-// Format :
-//   id, nom, eyebrow, color, intro
-//   unlock: () => bool
-//   steps: [{ id, title, narrative, condition: () => bool }]
-//   reward: { kind, value, log } — appliqué à la fin
-
+// Chaque fil a des étapes validées dans l'ordre quand leur condition `quand`
+// devient vraie. Une étape peut ouvrir une scène de décision (`scene`, un
+// événement) quand elle devient l'étape en cours ; elle ne se valide qu'une fois
+// la scène résolue. État : S.arcs[id] = { unlocked, unlockedAt, completedSteps,
+// rewardClaimed, completedAt, scenes: { etapeId: 'ouverte'|'resolue' } }.
 
 // État d'un arc : { unlocked, completedSteps: [stepId], completedAt, rewardClaimed }
 export function getArcState(arcId) {
@@ -4465,99 +4044,230 @@ export function getArcState(arcId) {
   if (!S.arcs[arcId]) {
     S.arcs[arcId] = { unlocked: false, completedSteps: [], rewardClaimed: false };
   }
+  if (!Array.isArray(S.arcs[arcId].completedSteps)) S.arcs[arcId].completedSteps = [];
   return S.arcs[arcId];
 }
 
+const arcDef = arcId => CONTENU_ARCS.find(a => a.id === arcId) || null;
+
 export function isArcComplete(arcId) {
-  const arc = ARCS[arcId];
+  const arc = arcDef(arcId);
   if (!arc) return false;
-  const state = getArcState(arcId);
-  return state.completedSteps.length >= arc.steps.length;
+  return getArcState(arcId).completedSteps.length >= arc.etapes.length;
 }
 
 export function isStepComplete(arcId, stepId) {
-  const state = getArcState(arcId);
-  return state.completedSteps.includes(stepId);
+  return getArcState(arcId).completedSteps.includes(stepId);
 }
 
-// Tente de débloquer/avancer tous les arcs
+// Les scènes de fil rouge ne s'ouvrent pas sous automatisation (tests de
+// l'interface), comme la fenêtre d'accueil — sauf demande explicite.
+function scenesDeFilSuspendues() {
+  try { return !!navigator.webdriver && !globalThis.__DRIFT_PROLOGUE__; } catch { return false; }
+}
+
+// État de la scène d'une étape : 'resolue' (ou passée : condition fausse),
+// 'ouverte' (dans la file), 'attente' (pas encore ouverte).
+function sceneEtape(st, etape) {
+  const ev = COLONY_EVENTS[etape.scene];
+  if (!ev) return 'resolue';
+  const m = (st.scenes ||= {});
+  if (m[etape.id] === 'resolue') return 'resolue';
+  if ((S.evenements?.[ev.id]?.n || 0) >= 1) { m[etape.id] = 'resolue'; return 'resolue'; }
+  const enFile = (S.pendingDecisions || []).some(d => d.kind === 'event' && idEvenement(d.refId) === ev.id);
+  if (enFile) { m[etape.id] = 'ouverte'; return 'ouverte'; }
+  if (ev.si !== undefined && !conditionSure(ev.si, lecteurColonie())) { m[etape.id] = 'resolue'; return 'resolue'; }
+  if (scenesDeFilSuspendues()) return 'attente';
+  if (triggerColonyEvent(ev.id, false)) { m[etape.id] = 'ouverte'; return 'ouverte'; }
+  // Acteurs introuvables : la scène attend, puis est passée au bout d'une heure
+  // (un fil rouge ne reste jamais bloqué)
+  const depuis = (st.scenesAttente ||= {});
+  if (typeof depuis[etape.id] !== 'number') depuis[etape.id] = S.meta.gameMin;
+  if (S.meta.gameMin - depuis[etape.id] >= PACING.HEURE) { m[etape.id] = 'resolue'; return 'resolue'; }
+  return 'attente';
+}
+
+// Tente de débloquer / avancer tous les arcs (à chaque tick)
 export function tickArcs() {
-  for (const arcId in ARCS) {
-    const arc = ARCS[arcId];
-    const state = getArcState(arcId);
-
-    // Suivi passif : une étape peut déclarer track(state) pour mémoriser un fait
-    // passager (ex. un colon infecté) avant que sa condition ne soit évaluée.
-    // Appelé à chaque tick, même si l'arc n'est pas encore débloqué.
-    for (const step of arc.steps) {
-      if (!step.track || isStepComplete(arcId, step.id)) continue;
-      try { step.track(state); } catch (e) {}
-    }
-
-    // Déblocage
+  suivreStatuts();
+  const lire = lecteurColonie();
+  for (const arc of CONTENU_ARCS) {
+    const state = getArcState(arc.id);
     if (!state.unlocked) {
-      try {
-        if (arc.unlock()) {
-          state.unlocked = true;
-          state.unlockedAt = S.meta.gameMin;
-          log('success', `<em>Chronique ouverte :</em> ${arc.nom}.`);
-        }
-      } catch (e) {}
+      if (conditionSure(arc.ouverture ?? true, lire)) {
+        state.unlocked = true;
+        state.unlockedAt = S.meta.gameMin;
+        log('success', `<em>Chronique ouverte :</em> ${esc(arc.titre)}.`);
+      }
       continue;
     }
-
-    // Progression des étapes, dans l'ordre : on s'arrête à la première étape
-    // non remplie. Plusieurs étapes consécutives peuvent se valider au même tick.
-    // Les étapes déjà validées (y compris hors ordre par une version antérieure)
-    // restent acquises et sont simplement sautées.
-    for (const step of arc.steps) {
-      if (isStepComplete(arcId, step.id)) continue;
-      let met = false;
-      try { met = !!step.condition(state); } catch (e) { met = false; }
-      if (!met) break;
-      state.completedSteps.push(step.id);
-      log('success', `<em>${arc.nom} :</em> ${step.title}.`);
+    // Étapes dans l'ordre : on s'arrête à la première non remplie. Les étapes
+    // déjà validées (y compris hors ordre par une version antérieure) restent acquises.
+    for (const etape of arc.etapes) {
+      if (state.completedSteps.includes(etape.id)) continue;
+      if (etape.scene && sceneEtape(state, etape) !== 'resolue') break;
+      if (!conditionSure(etape.quand, lire)) break;
+      state.completedSteps.push(etape.id);
+      log('success', `<em>${esc(arc.titre)} :</em> ${esc(etape.titre)}.`);
     }
-
-    // Récompense si arc complet et pas encore claim
-    if (isArcComplete(arcId) && !state.rewardClaimed) {
-      claimArcReward(arcId);
-    }
+    if (isArcComplete(arc.id) && !state.rewardClaimed) claimArcReward(arc);
+  }
+  if ((S.meta.gameMin || 0) % 5 === 0) {
+    tickArchives();
+    suivreChantiers();
   }
 }
 
-function claimArcReward(arcId) {
-  const arc = ARCS[arcId];
-  const state = getArcState(arcId);
+function claimArcReward(arc) {
+  const state = getArcState(arc.id);
   if (state.rewardClaimed) return;
-  const r = arc.reward;
-  if (!r) return;
-
-  if (r.kind === 'blueprint') {
-    addBlueprintToInventory(r.value, 'récompense de chronique');
-  } else if (r.kind === 'tech') {
-    // Trace informative uniquement : le déblocage effectif de la tech légendaire
-    // est vérifié par canResearch() via prereq.requireArc (state.rewardClaimed).
-    // S.unlockedLegendaryTechs n'est lu nulle part ; conservé pour les sauvegardes.
-    if (!S.unlockedLegendaryTechs) S.unlockedLegendaryTechs = {};
-    S.unlockedLegendaryTechs[r.value] = true;
-  } else if (r.kind === 'permanent_bonus') {
-    if (!S.permanentBonuses) S.permanentBonuses = {};
-    S.permanentBonuses[r.value] = true;
-  }
   state.rewardClaimed = true;
   state.completedAt = S.meta.gameMin;
-  log('success', `<em>Chronique achevée : ${arc.nom}.</em> ${r.log}`);
+  const r = arc.recompense;
+  if (r?.effets) appliquerEffetsColonie(r.effets, { source: 'récompense de chronique', titre: arc.titre });
+  log('success', `<em>Chronique achevée : ${esc(arc.titre)}.</em> ${esc(r?.texte || '')}`.trim());
+  if (!(r?.effets || []).some(e => e.annales !== undefined)) noterMarque(`Fil rouge mené à son terme : ${arc.titre}.`, 'fil');
 }
 
 // Récupère les bonus permanents actifs (étend techEffectsAccumulated)
 export function permanentBonusesAccumulated() {
-  const acc = { resourceMult: { metal:1, cristal:1, energie:1, biomasse:1, datacubes:1 } };
+  const acc = { resourceMult: { metal: 1, cristal: 1, energie: 1, biomasse: 1, datacubes: 1 } };
   if (!S.permanentBonuses) return acc;
   if (S.permanentBonuses.avant_poste_autonome) {
     for (const k in acc.resourceMult) acc.resourceMult[k] *= 1.10;
   }
   return acc;
+}
+
+// Colons vus atteints d'un statut (pour « colonie.gueris.x » : une étape se
+// valide APRÈS la guérison, pas pendant la maladie)
+function suivreStatuts() {
+  if (!S.statutsVus || typeof S.statutsVus !== 'object') S.statutsVus = {};
+  for (const m of S.crew || []) {
+    if (m.statut === 'mort') continue;
+    for (const s of m.statuts || []) {
+      const l = (S.statutsVus[s.key] ||= []);
+      if (!l.includes(m.id)) l.push(m.id);
+    }
+  }
+}
+
+// Fil rouge principal en cours (le prologue, puis « L'Avant-poste ») et son
+// étape courante — pour les objectifs du tableau de bord.
+// → { arc, etape, state } | null
+export function filPrincipalEnCours() {
+  for (const arc of CONTENU_ARCS) {
+    if (!arc.principal) continue;
+    const st = S.arcs?.[arc.id];
+    if (!st?.unlocked) continue;
+    const done = st.completedSteps || [];
+    const etape = arc.etapes.find(e => !done.includes(e.id));
+    if (etape) return { arc, etape, state: st };
+  }
+  return null;
+}
+
+// Valeur d'une expression du mini-langage sur l'état de la colonie (objectifs,
+// progression d'une étape) ; undefined si elle est invalide.
+export function evaluerColonie(src) {
+  try { return N.evaluer(src, lecteurColonie()); } catch { return undefined; }
+}
+export function conditionColonie(src) {
+  return conditionSure(src, lecteurColonie());
+}
+
+// ============================================================
+//   ARCHIVES (lore) et ANNALES (mémoire de la partie)
+// ============================================================
+// Une page d'archives se débloque quand sa condition devient vraie ; l'état est
+// persisté dans S.archives = { id: { at, lu } }.
+function tickArchives() {
+  if (!S.archives || typeof S.archives !== 'object') S.archives = {};
+  const lire = lecteurColonie();
+  const nouvelles = [];
+  for (const page of LORE) {
+    if (S.archives[page.id]) continue;
+    if (!conditionSure(page.si ?? true, lire)) continue;
+    S.archives[page.id] = { at: S.meta.gameMin, lu: false };
+    nouvelles.push(`« ${esc(page.titre)} »`);
+  }
+  // Une ligne de journal (pas au tout début d'une partie : les pages de départ)
+  if (nouvelles.length && (S.meta.gameMin || 0) > 60) {
+    log('neutral', nouvelles.length === 1 ? `Archives : une nouvelle page, ${nouvelles[0]}.` : `Archives : ${nouvelles.length} nouvelles pages (${nouvelles.join(', ')}).`);
+  }
+}
+
+const envLore = () => envTexteColonie({ acteurs: {}, equipe: [] });
+
+// Pages d'archives, dans l'ordre des catégories puis de `ordre` :
+// [{ id, titre, categorie, categorieNom, resume, texteHTML, debloquee, at, lu }]
+// Le texte n'est fourni que pour une page débloquée.
+export function pagesArchives() {
+  const cats = Object.keys(CATEGORIES_LORE);
+  const env = envLore();
+  return LORE.map((p, i) => {
+    const st = S.archives?.[p.id];
+    return {
+      id: p.id, titre: p.titre, categorie: p.categorie, categorieNom: CATEGORIES_LORE[p.categorie] || p.categorie,
+      resume: st ? N.rendreTexte(p.resume || '', env).brut : null,
+      texteHTML: st ? N.rendreTexte(p.texte, env).html : null,
+      debloquee: !!st, at: st?.at ?? null, lu: !!st?.lu, _rang: cats.indexOf(p.categorie) * 1000 + (p.ordre ?? 100) + i / 100,
+    };
+  }).sort((a, b) => a._rang - b._rang).map(({ _rang, ...p }) => p);
+}
+export function archivesNonLues() {
+  return Object.values(S.archives || {}).filter(x => x && !x.lu).length;
+}
+export function marquerArchiveLue(id) {
+  const st = S.archives?.[id];
+  if (st && !st.lu) { st.lu = true; save(); }
+}
+
+// Grands chantiers : mise en service d'un module, niveau 5, niveau maximal.
+// Les niveaux déjà atteints au chargement d'une ancienne partie ne sont pas notés.
+function suivreChantiers() {
+  if (!S.flags || typeof S.flags !== 'object') S.flags = {};
+  const vu = S.flags.annalesModules;
+  if (!vu || typeof vu !== 'object') {
+    S.flags.annalesModules = Object.fromEntries(Object.entries(S.modules || {}).map(([k, m]) => [k, m?.level || 0]));
+    return;
+  }
+  for (const [id, m] of Object.entries(S.modules || {})) {
+    const lvl = m?.level || 0, avant = vu[id] || 0;
+    if (lvl <= avant) continue;
+    vu[id] = lvl;
+    const nom = MODULES[id]?.nom || id;
+    if (avant === 0 && id !== 'commandement') noterMarque(`Mise en service : ${nom}.`, 'chantier');
+    else if (lvl >= (MODULES[id]?.maxLevel || 99)) noterMarque(`${nom} porté à son niveau maximal (${lvl}).`, 'chantier');
+    else if (avant < 5 && lvl >= 5) noterMarque(`${nom} porté au niveau 5.`, 'chantier');
+  }
+}
+
+// Annales : la mémoire de la partie, triée par date.
+// → [{ at, jour, texte, kind: 'fondation'|'arrivee'|'deces'|'contact'|'annales'|'chantier'|'fil'|'marque' }]
+export function annalesColonie() {
+  const out = [];
+  const crew = S.crew || [];
+  const fondateurs = crew.filter(m => (m.joinedAt || 0) === 0);
+  out.push({ at: 0, kind: 'fondation', texte: `Fondation de ${S.meta.colonyName || 'l’avant-poste'}${fondateurs.length ? ` : ${listeFr(fondateurs.map(m => m.name))} posent la capsule sur le plateau` : ''}.` });
+  for (const m of crew) {
+    if ((m.joinedAt || 0) > 0) out.push({ at: m.joinedAt, kind: 'arrivee', texte: `${m.name} rejoint la colonie${m.origin?.label ? ` (${m.origin.label})` : ''}.` });
+    if (m.statut === 'mort' && typeof m.diedAt === 'number') {
+      const g = m.pronoms === 'elle' ? 'morte' : m.pronoms === 'il' ? 'mort' : 'mort·e';
+      const cause = String(m.deathCause || 'cause inconnue').trim().replace(/\.$/, '');
+      out.push({ at: m.diedAt, kind: 'deces', texte: `${m.name} est ${g} : ${cause.charAt(0).toLowerCase() + cause.slice(1)}.` });
+    }
+  }
+  for (const f of Object.values(S.factions || {})) {
+    if (typeof f?.metAt === 'number') out.push({ at: f.metAt, kind: 'contact', texte: `Premier contact : ${f.name}${FACTION_TYPES[f.type]?.label ? ` (${FACTION_TYPES[f.type].label})` : ''}.` });
+  }
+  for (const h of S.historicalMarks || []) {
+    if (!h || typeof h.text !== 'string') continue;
+    const texte = h.text.replace(/\{worker\}/g, h.victim || 'un colon');
+    out.push({ at: Number(h.at) || 0, kind: h.kind || 'marque', texte });
+  }
+  out.sort((a, b) => a.at - b.at);
+  return out.map(e => ({ ...e, jour: calendarOf(e.at).jour }));
 }
 
 // ============================================================
@@ -5818,7 +5528,7 @@ function appliquerEffets(effets, ctx) {
         break;
       case 'monde':
         if (!S.monde || typeof S.monde !== 'object') S.monde = {};
-        Object.assign(S.monde, e.valeurs);
+        N.appliquerDrapeaux(S.monde, e.valeurs);   // '+1' / '-2' : compteurs
         break;
       case 'recrute': {
         const ref = String(e.valeur);

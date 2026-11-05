@@ -126,7 +126,7 @@ try {
       return {
         report: rep && { faits: Array.isArray(rep.faits), deces: Array.isArray(rep.deces), ev: rep.evenementRetour, enAttente: rep.enAttente },
         pendingKinds: S.pendingDecisions.map(d => d.kind + ':' + d.refId),
-        minorQueued: S.pendingDecisions.filter(d => d.kind === 'incident' && (app.INCIDENTS[d.refId]?.severity || 1) <= 1 && d.offline).length,
+        minorQueued: S.pendingDecisions.filter(d => d.kind === 'incident' && app.INCIDENTS[d.refId]?.gravite === 'mineur' && d.offline).length,
         gm: S.meta.gameMin, pending: S.pendingDecisions.length,
         maxGap: Math.max(...gaps), incidentModals: window.__incidentModals, progress: window.__progressSeen,
         modal: document.querySelector('#modal').textContent,

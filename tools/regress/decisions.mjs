@@ -27,6 +27,12 @@ const waitShown = (page, re, timeout = 3000) => b.until(page, re => {
   return new RegExp(re).test(h3) ? h3 : false;
 }, re.source, { timeout });
 const clickChoice = (page, sel = '#modal button.incident-choice:not([disabled])') => page.evaluate(s => document.querySelector(s)?.click(), sel);
+// V1 : après un choix, la fenêtre montre les conséquences ; « Continuer » la ferme
+const choisir = async (page, sel) => {
+  await clickChoice(page, sel);
+  await page.waitForSelector('#consContinue', { timeout: 2000 });
+  await page.click('#consContinue');
+};
 
 try {
   const ctx = await b.context();
@@ -55,15 +61,15 @@ try {
   await waitShown(page, /Éboulement/);
   const before = await page.evaluate(async () => {
     const { S } = await import('./src/state.js');
-    return { victim: S.pendingDecisions[0]?.victimId, flag: S.pendingIncident };
+    return { victim: S.pendingDecisions[0]?.acteurs?.victime, flag: S.pendingIncident };
   });
   check(before.flag === 'mine_eboulement', 'S.pendingIncident renseigné pour le bandeau d\'alertes');
   await page.reload();
   await b.waitGame(page);
   await waitShown(page, /Éboulement/);
-  const after = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.victimId);
-  check(after === before.victim, 'après rechargement, le même incident réapparaît (même victime)');
-  await clickChoice(page);
+  const after = await page.evaluate(async () => (await import('./src/state.js')).S.pendingDecisions[0]?.acteurs?.victime);
+  check(!!before.victim && after === before.victim, 'après rechargement, le même incident réapparaît (même victime)');
+  await choisir(page);
   await page.waitForTimeout(300);
   const st1 = await page.evaluate(async () => { const { S } = await import('./src/state.js'); return { n: S.pendingDecisions.length, flag: S.pendingIncident }; });
   check(st1.n === 0 && st1.flag === null && !(await shown(page)), 'choix appliqué : file vide, fenêtre fermée');
@@ -78,10 +84,10 @@ try {
   await waitShown(page, /Filon/);
   await page.waitForTimeout(600);
   check(/Filon/.test((await shown(page))?.title || ''), 'le 2e incident n\'écrase pas le 1er');
-  await clickChoice(page);
+  await choisir(page);
   await waitShown(page, /Récolte/);
   check(true, 'le 2e s\'affiche une fois le 1er résolu');
-  await clickChoice(page);
+  await choisir(page);
   await page.waitForTimeout(300);
 
   // ------------------------------------------------------------------
@@ -166,7 +172,7 @@ try {
     workers.forEach((w, i) => app.assignMember(w.id, 'mine_surface', i));
     const third = workers[2];
     S.build = { id: 'mine_surface', targetLevel: 4, totalMin: 100, doneMin: 10 };
-    app.applyIncidentChoice({ modKey: 'mine_surface', titre: 'Test', choices: [] }, { label: 'x', outcome: { damageModule: true } }, third);
+    app.appliquerEffetsColonie([{ module: { id: 'mine_surface', niveau: -1 } }], { victime: third });
     const a = app.memberAssignment(third.id);
     const res = {
       level: S.modules.mine_surface.level, slot2: S.assignments['mine_surface:2'] || null,
@@ -219,7 +225,7 @@ try {
     const bad = [];
     for (const [id, def] of [...Object.entries(app.INCIDENTS), ...Object.entries(app.COLONY_EVENTS)]) {
       if (!def.titre) bad.push(id + ' (sans titre)');
-      if (!def.choices.some(c => !c.req && !c.consume && !c.pay)) bad.push(id);
+      if (!def.choix.some(c => c.si === undefined && c.requiert === undefined && c.consomme === undefined && c.cout === undefined)) bad.push(id);
     }
     return bad;
   });

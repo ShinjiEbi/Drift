@@ -5170,6 +5170,46 @@ h2.eyebrow { margin-top: 22px; }
 .lore-empty p.dim { font-style: italic; font-size: 14px; color: var(--text-mute); }
 .lore-empty .cta-btn { width: auto; padding: 12px 18px; }
 
+/* Archives : pages débloquées, par catégorie */
+.lore-cat { margin-bottom: 20px; }
+.lore-cat-head {
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--amber); padding: 6px 0; margin-bottom: 8px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+}
+.lore-cat-count { color: var(--text-mute); letter-spacing: 0.08em; }
+.lore-page {
+  display: block; width: 100%; text-align: left; margin-bottom: 8px; padding: 10px 14px; min-height: 44px;
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border-bright);
+  color: var(--text); cursor: pointer;
+}
+.lore-page.new { border-left-color: var(--amber); background: linear-gradient(90deg, rgba(212,160,86,0.08), var(--surface) 70%); }
+.lore-page:hover, .lore-page:focus-visible { border-color: var(--amber); }
+.lp-title { display: block; font-family: var(--serif); font-size: 17px; }
+.lp-new {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--amber);
+  border: 1px solid rgba(212,160,86,0.5); padding: 0 5px; margin-left: 6px; vertical-align: middle;
+}
+.lp-resume { display: block; font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--text-dim); line-height: 1.45; margin-top: 2px; }
+.lore-sealed { font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--text-mute); padding: 4px 2px; }
+.lore-reader p { font-family: var(--serif); font-size: 16px; line-height: 1.65; color: var(--text); margin-bottom: 12px; }
+.lore-reader-cat { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-mute); margin-bottom: 10px; }
+
+/* Annales : mémoire de la partie, par jour */
+.annales-head h3 { font-family: var(--serif); font-style: italic; font-weight: 500; font-size: 22px; color: var(--amber-bright); margin-bottom: 6px; }
+.annales-head p.dim { font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--text-mute); line-height: 1.5; margin-bottom: 16px; }
+.annales-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.annale { display: flex; gap: 10px; align-items: baseline; font-family: var(--serif); font-size: 15px; line-height: 1.5; color: var(--text); }
+.annale-icon { font-family: var(--mono); font-size: 12px; color: var(--text-mute); flex-shrink: 0; width: 14px; text-align: center; }
+.annale.deces .annale-icon { color: var(--rust-text); }
+.annale.fondation .annale-icon, .annale.fil .annale-icon, .annale.annales .annale-icon { color: var(--amber); }
+.annale.arrivee .annale-icon, .annale.contact .annale-icon { color: var(--moss); }
+
+/* Fenêtre de décision : texte du moteur (paragraphes) et jet de dés */
+.incident-body p + p { margin-top: 10px; }
+.cons-roll { font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-bottom: 10px; }
+.incident-choice.cons-continue { text-align: center; }
+
 /* ----- Labo : recherche compacte ----- */
 .tech-list { display: flex; flex-direction: column; gap: 6px; }
 .tech-list .tech-card { margin-bottom: 0; padding: 9px 12px; }

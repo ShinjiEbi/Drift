@@ -172,7 +172,7 @@ try {
     S.buildQueue = [{ id: 'hydroponie', targetLevel: 2 }, { id: 'laboratoire', targetLevel: 3 }];
     // Une décision en attente, gardée en file (une scène est « ouverte »)
     document.querySelector('#sceneOverlay').classList.add('show');
-    const id = Object.keys(app.INCIDENTS).find(k => S.modules[app.INCIDENTS[k].modKey]);
+    const id = Object.keys(app.INCIDENTS).find(k => S.modules[app.INCIDENTS[k].module]);
     app.triggerIncident(id, false);
     document.querySelector('#sceneOverlay').classList.remove('show');
     ui.gotoView('base', 'afaire');
@@ -397,7 +397,8 @@ try {
     out.durations = [...document.querySelectorAll('#researchContent .tech-card .dur')].map(e => e.textContent).slice(0, 3);
     // Archives / Annales : états vides
     ui.gotoView('recits', 'archives');
-    out.archives = document.querySelector('#archivesContent .lore-empty h3')?.textContent;
+    out.archives = document.querySelector('#archivesContent .lore-empty h3')?.textContent
+      || `${document.querySelectorAll('#archivesContent .lore-page').length} pages`;
     return out;
   });
   t.check(views.arcCurrent.length > 5 && !views.decouvrir, 'fils rouges : condition de l\'étape courante visible, plus de « À découvrir »', views.arcCurrent);
@@ -407,7 +408,7 @@ try {
   t.check(views.crewCards > 5 && views.crewOpen === 0 && views.crewOpen2 === 1 && views.statNames.includes('Vigueur') && views.traitDesc && views.glossary > 10,
     'équipage : cartes compactes, fiche dépliable (noms complets, effets des traits), légende', JSON.stringify(views));
   t.check(views.rfilters.length === 4 && views.durations.every(d => /\d/.test(d)), 'labo : filtres de recherche et durées réelles', JSON.stringify(views.rfilters) + JSON.stringify(views.durations));
-  t.check(views.archives === 'Archives', 'archives : état vide qui annonce son contenu');
+  t.check(views.archives === 'Archives' || /^[1-9]\d* pages$/.test(views.archives), 'archives : état vide qui annonce son contenu, ou pages débloquées', views.archives);
   t.check(page.errors.length === 0, 'aucune erreur JavaScript', page.errors.slice(0, 3).join(' | '));
   await page.context().close();
 } catch (e) {

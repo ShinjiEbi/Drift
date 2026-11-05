@@ -7,18 +7,18 @@
 // Deux sources :
 //   1. des indices dynamiques, calculés sur l'état (énergie en baisse,
 //      chantier à l'arrêt, colons sans poste, vaisseau à quai…) ;
-//   2. l'étape courante du fil rouge « L'Avant-poste » (ARCS), avec sa
-//      progression chiffrée.
+//   2. l'étape courante du fil rouge principal en cours : le prologue
+//      « L'atterrissage » sur une partie neuve, puis « L'Avant-poste ». Son
+//      objectif (titre, progression, bouton) est écrit dans le contenu
+//      (src/content/arcs/, champ `objectif` d'une étape).
 // Les urgences passent devant ; le fil rouge garde toujours une place tant
 // qu'il n'est pas achevé. Lecture seule : rien n'est modifié dans S.
 
 import { MODULES, TECH_TREE } from './catalog.js';
-import * as ArcsData from './data-arcs-factions.js';
-import { computeRates, crewCap, aliveCrew } from './state.js';
+import { computeRates, crewUsage, aliveCrew } from './state.js';
 import { fmtDuree } from './util.js';
 import * as App from './app.js';
 
-const ARC_ID = 'arc_avant_poste';
 const PRIMAIRES = ['mine_surface', 'hydroponie', 'generateur_solaire', 'habitat'];
 
 // Ordre de priorité des premiers bâtiments conseillés
@@ -121,12 +121,16 @@ function hints(S) {
     }
   }
 
-  // Loger un équipage
-  if (safe(() => crewCap(), 0) === 0 && !(S.build?.id === 'habitat')) {
+  // Loger un équipage : le commandement n'offre que quelques couchettes
+  const usage = safe(() => crewUsage(), { used: 0, total: 0 });
+  const libres = Math.max(0, usage.total - usage.used);
+  if (libres <= 1 && !lvl(S, 'habitat') && S.build?.id !== 'habitat') {
     out.push({
       id: 'habitat', source: 'conseil', prio: 70,
       titre: "Préparer l'accueil : l'Habitat",
-      detail: "Sans couchettes, aucun colon ne peut rejoindre l'avant-poste.",
+      detail: libres === 1
+        ? "Une seule couchette libre au commandement : l'Habitat en ajoute pour les prochaines recrues."
+        : "Plus aucune couchette libre : sans Habitat, aucun colon ne peut rejoindre l'avant-poste.",
       action: { onglet: 'base', sousOnglet: 'construction', cible: 'habitat', label: 'Habitat' },
     });
   } else if (lvl(S, 'habitat') > 0 && !lvl(S, 'balise_recrutement') && S.build?.id !== 'balise_recrutement') {
@@ -155,10 +159,15 @@ function hints(S) {
   const docked = (S.fleet || []).some(v => v.available);
   const ready = crew.filter(m => m.statut === 'libre' || m.statut === 'travail').length;
   if (!away && docked && ready > 0 && (S.expeditions || []).length === 0) {
+    // La toute première mission passe devant le reste : la vedette part sans
+    // hangar, et la première scène arrive vite.
+    const premiere = (S.expHistory || []).length === 0;
     out.push({
-      id: 'expedition', source: 'conseil', prio: 55,
-      titre: 'Envoyer une équipe',
-      detail: 'Un vaisseau attend à quai. Choisis une destination sur la carte.',
+      id: 'expedition', source: 'conseil', prio: premiere ? 85 : 55,
+      titre: premiere ? 'Envoyer la vedette' : 'Envoyer une équipe',
+      detail: premiere
+        ? "La vedette est prête, sans attendre de hangar. Choisis une destination proche : l'équipe y vivra sa première scène."
+        : 'Un vaisseau attend à quai. Choisis une destination sur la carte.',
       action: { onglet: 'expeditions', sousOnglet: 'carte', label: 'Carte' },
     });
   }
@@ -176,44 +185,40 @@ function hints(S) {
   return out;
 }
 
-// ---- Étape courante du fil rouge « L'Avant-poste » ----
+// ---- Étape courante du fil rouge principal (prologue, puis « L'Avant-poste ») ----
+// L'objectif vient du contenu : etape.objectif = { titre, detail?, action,
+// progression?: { valeur: '<expression>', total, unite? }, modules?: [ids], niveau? }
+// ou une liste de variantes { si, … } (la première vraie l'emporte).
+function objectifEtape(etape) {
+  const o = etape.objectif;
+  if (Array.isArray(o)) return o.find(v => v.si === undefined || safe(() => App.conditionColonie(v.si), false)) || null;
+  return o || null;
+}
+
 function arcObjective(S) {
-  const arc = ArcsData.ARCS?.[ARC_ID];
-  if (!arc) return null;
-  const st = S.arcs?.[ARC_ID] || { completedSteps: [] };
-  const done = Array.isArray(st.completedSteps) ? st.completedSteps : [];
-  const step = arc.steps.find(s => !done.includes(s.id));
-  if (!step) return null;
-  const n = safe(() => aliveCrew().length, 0);
-  const base = { id: 'fil_' + step.id, source: 'fil', fil: arc.nom, etape: step.title, prio: 40 };
-  switch (step.id) {
-    case 'ap_1':
-      return { ...base, titre: 'Réunir dix colons', detail: `${step.title} · ${Math.min(n, 10)}/10 colons`,
-        progression: { n: Math.min(n, 10), total: 10 }, action: { onglet: 'equipage', sousOnglet: 'recrutement', label: 'Recruter' } };
-    case 'ap_4':
-      return { ...base, titre: 'Atteindre vingt-cinq colons', detail: `${step.title} · ${Math.min(n, 25)}/25 colons`,
-        progression: { n: Math.min(n, 25), total: 25 }, action: { onglet: 'equipage', sousOnglet: 'recrutement', label: 'Recruter' } };
-    case 'ap_2':
-    case 'ap_5': {
-      const target = step.id === 'ap_2' ? 3 : 5;
-      const ids = step.id === 'ap_2' ? PRIMAIRES : [...PRIMAIRES, 'laboratoire'];
-      const ok = ids.filter(id => lvl(S, id) >= target).length;
-      const lag = ids.slice().sort((a, b) => lvl(S, a) - lvl(S, b))[0];
-      return { ...base, titre: `Bâtiments primaires au niveau ${target}`,
-        detail: `${step.title} · ${ok}/${ids.length} — le plus en retard : ${nomMod(lag)} (niv. ${lvl(S, lag)})`,
-        progression: { n: ok, total: ids.length }, action: { onglet: 'base', sousOnglet: 'construction', cible: lag, label: nomMod(lag) } };
-    }
-    case 'ap_3': {
-      const f = (S.fleet || []).length;
-      return { ...base, titre: 'Une flotte de trois vaisseaux', detail: `${step.title} · ${Math.min(f, 3)}/3 vaisseaux`,
-        progression: { n: Math.min(f, 3), total: 3 }, action: { onglet: 'expeditions', sousOnglet: 'vaisseaux', label: 'Hangar' } };
-    }
-    default: {
-      // Étape ajoutée par le contenu : son texte d'objectif s'il en a un
-      const txt = step.objectif || step.indice || step.hint || '';
-      return { ...base, titre: step.title, detail: txt || `Fil rouge : ${arc.nom}`, action: { onglet: 'recits', sousOnglet: 'filsrouges', label: 'Fil rouge' } };
-    }
+  const fil = safe(() => App.filPrincipalEnCours?.(), null);
+  if (!fil) return null;
+  const { arc, etape } = fil;
+  const o = objectifEtape(etape) || {};
+  const base = { id: 'fil_' + etape.id, source: 'fil', fil: arc.titre, etape: etape.titre, prio: 40 };
+  const action = { ...(o.action || { onglet: 'recits', sousOnglet: 'filsrouges', label: 'Fil rouge' }) };
+  let detail = o.detail || etape.indice || `Fil rouge : ${arc.titre}`;
+  let progression;
+  if (Array.isArray(o.modules) && o.modules.length) {
+    // Modules à amener à un niveau : compte, et le plus en retard comme cible
+    const cible = o.niveau || 1;
+    const ok = o.modules.filter(id => lvl(S, id) >= cible).length;
+    const lag = o.modules.slice().sort((a, b) => lvl(S, a) - lvl(S, b))[0];
+    progression = { n: ok, total: o.modules.length };
+    detail = `${etape.titre} · ${ok}/${o.modules.length} — le plus en retard : ${nomMod(lag)} (niv. ${lvl(S, lag)})`;
+    Object.assign(action, { cible: lag, label: action.label || nomMod(lag) });
+  } else if (o.progression?.valeur) {
+    const n = Number(safe(() => App.evaluerColonie(o.progression.valeur), 0)) || 0;
+    const total = o.progression.total || 1;
+    progression = { n: Math.min(n, total), total };
+    detail = `${etape.titre} · ${Math.min(n, total)}/${total}${o.progression.unite ? ' ' + o.progression.unite : ''}`;
   }
+  return { ...base, titre: o.titre || etape.titre, detail, action, ...(progression ? { progression } : {}) };
 }
 
 export function getObjectives(S) {
@@ -223,9 +228,13 @@ export function getObjectives(S) {
   const arc = safe(() => arcObjective(S), null);
   const picked = [];
   const seenCible = new Set();
+  const cleAction = a => `${a?.onglet}/${a?.sousOnglet || ''}/${a?.cible || ''}`;
+  // Un conseil qui mène au même endroit que l'objectif du fil rouge est retiré
+  const doublonFil = h => !!arc && (cleAction(h.action) === cleAction(arc.action) || (!!arc.action?.cible && h.action?.cible === arc.action.cible));
   const room = arc ? 2 : 3;
   for (const h of hs) {
     if (picked.length >= room) break;
+    if (doublonFil(h)) continue;
     const c = h.action?.cible;
     if (c && seenCible.has(c)) continue;
     if (c) seenCible.add(c);
@@ -235,7 +244,7 @@ export function getObjectives(S) {
   // Moins de 3 : on complète avec les indices restants
   for (const h of hs) {
     if (picked.length >= 3) break;
-    if (picked.includes(h) || (h.action?.cible && seenCible.has(h.action.cible))) continue;
+    if (picked.includes(h) || doublonFil(h) || (h.action?.cible && seenCible.has(h.action.cible))) continue;
     picked.push(h);
   }
   return picked.slice(0, 3).map(({ prio, ...o }) => ({ fait: false, ...o }));

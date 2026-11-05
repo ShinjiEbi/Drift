@@ -6,7 +6,7 @@
 import { VERSION, SAVE_KEY, SAVE_SCHEMA_VERSION, SAVE_BACKUP_MAX, TICK_MS, MIN_PER_TICK, AUTOSAVE_EVERY, BUILD_TIME_MULT, PROD_MULT, OFFLINE_MAX_HOURS, OFFLINE_INCIDENT_RATE, RESOURCES, RES_LABELS, START_RESOURCES, CAP, SKILL_LIST, PACING, YEAR_IN_GAME_MIN } from './constants.js';
 import { MODULES, MODULE_JOBS, ITEMS, ITEM_NAME_TO_ID, BLUEPRINTS, BIOMES, ATMOSPHERES, SIGNAUX, RUINES, DANGERS, TRAITS, TECH_TREE, FABRICATIONS, VESSELS } from './catalog.js';
 import { rngFor, rPick, rWeighted, rInt, fmtDuree, esc, uid } from './util.js';
-import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits, tickAutoCare, genVesselName, salaryPerDay } from './app.js';
+import { globalCommandBonus, moduleEfficiency, permanentBonusesAccumulated, staffOf, techEffectsAccumulated, tickExpeditions, tickResearch, tickFabrication, tickRelations, tickRelationMoraleEffects, tickAging, tickColonyEvents, tickArcs, tickFactions, tickDiplomaticMissions, finishVesselBuild, finishTraining, finishTreatment, progressMemberStatuts, rollColonyIncident, triggerIncident, catchUpOffline, autoAssignAllFreeMembers, autoAssignMember, normalizeChronicleRecruits, tickAutoCare, genVesselName, salaryPerDay, normaliserMemoireColonie, convertirDecisionsColonie } from './app.js';
 import { render, toast, log, seedJournal, showModal } from './ui.js';
 import { notif } from './notifications.js';
 
@@ -115,13 +115,16 @@ export function freshState() {
     scenesVues: {},
     compteurs: {},
     monde: {},
-    // 0.19 — cooldowns événements de colonie
+    // 0.19 — prochain événement de colonie
     nextEventMin: PACING.EVENT_FIRST,
-    lastHommageMin: -99999,
-    lastVisitorMin: -99999,
-    lastMerchantMin: -99999,
-    // 0.20 — arcs narratifs
-    arcs: {},                 // { arcId: { unlocked, completedSteps, rewardClaimed } }
+    // V1 — mémoire de la colonie (app.js, section COLONIE) : événements vécus
+    // { id: { n, derniere, acteurs } }, colons atteints par statut, pages d'archives
+    evenements: {},
+    statutsVus: {},
+    archives: {},             // { pageId: { at, lu } }
+    // 0.20 — fils rouges : { arcId: { unlocked, completedSteps, rewardClaimed, scenes } }
+    // V1 : une partie neuve ouvre le prologue « L'atterrissage » (jamais une sauvegarde existante)
+    arcs: { prologue: { unlocked: true, unlockedAt: 0, completedSteps: [], rewardClaimed: false } },
     unlockedLegendaryTechs: {},
     permanentBonuses: {},
     // 0.21 — diplomatie
@@ -1526,11 +1529,15 @@ function normalizeContainers(d) {
   if (typeof d.nextRecruitMin !== 'number') d.nextRecruitMin = 0;
   if (typeof d.nextIncidentMin !== 'number') d.nextIncidentMin = gm + 60 * 8;
   if (typeof d.alienDatacubes !== 'number') d.alienDatacubes = 0;
-  // 0.19 : événements de colonie — cooldowns
+  // 0.19 : événements de colonie
   if (typeof d.nextEventMin !== 'number') d.nextEventMin = gm + PACING.EVENT_FIRST;
-  if (typeof d.lastHommageMin !== 'number') d.lastHommageMin = -99999;
-  if (typeof d.lastVisitorMin !== 'number') d.lastVisitorMin = -99999;
-  if (typeof d.lastMerchantMin !== 'number') d.lastMerchantMin = -99999;
+}
+
+// V1 : mémoire de la colonie (événements, statuts vus, archives) et décisions
+// en attente des anciennes sauvegardes (ids et acteurs de 0.33) — app.js
+function normalizeColonyMemory(d) {
+  normaliserMemoireColonie(d);
+  convertirDecisionsColonie(d.pendingDecisions);
 }
 
 function normalizeMeta(d) {
@@ -1663,6 +1670,7 @@ const NORMALIZE = [
   ['inventaire', normalizeInventory],
   ['bibliothèque de schémas', normalizeDiscoveries],
   ['décisions en attente', normalizeDecisions],
+  ['mémoire de la colonie', normalizeColonyMemory],
 ];
 
 // ---- Étapes de migration ordonnées (schéma 0 → 1 → …) ----

@@ -1,0 +1,46 @@
+// src/content/arcs/cristaux.js — « Les Cristaux », chronique alien-A.
+// Migré de data-arcs-factions.js (0.33), mêmes ids d'étapes.
+import { arc } from '../dsl.js';
+
+export default arc({
+  id: 'arc_cristaux',
+  titre: 'Les Cristaux',
+  surtitre: 'Chronique alien-A',
+  couleur: '#9f5fb8',
+  intro: 'Une civilisation cristalline a précédé toute autre dans cette région. Leurs traces sont partout. Leur logique nous échappe. Mais elle est cohérente.',
+  ouverture: 'colonie.schemas.alien_a >= 1',
+  indiceOuverture: 'Se révèle avec un premier schéma alien-A.',
+  etapes: [
+    { id: 'crys_1', titre: 'Éveil',
+      texte: 'Premier schéma alien-A déchiffré. Les motifs ne sont pas décoratifs — ils sont fonctionnels. Chaque ornement est une équation.',
+      quand: 'colonie.schemas.alien_a >= 1',
+      indice: 'Déchiffrer un schéma alien-A.' },
+    { id: 'crys_2', titre: 'Motifs récurrents',
+      texte: "Trois ruines visitées, trois mêmes répétitions. Ce n'est pas du langage — c'est un protocole. Une grammaire de geste.",
+      quand: 'expeditions.ruines.alien_a >= 3',
+      indice: 'Explorer trois ruines alien-A.',
+      objectif: { titre: 'Explorer trois ruines cristallines', progression: { valeur: 'expeditions.ruines.alien_a', total: 3 }, action: { onglet: 'expeditions', sousOnglet: 'carte', label: 'Carte' } } },
+    { id: 'crys_3', titre: "L'artefact clé",
+      texte: "Une lentille noire ramenée d'expédition. Quand on la regarde, on voit des choses qui n'existent pas dans la pièce. Pas une illusion — une autre couche de réel.",
+      quand: 'colonie.objet.lentille_noire >= 1',
+      indice: 'Rapporter une lentille noire.' },
+    { id: 'crys_4', titre: 'Compréhension théorique',
+      texte: 'La tech « Principes xeno-archéologiques » formalise nos intuitions. Nous commençons à comprendre la logique cristalline.',
+      quand: 'colonie.tech.tech_principes_xeno',
+      indice: 'Rechercher « Principes xeno-archéologiques ».',
+      objectif: { titre: 'Rechercher les principes xéno-archéologiques', action: { onglet: 'labo', sousOnglet: 'recherche', label: 'Recherche' } } },
+    { id: 'crys_5', titre: 'Confrontation',
+      texte: "Un Gardien éveillé. L'équipe est revenue avec des données — ou des cicatrices. Mais elle est revenue. Nous savons désormais ce qu'ils protègent.",
+      quand: 'expeditions.scene.boss_alien_gardien >= 1',
+      indice: 'Affronter ce qui garde les ruines cristallines.' },
+    { id: 'crys_6', titre: 'Résonance pure',
+      texte: "Avec les données accumulées, le laboratoire formule une percée : la résonance cristalline n'est pas seulement de l'énergie, c'est un état de conscience matérielle.",
+      quand: 'colonie.datacubes_alien >= 50 && colonie.schemas.alien_a >= 3',
+      indice: '50 datacubes alien et trois schémas alien-A.' },
+  ],
+  recompense: {
+    titre: 'Technologie légendaire : Résonance pure',
+    texte: 'Percée majeure : la Résonance pure devient accessible dans la branche exotique.',
+    effets: [{ technologie: 'tech_resonance_pure' }],
+  },
+});

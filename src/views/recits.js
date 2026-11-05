@@ -1,15 +1,15 @@
 // views/recits.js — onglet « Récits » : chroniques planétaires, fils rouges
 // (arcs, avec les conditions des étapes), journal filtré et groupé par jour,
-// archives et annales (remplies en vague 2).
+// archives (pages de lore débloquées) et annales (mémoire de la partie).
 
 import { $ } from '../util.js';
-import { BLUEPRINTS, TECH_TREE } from '../catalog.js';
 import * as ArcsData from '../data-arcs-factions.js';
-import { S, aliveCrew } from '../state.js';
+import { S } from '../state.js';
 import {
-  esc, fmtDuree, setHTML, safeHTML, emptyState, filterChips, getFilter, calendar, pad2, plur, arcState,
+  appCall, esc, fmtDuree, setHTML, safeHTML, emptyState, filterChips, getFilter, calendar, pad2, plur, arcState,
 } from './common.js';
 import { chroniclesList } from './base.js';
+import { showModal, render } from '../ui.js';
 
 // ============================================================
 //   CHRONIQUES PLANÉTAIRES
@@ -51,68 +51,41 @@ export function renderChronicles() {
 }
 
 // ============================================================
-//   FILS ROUGES (arcs)
+//   FILS ROUGES (arcs) — contenu de src/content/arcs/
 // ============================================================
+// Indice et progression d'une étape : écrits dans le contenu (indice,
+// objectif.progression, objectif.modules) ; la progression est calculée par
+// le moteur (App.evaluerColonie).
 const lvl = id => S.modules?.[id]?.level || 0;
-const nbBp = origin => Object.keys(S.discoveries || {}).filter(id => BLUEPRINTS[id]?.origin === origin).length;
-const inv = id => S.inventory?.[id] || 0;
-const nbTech = () => Object.keys(S.techCompleted || {}).length;
-const nbRuins = kind => (S.expHistory || []).filter(e => e.body?.ruines === kind).length;
-const techNom = id => TECH_TREE[id]?.nom || id;
-
-// Condition lisible de chaque étape connue (et progression chiffrée)
-const STEP_HINTS = {
-  ap_1: () => ({ txt: 'Compter dix colons vivants.', n: aliveCrew().length, total: 10 }),
-  ap_2: () => ({ txt: 'Mine, hydroponie, générateur solaire et habitat au niveau 3.', n: ['mine_surface', 'hydroponie', 'generateur_solaire', 'habitat'].filter(k => lvl(k) >= 3).length, total: 4 }),
-  ap_3: () => ({ txt: 'Posséder trois vaisseaux.', n: (S.fleet || []).length, total: 3 }),
-  ap_4: () => ({ txt: 'Compter vingt-cinq colons vivants.', n: aliveCrew().length, total: 25 }),
-  ap_5: () => ({ txt: 'Mine, hydroponie, générateur, habitat et laboratoire au niveau 5.', n: ['mine_surface', 'hydroponie', 'generateur_solaire', 'habitat', 'laboratoire'].filter(k => lvl(k) >= 5).length, total: 5 }),
-  eff_1: () => ({ txt: 'Rapporter un disque mémoire.', n: inv('disque_memoire'), total: 1 }),
-  eff_2: () => ({ txt: 'Explorer une ruine humaine.', n: nbRuins('humaines'), total: 1 }),
-  eff_3: () => ({ txt: 'Réunir deux disques mémoire.', n: inv('disque_memoire'), total: 2 }),
-  eff_4: () => ({ txt: 'Compter un linguiste de niveau 4 dans l\'équipage.' }),
-  eff_5: () => ({ txt: 'Trouver une plaque gravée et visiter une station.' }),
-  eff_6: () => ({ txt: 'Maîtriser huit technologies.', n: nbTech(), total: 8 }),
-  crys_1: () => ({ txt: 'Déchiffrer un schéma alien-A.', n: nbBp('alien_a'), total: 1 }),
-  crys_2: () => ({ txt: 'Explorer trois ruines alien-A.', n: nbRuins('alien_a'), total: 3 }),
-  crys_3: () => ({ txt: 'Rapporter une lentille noire.', n: inv('lentille_noire'), total: 1 }),
-  crys_4: () => ({ txt: `Rechercher « ${techNom('tech_principes_xeno')} ».` }),
-  crys_5: () => ({ txt: 'Affronter ce qui garde les ruines cristallines.' }),
-  crys_6: () => ({ txt: '50 datacubes alien et trois schémas alien-A.' }),
-  cou_1: () => ({ txt: 'Déchiffrer un schéma alien-B.', n: nbBp('alien_b'), total: 1 }),
-  cou_2: () => ({ txt: 'Qu\'un colon survive à un pathogène alien.' }),
-  cou_3: () => ({ txt: 'Rapporter un anneau scellé.', n: inv('anneau_scelle'), total: 1 }),
-  cou_4: () => ({ txt: 'Explorer une ruine alien-B en emportant du sérum xéno.' }),
-  cou_5: () => ({ txt: 'Affronter un essaim organique.' }),
-  cou_6: () => ({ txt: `Rechercher « ${techNom('tech_genetique')} » ou déchiffrer trois schémas alien-B.` }),
-};
-const ARC_UNLOCK_HINTS = {
-  arc_effondrement: 'Se révèle quand l\'avant-poste compte cinq colons.',
-  arc_cristaux: 'Se révèle avec un premier schéma alien-A.',
-  arc_couvee: 'Se révèle avec un premier schéma alien-B.',
-};
 function stepHint(step) {
-  const own = step.objectif || step.indice || step.hint;
-  if (typeof own === 'string' && own) return { txt: own };
-  try { return STEP_HINTS[step.id]?.() || null; } catch { return null; }
+  const o = Array.isArray(step.objectif) ? step.objectif[step.objectif.length - 1] : step.objectif;
+  const txt = step.indice || o?.titre || '';
+  if (Array.isArray(o?.modules) && o.modules.length) {
+    return { txt, n: o.modules.filter(id => lvl(id) >= (o.niveau || 1)).length, total: o.modules.length };
+  }
+  if (o?.progression?.valeur) {
+    const n = Number(appCall('evaluerColonie', [o.progression.valeur], 0)) || 0;
+    return { txt, n, total: o.progression.total || 1 };
+  }
+  return txt ? { txt } : null;
 }
+
+const principalOrdre = (arc, st) => (arc.principal && st.unlocked && !st.rewardClaimed ? 0 : st.unlocked ? 1 : 2);
 
 export function renderArcs() {
   const sub = $('#arcsSub');
   const content = $('#arcsContent');
   if (!content) return;
   const ARCS = ArcsData.ARCS || {};
-  const ids = Object.keys(ARCS);
+  // Un fil qui ne s'ouvre jamais de lui-même (le prologue d'une partie neuve)
+  // n'est montré que s'il a été ouvert.
+  const ids = Object.keys(ARCS).filter(id => ARCS[id].ouverture !== 'faux' || arcState(id).unlocked);
   const states = Object.fromEntries(ids.map(id => [id, arcState(id)]));
   const unlocked = ids.filter(id => states[id].unlocked).length;
   const completed = ids.filter(id => states[id].rewardClaimed).length;
   setHTML(sub, `<b>${unlocked}/${ids.length}</b> fil${unlocked > 1 ? 's' : ''} ouvert${unlocked > 1 ? 's' : ''} · <b>${completed}</b> achevé${completed > 1 ? 's' : ''}`);
-  // L'Avant-poste d'abord (fil principal), puis les ouverts, puis les scellés
-  const order = ids.slice().sort((a, b) => {
-    const ka = a === 'arc_avant_poste' ? 0 : states[a].unlocked ? 1 : 2;
-    const kb = b === 'arc_avant_poste' ? 0 : states[b].unlocked ? 1 : 2;
-    return ka - kb;
-  });
+  // Le fil principal en cours d'abord, puis les ouverts, puis les scellés
+  const order = ids.slice().sort((a, b) => principalOrdre(ARCS[a], states[a]) - principalOrdre(ARCS[b], states[b]));
   setHTML(content, order.map(id => renderArcCard(id, ARCS[id], states[id])).join(''));
 }
 
@@ -121,57 +94,56 @@ function renderArcCard(arcId, arc, state) {
     return `<div class="arc-card locked" data-id="${esc(arcId)}">
       <div class="arc-eyebrow">Fil scellé</div>
       <h3 class="arc-name">Un fil reste à découvrir</h3>
-      <p class="arc-locked-hint">${esc(ARC_UNLOCK_HINTS[arcId] || arc.indice || 'Il se révélera de lui-même.')}</p>
+      <p class="arc-locked-hint">${esc(arc.indiceOuverture || 'Il se révélera de lui-même.')}</p>
     </div>`;
   }
-  const total = arc.steps.length;
+  const steps = arc.steps || [];
+  const total = steps.length;
   const doneIds = state.completedSteps || [];
   const done = doneIds.length;
   const isComplete = done >= total;
-  const isMain = arcId === 'arc_avant_poste';
-  const currentIdx = arc.steps.findIndex(s => !doneIds.includes(s.id));
-  const milestonesHTML = arc.steps.map(step => {
+  const isMain = !!arc.principal;
+  const color = esc(arc.color);
+  const currentIdx = steps.findIndex(s => !doneIds.includes(s.id));
+  const milestonesHTML = steps.map(step => {
     const ok = doneIds.includes(step.id);
-    return `<span class="milestone ${ok ? 'done' : ''}" style="${ok ? `background:${arc.color}` : ''}"></span>`;
+    return `<span class="milestone ${ok ? 'done' : ''}" style="${ok ? `background:${color}` : ''}"></span>`;
   }).join('');
-  const stepsHTML = arc.steps.map((step, i) => {
+  const stepsHTML = steps.map((step, i) => {
     const ok = doneIds.includes(step.id);
     const current = i === currentIdx;
     // Conditions visibles pour l'étape courante et la suivante ; les plus
-    // lointaines restent voilées (sauf pour le fil principal).
+    // lointaines restent voilées (sauf pour un fil principal).
     const reveal = ok || isMain || (currentIdx >= 0 && i <= currentIdx + 1);
     let body;
     if (ok) {
-      body = `<div class="as-narrative">${step.narrative}</div>`;
+      body = `<div class="as-narrative">${esc(step.narrative)}</div>`;
     } else if (reveal) {
       const h = stepHint(step);
       const prog = h && Number.isFinite(h.n) && h.total ? ` <span class="as-count">${Math.min(h.n, h.total)}/${h.total}</span>` : '';
-      body = `<div class="as-cond">${h ? esc(h.txt) : 'Condition inconnue.'}${prog}</div>`;
+      body = `<div class="as-cond">${h?.txt ? esc(h.txt) : 'Condition inconnue.'}${prog}</div>`;
     } else {
       body = '<div class="as-pending">Condition révélée plus tard.</div>';
     }
     return `<div class="arc-step ${ok ? 'done' : current ? 'current' : 'pending'}">
-      <div class="as-marker" style="${ok ? `background:${arc.color}` : current ? `border-color:${arc.color}` : ''}">${ok ? '✓' : (i + 1)}</div>
+      <div class="as-marker" style="${ok ? `background:${color}` : current ? `border-color:${color}` : ''}">${ok ? '✓' : (i + 1)}</div>
       <div class="as-body">
-        <div class="as-title">${step.title}${current ? ' <span class="as-now">en cours</span>' : ''}</div>
+        <div class="as-title">${esc(step.title)}${current ? ' <span class="as-now">en cours</span>' : ''}</div>
         ${body}
       </div>
     </div>`;
   }).join('');
   let rewardHTML = '';
-  if (arc.reward) {
-    let label = '';
-    if (arc.reward.kind === 'blueprint') label = `Schéma légendaire : ${String(BLUEPRINTS[arc.reward.value]?.nom || arc.reward.value).replace(/^Schéma\s*:\s*/i, '')}`;
-    else if (arc.reward.kind === 'tech') label = `Technologie légendaire : ${TECH_TREE[arc.reward.value]?.nom || arc.reward.value}`;
-    else if (arc.reward.kind === 'permanent_bonus') label = 'Bonus permanent : +10 % sur toute production';
-    if (state.rewardClaimed) rewardHTML = `<div class="arc-reward claimed">✓ Récompense reçue : ${label}</div>`;
-    else if (isComplete) rewardHTML = `<div class="arc-reward ready">Récompense en cours d'attribution : ${label}</div>`;
-    else rewardHTML = `<div class="arc-reward pending">Au bout du fil : ${label}</div>`;
+  const label = arc.recompense?.titre;
+  if (label) {
+    if (state.rewardClaimed) rewardHTML = `<div class="arc-reward claimed">✓ Récompense reçue — ${esc(label)}</div>`;
+    else if (isComplete) rewardHTML = `<div class="arc-reward ready">Récompense en cours d'attribution — ${esc(label)}</div>`;
+    else rewardHTML = `<div class="arc-reward pending">Au bout du fil — ${esc(label)}</div>`;
   }
-  return `<div class="arc-card ${isComplete ? 'complete' : ''}${isMain ? ' main' : ''}" style="border-left-color:${arc.color}" data-id="${esc(arcId)}">
-    <div class="arc-eyebrow" style="color:${arc.color}">${arc.eyebrow}</div>
-    <h3 class="arc-name">${arc.nom}</h3>
-    <p class="arc-intro">${arc.intro}</p>
+  return `<div class="arc-card ${isComplete ? 'complete' : ''}${isMain ? ' main' : ''}" style="border-left-color:${color}" data-id="${esc(arcId)}">
+    <div class="arc-eyebrow" style="color:${color}">${esc(arc.eyebrow)}</div>
+    <h3 class="arc-name">${esc(arc.nom)}</h3>
+    <p class="arc-intro">${esc(arc.intro)}</p>
     <div class="arc-progress">
       <div class="arc-milestones">${milestonesHTML}</div>
       <div class="arc-counter">${done}/${total} étape${total > 1 ? 's' : ''}</div>
@@ -249,26 +221,89 @@ export function renderJournal() {
 }
 
 // ============================================================
-//   ARCHIVES et ANNALES (remplies en vague 2)
+//   ARCHIVES (pages de lore débloquées) et ANNALES (mémoire de la partie)
 // ============================================================
-export function renderArchives() {
-  setHTML($('#archivesContent'), `<div class="lore-empty">
-    <div class="lore-glyph" aria-hidden="true">◈</div>
-    <h3>Archives</h3>
-    <p>Les fragments que l'équipage rapporte — transmissions, pages arrachées, schémas annotés, voix sur un disque — seront classés ici, page après page.</p>
-    <p class="dim">Chaque découverte ouvre une entrée. Rien n'y est encore consigné.</p>
-    <button type="button" class="cta-btn ghost" data-goto="expeditions/carte">Partir explorer</button>
-  </div>`);
+// Badge discret : pages d'archives débloquées et pas encore lues
+export function archivesBadgeCount() {
+  return Number(appCall('archivesNonLues', [], 0)) || 0;
 }
+
+export function renderArchives() {
+  const pages = appCall('pagesArchives', [], []) || [];
+  const ouvertes = pages.filter(p => p.debloquee);
+  if (!ouvertes.length) {
+    setHTML($('#archivesContent'), `<div class="lore-empty">
+      <div class="lore-glyph" aria-hidden="true">◈</div>
+      <h3>Archives</h3>
+      <p>Les fragments que l'équipage rapporte — transmissions, pages arrachées, schémas annotés, voix sur un disque — seront classés ici, page après page.</p>
+      <p class="dim">Chaque découverte ouvre une entrée. Rien n'y est encore consigné.</p>
+      <button type="button" class="cta-btn ghost" data-goto="expeditions/carte">Partir explorer</button>
+    </div>`);
+    return;
+  }
+  const groupes = [];
+  for (const p of pages) {
+    let g = groupes[groupes.length - 1];
+    if (!g || g.categorie !== p.categorie) { g = { categorie: p.categorie, nom: p.categorieNom, pages: [] }; groupes.push(g); }
+    g.pages.push(p);
+  }
+  const nonLues = ouvertes.filter(p => !p.lu).length;
+  setHTML($('#archivesContent'), `
+    <div class="subhead">${plur(ouvertes.length, 'page ouverte', 'pages ouvertes')} sur ${pages.length}${nonLues ? ` · ${plur(nonLues, 'nouvelle', 'nouvelles')}` : ''}</div>
+    ${groupes.map(g => {
+      const visibles = g.pages.filter(p => p.debloquee);
+      const scellees = g.pages.length - visibles.length;
+      return `<section class="lore-cat" data-id="cat-${esc(g.categorie)}">
+        <h3 class="lore-cat-head">${esc(g.nom)} <span class="lore-cat-count">${visibles.length}/${g.pages.length}</span></h3>
+        ${visibles.map(p => `<button type="button" class="lore-page${p.lu ? '' : ' new'}" data-archive="${esc(p.id)}" data-id="arch-${esc(p.id)}">
+          <span class="lp-title">${esc(p.titre)}${p.lu ? '' : ' <span class="lp-new">nouveau</span>'}</span>
+          <span class="lp-resume">${esc(p.resume || '')}</span>
+        </button>`).join('')}
+        ${scellees ? `<div class="lore-sealed">${plur(scellees, 'page scellée', 'pages scellées')} : d'autres découvertes les ouvriront.</div>` : ''}
+      </section>`;
+    }).join('')}`);
+}
+
+// Ouvre une page d'archives (texte rendu par le moteur, déjà sûr) et la marque lue
+function ouvrirArchive(id) {
+  const p = (appCall('pagesArchives', [], []) || []).find(x => x.id === id && x.debloquee);
+  if (!p) return;
+  showModal({
+    title: p.titre,
+    body: `<div class="lore-reader"><div class="lore-reader-cat">${esc(p.categorieNom)}</div>${p.texteHTML}</div>`,
+    bodyIsHTML: true,
+    primaryLabel: 'Refermer',
+    hideCancel: true,
+  });
+  appCall('marquerArchiveLue', [id]);
+  render();
+}
+
+const ANNALES_ICONES = { fondation: '✦', arrivee: '+', deces: '†', contact: '◎', annales: '❖', chantier: '▲', fil: '◆', marque: '•' };
 
 export function renderAnnales() {
   const c = calendar(S.meta.gameMin);
-  setHTML($('#annalesContent'), `<div class="lore-empty">
-    <div class="lore-glyph" aria-hidden="true">✦</div>
-    <h3>Annales de ${esc(S.meta.colonyName)}</h3>
-    <p>La mémoire de la colonie : sa fondation, ses premiers pas, les noms de ceux qui sont tombés, les chroniques menées à leur terme.</p>
-    <p class="dim">Jour ${c.jour} depuis la fondation. L'histoire s'écrit encore.</p>
-  </div>`);
+  const entrees = appCall('annalesColonie', [], []) || [];
+  const jours = [];
+  for (const e of entrees) {
+    let d = jours[jours.length - 1];
+    if (!d || d.jour !== e.jour) { d = { jour: e.jour, items: [] }; jours.push(d); }
+    d.items.push(e);
+  }
+  setHTML($('#annalesContent'), `
+    <div class="annales-head">
+      <h3>Annales de ${esc(S.meta.colonyName)}</h3>
+      <p class="dim">Jour ${c.jour} depuis la fondation. La mémoire de la colonie : ses arrivées, ses morts, ses premiers contacts, ses chantiers, ses récits menés à terme.</p>
+    </div>
+    ${jours.map(d => `<section class="jday annales-day" data-id="annales-${d.jour}">
+      <h3 class="jday-head">Jour ${d.jour}${d.jour === c.jour ? ' <span class="jday-now">aujourd\'hui</span>' : ''}</h3>
+      <ul class="annales-list">${d.items.map(e => `<li class="annale ${esc(e.kind)}">
+        <span class="annale-icon" aria-hidden="true">${ANNALES_ICONES[e.kind] || '•'}</span>
+        <span class="annale-text">${esc(e.texte)}</span>
+      </li>`).join('')}</ul>
+    </section>`).join('')}`);
 }
 
-export const ACTIONS = [];
+export const ACTIONS = [
+  ['button[data-archive]', el => ouvrirArchive(el.dataset.archive)],
+];

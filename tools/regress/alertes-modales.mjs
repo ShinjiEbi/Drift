@@ -57,7 +57,7 @@ try {
     const app = await import('./src/app.js');
     const st = await import('./src/state.js');
     const cat = await import('./src/catalog.js');
-    const ids = Object.keys(app.INCIDENTS).filter(id => cat.MODULES[app.INCIDENTS[id].modKey]);
+    const ids = Object.keys(app.INCIDENTS).filter(id => cat.MODULES[app.INCIDENTS[id].module]);
     // Tout se fait sans laisser passer de tick : la file n'est pas vidée entre-temps
     app.triggerIncident(ids[0], false);
     app.triggerIncident(ids[1] || ids[0], false);

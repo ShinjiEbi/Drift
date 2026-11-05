@@ -198,10 +198,14 @@ function renderBadges() {
     setBadge('#missionsBadge', nWait || nExp);
   }
   setBadge('#diploBadge', (S.diplomaticMissions || []).length);
-  // Récits : chroniques dont la suite est prête
+  // Récits : chroniques dont la suite est prête ; à défaut, discrètement, les
+  // pages d'archives nouvellement débloquées
   const nReady = Base.chroniclesList().filter(c => c.etat === 'prete').length;
-  setBadge('#recitsBadge', nReady);
+  const nArch = Recits.archivesBadgeCount();
+  $('#recitsBadge')?.classList.toggle('count', nReady === 0);
+  setBadge('#recitsBadge', nReady || nArch);
   setBadge('#chroniquesBadge', nReady);
+  setBadge('#archivesBadge', nArch);
   // Labo : activités en cours (discret), schémas connus
   setBadge('#rechercheBadge', (S.research || []).length);
   setBadge('#atelierBadge', (S.fabrication || []).length);

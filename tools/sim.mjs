@@ -159,38 +159,41 @@ async function installBot(cfg) {
   // ---------------- Décisions ----------------
   const pRisk = (bonus, dc) => Math.max(0, Math.min(1, (11 - (dc - bonus)) / 10));
   const atBase = m => ['libre', 'travail'].includes(m.statut);
-  function scoreDecisionOutcome(o) {
-    if (!o) return 0;
+  // V1 : les décisions sont du contenu (src/content/incidents, evenements) ; le bot
+  // lit la vue de la décision (app.vueDecision) et joue par app.choisirDecision.
+  function scoreEffets(list) {
     let s = 0;
-    for (const k in o.loss || {}) s -= o.loss[k] * 3 * 0.1;
-    for (const k in o.gain || {}) s += o.gain[k] * 3 * (k === 'datacubes' ? 0.3 : 0.1);
-    if (o.moralAll) s += o.moralAll * 4;
-    if (o.status) s -= 30;
-    if (o.damageModule) s -= 100;
-    if (o.chainIncident) s -= 50;
-    if (o.debuff) s -= 20;
-    if (o.disableModule) s -= o.disableModule / 60;
-    if (o.generateRivalry) s -= 15;
-    if (o.spawnVisitor) s += 20;
-    if (o.randomBlueprint) s += 20;
+    for (const e of list || []) {
+      const [k] = Object.keys(e || {}), v = e?.[k];
+      if (k === 'perte') for (const n of Object.values(v)) s -= n * 0.1;
+      if (k === 'gain') for (const [r, n] of Object.entries(v)) s += n * (r === 'datacubes' ? 0.3 : 0.1);
+      if (k === 'moral') s += (typeof v === 'number' ? v : v?.valeur || 0) * 4 / 3;
+      if (k === 'statut') s -= 30;
+      if (k === 'module' && (v?.niveau || 0) < 0) s -= 100;
+      if (k === 'module' && v?.horsService) s -= 6;
+      if (k === 'incident') s -= 50;
+      if (k === 'effetTemporaire') s -= 20;
+      if (k === 'brouille') s -= 15;
+      if (k === 'recrute') s += 20;
+      if (k === 'schema') s += 20;
+    }
     return s;
   }
-  function pickDecisionChoice(choices) {
-    const base = st.aliveCrew().filter(m => ['libre', 'travail', 'infirmerie', 'formation'].includes(m.statut));
+  function pickDecisionChoice(dec) {
+    const vue = app.vueDecision?.(dec);
+    const def = dec.kind === 'incident' ? app.INCIDENTS?.[dec.refId] : app.COLONY_EVENTS?.[dec.refId];
+    if (!vue || !def) return -1;
     let best = -1, bestS = -Infinity;
-    (choices || []).forEach((c, i) => {
-      if (c.req?.skill && !base.some(m => (m.skills?.[c.req.skill.key] || 0) >= c.req.skill.min)) return;
-      if (c.consume?.item && !(S().inventory?.[c.consume.item] > 0)) return;
-      if (c.pay && c.outcome?.loss) for (const k in c.outcome.loss) if ((S().res[k] || 0) < c.outcome.loss[k] * 3) return;
-      let sc;
-      if (c.risky) {
-        const bestStat = Math.max(5, ...base.map(m => m.stats?.[c.risky.stat] || 5));
-        const p = pRisk(Math.floor((bestStat - 5) / 2), c.risky.dc);
-        sc = p * scoreDecisionOutcome(c.risky.success) + (1 - p) * scoreDecisionOutcome(c.risky.fail);
-      } else sc = scoreDecisionOutcome(c.outcome);
+    for (const c of vue.choix) {
+      if (!c.disponible) continue;
+      const ch = def.choix[c.index];
+      let sc = ch.test
+        ? (c.chance || 0) * scoreEffets(ch.test.reussite) + (1 - (c.chance || 0)) * scoreEffets(ch.test.echec)
+        : scoreEffets(ch.effets);
+      for (const r of c.cout || []) sc -= r.n * 0.1;
       sc += Math.random();
-      if (sc > bestS) { bestS = sc; best = i; }
-    });
+      if (sc > bestS) { bestS = sc; best = c.index; }
+    }
     return best;
   }
   function resolveDecisions() {
@@ -198,26 +201,11 @@ async function installBot(cfg) {
     let guard = 0;
     while (q.length && guard++ < 10) {
       const dec = q[0];
-      if (dec.kind === 'incident') {
-        const incd = app.INCIDENTS?.[dec.refId];
-        let victim = S().crew.find(m => m.id === dec.victimId && m.statut !== 'mort');
-        if (!victim) victim = st.aliveCrew().find(atBase) || null;
-        const idx = incd ? pickDecisionChoice(incd.choices) : -1;
-        if (idx >= 0) app.applyIncidentChoice(incd, incd.choices[idx], victim);
-        act('incident', dec.refId);
-      } else {
-        const ev = app.COLONY_EVENTS?.[dec.refId];
-        const get = id => (id ? S().crew.find(m => m.id === id) || null : null);
-        const actors = { primary: get(dec.actorIds?.primary), secondary: get(dec.actorIds?.secondary) };
-        if (ev && (actors.primary || !dec.actorIds?.primary)) {
-          const idx = pickDecisionChoice(ev.choices);
-          if (idx >= 0) app.applyColonyEventChoice(dec.refId, ev.choices[idx], actors);
-          S().lastColonyEventId = dec.refId;
-          act('event', dec.refId);
-        }
-      }
+      const idx = pickDecisionChoice(dec);
+      const r = idx >= 0 ? app.choisirDecision(dec.id, idx) : null;
+      if (!r?.ok && q[0] === dec) q.shift();
+      act(dec.kind === 'incident' ? 'incident' : 'event', dec.refId);
       B.decisionsLive++;
-      q.shift();
     }
     S().pendingIncident = null; S().pendingColonyEvent = null;
   }
