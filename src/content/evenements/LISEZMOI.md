@@ -1,12 +1,17 @@
-# Événements de colonie (vague 2)
+# Événements de colonie
 
-Un fichier par thème (`social.js`, `visiteurs.js`, `naissances.js`…), chacun
-exportant une liste d'`evenement({...})` (voir `../dsl.js`). Les 14 événements
-de `COLONY_EVENTS` (app.js) y seront migrés en vague 2, puis ajoutés au
+Un fichier par thème ou par personnage (`social.js`, `plaintes.js`, `ilya.js`…),
+chacun exportant une liste d'`evenement({...})` (voir `../dsl.js`), ajoutée au
 sommaire `../index.js` (`EVENEMENTS`).
 
-Champs prévus : `id`, `titre`, `theme`, `ton`, `si` (condition), `acteurs`
-(`{ nom: { parmi: 'colons', filtre: "acteur.age >= 60", present: true } }` ou
-`{ personnage: 'pulsar_silencieux/adele' }`), `delai` (`'7j'`) ou `unique`,
-`poids`, `texte`, `choix` — mêmes choix et mêmes effets que les scènes.
-Gabarits : `{nom_de_l_acteur}`, `{colonie}`. Guide : `docs/ecrire-pour-drift.md`.
+Champs : `id`, `titre`, `theme`, `ton`, `si`, `acteurs` (`{ colon: { parmi,
+filtre: "acteur.age >= 60", prefere } }`), `personnage` (personnage partagé),
+`delai` (`'36h'` par défaut), `delaiActeur`, `unique`, `spontane` (`false` : scène
+réservée à un fil rouge), `poids`, `texte`, `choix` — mêmes choix et mêmes effets
+que les scènes. Gabarits : `{colon}`, `{colon.age}`, `{pnj:ilya}`, `{colonie}`,
+`{recrue}`. Un choix qui fait entrer un colon exige `colonie.vivres_ok`.
+
+`prologue.js` contient les trois scènes du prologue « L'atterrissage »
+(ouvertes par `../arcs/atterrissage.js`).
+
+Guide : `docs/ecrire-pour-drift.md`, section 9. Relire : `npm run histoire -- <id> --tout`.

@@ -1,13 +1,15 @@
-# Lore : Archives (vague 2)
+# Lore : Archives
 
-Pages d'« Archives » débloquées par les découvertes : un fichier par thème,
-exportant des `lore({...})`, puis ajouté au sommaire `../index.js` (`LORE`).
+Pages d'« Archives » débloquées par les découvertes : un fichier par catégorie,
+exportant des `lore({...})`, ajouté au sommaire `../index.js` (`LORE`).
 
-Champs prévus : `id`, `titre`, `categorie` (`'monde'`, `'effondrement'`,
-`'xenologie'`, `'colonie'`…), `si` (condition de déblocage, ex.
-`"histoire.pulsar_silencieux.terminee"` ou `"monde.phare_allume"`), `texte`
+Champs : `id`, `titre`, `categorie` (`'histoire'`, `'colonie'`, `'mondes'`,
+`'ruines'`, `'peuples'`, `'techniques'`), `ordre`, `si` (condition de déblocage :
+`expeditions.ruines.alien_a >= 1`, `factions.humain >= 1`, `monde.maud_recit`,
+`fil.arc_effondrement.etape >= 3`, `vrai`…), `resume` (une ligne), `texte`
 (mêmes règles que les scènes : paragraphes, `*italique*`, pas de HTML).
 
 Les « Annales » ne s'écrivent pas à l'avance : elles se remplissent pendant la
-partie avec l'effet `{ annales: '…' }` (stockées dans `S.annales`).
-Guide : `docs/ecrire-pour-drift.md`, section « Lore ».
+partie (fondation, arrivées, morts, contacts, chantiers, fins de chroniques et
+de fils) et avec l'effet `{ annales: '…' }`.
+Guide : `docs/ecrire-pour-drift.md`, section 13.
